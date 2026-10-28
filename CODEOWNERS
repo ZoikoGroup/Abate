@@ -1,0 +1,13 @@
+# CODEOWNERS for Abate Repository
+# Enforces architectural review boundaries across critical domains
+
+/packages/domain-privacy/   @abate/privacy-owners
+/packages/domain-tenant/    @abate/security-owners
+/packages/domain-measure/   @abate/metrics-owners
+/packages/domain-actions/   @abate/actions-owners
+/db/migrations/             @abate/platform-owners @abate/security-owners
+/packages/platform/         @abate/platform-owners
+/backend/db/migrations/     @abate/platform-owners @abate/security-owners
+/backend/src/platform/      @abate/platform-owners
+/backend/src/domains/tenant/ @abate/security-owners
+
