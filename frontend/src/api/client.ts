@@ -659,3 +659,171 @@ export async function exportEvidencePackage(
 
 
 
+// ==========================================
+// Phase 5: Jurisdiction Packs, Retention & Legal Hold
+// ==========================================
+
+export type DataCategory = "WORK_FACT";
+
+export interface DurationBound {
+  days: number;
+  citation: string;
+}
+
+export interface JurisdictionPack {
+  packId: string;
+  version: number;
+  jurisdiction: string;
+  sector: string;
+  effectiveFrom: string;
+  effectiveTo: string | null;
+  status: "APPROVED" | "RETIRED";
+  content: {
+    title: string;
+    sourceRefs: string[];
+    retention: Partial<Record<DataCategory, { floor?: DurationBound; ceiling?: DurationBound }>>;
+    notes?: string;
+  };
+  contentHash: string;
+  approvedBy: string;
+}
+
+export type JurisdictionCoverage =
+  | { status: "COVERED"; pack: JurisdictionPack }
+  | { status: "NOT_COVERED"; packId: string | null; at: string };
+
+export interface RetentionClass {
+  id: string;
+  data_category: DataCategory;
+  retention_days: number;
+  basis: string;
+  version: number;
+  status: "ACTIVE" | "SUPERSEDED";
+  pack_id: string;
+  pack_version: number;
+  set_by: string;
+  created_at: string;
+}
+
+export interface LegalHold {
+  id: string;
+  data_category: DataCategory;
+  scope_connection_id: string | null;
+  matter_ref: string;
+  reason: string;
+  placed_by: string;
+  placed_at: string;
+  released_by: string | null;
+  released_at: string | null;
+  release_reason: string | null;
+}
+
+export type RetentionRunStatus = "COMPLETED" | "NO_POLICY" | "BLOCKED";
+
+export interface RetentionRun {
+  id: string;
+  data_category: DataCategory;
+  status: RetentionRunStatus;
+  blocked_reason: string | null;
+  retention_class_version: number | null;
+  cutoff: string | null;
+  eligible: number;
+  held: number;
+  purged: number;
+  verified: number;
+  completed_at: string;
+}
+
+export interface RetentionRunReceipt {
+  runId: string;
+  status: RetentionRunStatus;
+  blockedReason?: string;
+  cutoff: string | null;
+  eligible: number;
+  held: number;
+  purged: number;
+  verified: number;
+  completedAt: string;
+}
+
+export interface RetentionState {
+  coverage: JurisdictionCoverage;
+  classes: RetentionClass[];
+  holds: LegalHold[];
+  runs: RetentionRun[];
+  tombstones: {
+    total: number;
+    verified: number;
+    recent: Array<{ id: string; runId: string; dataCategory: DataCategory; recordDigest: string; deletedAt: string; verifiedAt: string | null }>;
+  };
+}
+
+export interface RetentionPreview {
+  status: RetentionRunStatus;
+  blockedReason: string | null;
+  cutoff: string | null;
+  eligible: number;
+  held: number;
+  purgeable: number;
+}
+
+export async function fetchRetentionState(token: string): Promise<RetentionState> {
+  return api<RetentionState>("/api/v2/retention", { token });
+}
+
+export async function fetchPackVersions(token: string): Promise<{ packId: string | null; versions: JurisdictionPack[] }> {
+  return api<{ packId: string | null; versions: JurisdictionPack[] }>("/api/v2/jurisdiction/pack-versions", { token });
+}
+
+export async function previewRetention(token: string): Promise<RetentionPreview> {
+  return api<RetentionPreview>("/api/v2/retention/preview?dataCategory=WORK_FACT", { token });
+}
+
+export async function setRetentionClass(
+  input: { dataCategory: DataCategory; retentionDays: number; basis: string },
+  idempotencyKey: string,
+  token: string
+): Promise<{ id: string; version: number; retentionDays: number; packId: string; packVersion: number }> {
+  return api("/api/v2/retention/classes", {
+    method: "POST",
+    body: JSON.stringify(input),
+    idempotencyKey,
+    token
+  });
+}
+
+export async function runRetention(idempotencyKey: string, token: string): Promise<RetentionRunReceipt> {
+  return api<RetentionRunReceipt>("/api/v2/retention/runs", {
+    method: "POST",
+    body: JSON.stringify({ dataCategory: "WORK_FACT" }),
+    idempotencyKey,
+    token
+  });
+}
+
+export async function placeLegalHold(
+  input: { dataCategory: DataCategory; scopeConnectionId?: string; matterRef: string; reason: string },
+  idempotencyKey: string,
+  token: string
+): Promise<{ id: string; placedAt: string }> {
+  return api("/api/v2/legal-holds", {
+    method: "POST",
+    body: JSON.stringify(input),
+    idempotencyKey,
+    token
+  });
+}
+
+export async function releaseLegalHold(
+  holdId: string,
+  releaseReason: string,
+  idempotencyKey: string,
+  token: string
+): Promise<{ id: string; releasedAt: string }> {
+  return api(`/api/v2/legal-holds/${holdId}/release`, {
+    method: "POST",
+    body: JSON.stringify({ releaseReason }),
+    idempotencyKey,
+    token
+  });
+}

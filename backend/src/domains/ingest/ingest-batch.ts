@@ -6,6 +6,7 @@ import { AuthenticatedIdentity, authorize } from "../tenant/auth";
 import { ZoikoTimeBatch } from "../../contracts/sources/zoikotime.v1";
 import { partition } from "./validate";
 import { derivePseudonym } from "../work/pseudonym";
+import { recordKeyDigest } from "../work/record-key";
 import { loadConfig } from "../../platform/config";
 
 const cfg = loadConfig();
@@ -70,6 +71,21 @@ export async function ingestBatch(args: {
         const itemHash = computeRequestHash(item);
         const pseudonym = derivePseudonym(tenantSecret, item.subjectRef);
         const factId = crypto.randomUUID();
+
+        // A record purged by retention stays purged: re-delivery is a duplicate, never a resurrection
+        const keyDigest = recordKeyDigest(tenantSecret, {
+          connectionId: conn.id,
+          sourceRecordId: item.recordId,
+          revision: item.revision
+        });
+        const tombstoned = await tx.q(
+          `SELECT record_key_digest FROM deletion_tombstone WHERE record_key_digest = $1`,
+          [keyDigest]
+        );
+        if (tombstoned.rows.some((t: any) => t.record_key_digest === keyDigest)) {
+          duplicate++;
+          continue;
+        }
 
         const insRes = await tx.q(
           `INSERT INTO work_fact_revision (

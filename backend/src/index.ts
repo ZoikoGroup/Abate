@@ -27,6 +27,22 @@ import {
   evaluateSuggestion,
   exportEvidencePackage
 } from "./domains/control";
+import {
+  SetRetentionClassInput,
+  PlaceLegalHoldInput,
+  ReleaseLegalHoldInput,
+  RunRetentionInput
+} from "./contracts/retention";
+import {
+  getJurisdictionCoverage,
+  listJurisdictionPackVersions,
+  getRetentionState,
+  previewRetention,
+  setRetentionClass,
+  placeLegalHold,
+  releaseLegalHold,
+  runRetention
+} from "./domains/lifecycle";
 import { withTenant } from "./platform/db/with-tenant";
 import { drainOnce } from "./worker/outbox-publisher";
 import { memDb } from "./platform/db/with-tenant";
@@ -94,7 +110,7 @@ app.get("/api/info", (_req: Request, res: Response) => {
       S05_S07: "Hazards / interventions",
       S08_S09: "Bounded AI / action execution",
       S10: "Governance and evidence",
-      S11_S12: "Commercial / lifecycle"
+      S11_S12: "Commercial / lifecycle (jurisdiction packs, retention, legal hold)"
     }
   });
 });
@@ -1063,6 +1079,132 @@ app.post("/api/v2/hazards/:id/evidence-package", async (req: Request, res: Respo
     });
 
     res.status(200).json(out);
+  } catch (err) {
+    toErrorResponse(err, res);
+  }
+});
+
+// -------------------------------------------------------------
+// Phase 5 (B5): Jurisdiction Packs, Retention & Legal Hold
+// -------------------------------------------------------------
+
+function parseAt(raw: unknown): Date | undefined {
+  if (raw === undefined) return undefined;
+  const at = new Date(String(raw));
+  if (Number.isNaN(at.getTime())) {
+    throw new AppError("VALIDATION", "Query parameter 'at' must be an ISO 8601 timestamp.");
+  }
+  return at;
+}
+
+// Jurisdiction pack in effect for the tenant at a point in time (defaults to now)
+app.get("/api/v2/jurisdiction/coverage", async (req: Request, res: Response) => {
+  try {
+    const who = await authenticate(getHeader(req, "authorization"));
+    const actor = await resolveActor(who.tenantId, who.subject, new Date());
+    const at = parseAt(req.query.at);
+    const coverage = await getJurisdictionCoverage({ who, actor, ...(at ? { at } : {}) });
+    res.status(200).json(coverage);
+  } catch (err) {
+    toErrorResponse(err, res);
+  }
+});
+
+// All published versions of the tenant's pack (effective-dated history)
+app.get("/api/v2/jurisdiction/pack-versions", async (req: Request, res: Response) => {
+  try {
+    const who = await authenticate(getHeader(req, "authorization"));
+    const actor = await resolveActor(who.tenantId, who.subject, new Date());
+    res.status(200).json(await listJurisdictionPackVersions({ who, actor }));
+  } catch (err) {
+    toErrorResponse(err, res);
+  }
+});
+
+// Retention classes, legal holds, run receipts and tombstone digests
+app.get("/api/v2/retention", async (req: Request, res: Response) => {
+  try {
+    const who = await authenticate(getHeader(req, "authorization"));
+    const actor = await resolveActor(who.tenantId, who.subject, new Date());
+    res.status(200).json(await getRetentionState({ who, actor }));
+  } catch (err) {
+    toErrorResponse(err, res);
+  }
+});
+
+// Dry run: what a retention run would do now, without writing
+app.get("/api/v2/retention/preview", async (req: Request, res: Response) => {
+  try {
+    const who = await authenticate(getHeader(req, "authorization"));
+    const actor = await resolveActor(who.tenantId, who.subject, new Date());
+    const { dataCategory } = RunRetentionInput.parse({ dataCategory: req.query.dataCategory ?? "WORK_FACT" });
+    res.status(200).json(await previewRetention({ who, actor, dataCategory }));
+  } catch (err) {
+    toErrorResponse(err, res);
+  }
+});
+
+app.post("/api/v2/retention/classes", async (req: Request, res: Response) => {
+  try {
+    const who = await authenticate(getHeader(req, "authorization"));
+    const actor = await resolveActor(who.tenantId, who.subject, new Date());
+    const result = await setRetentionClass({
+      who,
+      actor,
+      input: SetRetentionClassInput.parse(req.body),
+      idempotencyKey: getHeader(req, "idempotency-key") || getHeader(req, "x-idempotency-key")
+    });
+    res.status(result.status).json(result.body);
+  } catch (err) {
+    toErrorResponse(err, res);
+  }
+});
+
+app.post("/api/v2/retention/runs", async (req: Request, res: Response) => {
+  try {
+    const who = await authenticate(getHeader(req, "authorization"));
+    const actor = await resolveActor(who.tenantId, who.subject, new Date());
+    const { dataCategory } = RunRetentionInput.parse(req.body);
+    const result = await runRetention({
+      who,
+      actor,
+      dataCategory,
+      idempotencyKey: getHeader(req, "idempotency-key") || getHeader(req, "x-idempotency-key")
+    });
+    res.status(result.status).json(result.body);
+  } catch (err) {
+    toErrorResponse(err, res);
+  }
+});
+
+app.post("/api/v2/legal-holds", async (req: Request, res: Response) => {
+  try {
+    const who = await authenticate(getHeader(req, "authorization"));
+    const actor = await resolveActor(who.tenantId, who.subject, new Date());
+    const result = await placeLegalHold({
+      who,
+      actor,
+      input: PlaceLegalHoldInput.parse(req.body),
+      idempotencyKey: getHeader(req, "idempotency-key") || getHeader(req, "x-idempotency-key")
+    });
+    res.status(result.status).json(result.body);
+  } catch (err) {
+    toErrorResponse(err, res);
+  }
+});
+
+app.post("/api/v2/legal-holds/:id/release", async (req: Request, res: Response) => {
+  try {
+    const who = await authenticate(getHeader(req, "authorization"));
+    const actor = await resolveActor(who.tenantId, who.subject, new Date());
+    const result = await releaseLegalHold({
+      who,
+      actor,
+      holdId: String(req.params.id),
+      input: ReleaseLegalHoldInput.parse(req.body),
+      idempotencyKey: getHeader(req, "idempotency-key") || getHeader(req, "x-idempotency-key")
+    });
+    res.status(result.status).json(result.body);
   } catch (err) {
     toErrorResponse(err, res);
   }
