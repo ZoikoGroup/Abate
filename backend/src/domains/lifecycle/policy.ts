@@ -1,5 +1,4 @@
 // backend/src/domains/lifecycle/policy.ts
-import crypto from "node:crypto";
 import { AppError } from "../../platform/errors";
 import { DataCategory, JurisdictionPackContent } from "../../contracts/retention";
 
@@ -36,18 +35,7 @@ export interface FactRow {
   end_at: string | Date;
 }
 
-export function canonicalJson(value: unknown): string {
-  if (value === null || typeof value !== "object") return JSON.stringify(value);
-  if (value instanceof Date) return JSON.stringify(value.toISOString());
-  if (Array.isArray(value)) return `[${value.map(canonicalJson).join(",")}]`;
-  const obj = value as Record<string, unknown>;
-  const keys = Object.keys(obj).filter(k => obj[k] !== undefined).sort();
-  return `{${keys.map(k => `${JSON.stringify(k)}:${canonicalJson(obj[k])}`).join(",")}}`;
-}
-
-export function sha256Hex(text: string): string {
-  return crypto.createHash("sha256").update(text).digest("hex");
-}
+export { canonicalJson, sha256Hex } from "../../platform/canonical";
 
 const ms = (d: string | Date) => new Date(d).getTime();
 

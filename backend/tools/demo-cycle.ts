@@ -8,11 +8,12 @@ import { ingestBatch } from "../src/domains/ingest/ingest-batch";
 import { compileRelease } from "../src/domains/privacy";
 import { materialHash, canTransition, evaluateSuggestion, exportEvidencePackage } from "../src/domains/control";
 import { getJurisdictionCoverage, setRetentionClass, placeLegalHold, releaseLegalHold, runRetention } from "../src/domains/lifecycle";
+import { generateDiagnosticReceipt, verifyDiagnosticReceipt } from "../src/domains/support";
 import { drainOnce } from "../src/worker/outbox-publisher";
 import { withTenant, memDb } from "../src/platform/db/with-tenant";
 
 console.log("\x1b[35m============================================================\x1b[0m");
-console.log("\x1b[35m=== ZOIKO ABATE: Golden Demo Cycle (Phases 0, 1, 2, 3, 4, 5) ===\x1b[0m");
+console.log("\x1b[35m=== ZOIKO ABATE: Golden Demo Cycle (Phases 0-5, B8) ===\x1b[0m");
 console.log("\x1b[35m============================================================\x1b[0m\n");
 
 async function runDemoCycle() {
@@ -268,13 +269,21 @@ async function runDemoCycle() {
   const redelivery = await ingestBatch({ who: whoA, actor: actorA, batch: { ...batch, batchId: `batch-demo-redeliver-${crypto.randomUUID()}` } });
   console.log(`  ✔ Purged records re-delivered by source: accepted ${redelivery.body.accepted}, duplicate ${redelivery.body.duplicate} (no resurrection)\n`);
 
-  console.log("Step 14. Draining transactional outbox via worker process...");
+  console.log("Step 14. Zero-Impersonation Support: Signed Diagnostic Receipt (B8)...");
+  const diagnostic = await generateDiagnosticReceipt({ who: whoA, actor: actorA, idempotencyKey: `idem-${crypto.randomUUID()}` });
+  const transported = JSON.parse(JSON.stringify(diagnostic.body));
+  console.log(`  ✔ Tenant issued receipt ${diagnostic.body.receiptId}: ${diagnostic.body.sections.connections.length} connection(s), ${diagnostic.body.sections.ingest.receipts} ingest receipt(s), retention ${diagnostic.body.sections.retention.coverage}`);
+  console.log(`  ✔ Support verified signature without database access: ${verifyDiagnosticReceipt(transported).valid}`);
+  transported.sections.outbox.pendingEvents += 1;
+  console.log(`  ✔ Edited copy rejected: ${!verifyDiagnosticReceipt(transported).valid}\n`);
+
+  console.log("Step 15. Draining transactional outbox via worker process...");
   const drainReport = await drainOnce();
   console.log(`  ✔ Outbox drained: ${drainReport.drained} events published.`);
   console.log(`  ✔ Total audit events recorded in append-only log: ${memDb.auditEvents.length}\n`);
 
   console.log("\x1b[32m====================================================================\x1b[0m");
-  console.log("\x1b[32m=== DEMO CYCLE COMPLETED SUCCESSFULLY: ALL PHASES 0-5 VERIFIED ===\x1b[0m");
+  console.log("\x1b[32m=== DEMO CYCLE COMPLETED SUCCESSFULLY: ALL PHASES 0-5 + B8 VERIFIED ===\x1b[0m");
   console.log("\x1b[32m====================================================================\x1b[0m");
 }
 
