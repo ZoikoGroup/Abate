@@ -24,6 +24,7 @@ import {
   previewRetention,
   getRetentionState
 } from "../src/domains/lifecycle";
+import { generateDiagnosticReceipt, verifyDiagnosticReceipt } from "../src/domains/support";
 
 console.log("\x1b[36m=== Abate Task Runner: test-boundaries (Constitutional & Isolation Gates) ===\x1b[0m");
 
@@ -958,6 +959,48 @@ async function run() {
     assert.ok(run.body.blockedReason?.includes("floor"));
     assert.strictEqual(run.body.purged, 0);
     assert.strictEqual(memDb.workFactRevisions.size, before);
+  });
+
+  // -------------------------------------------------------------
+  // B8 Zero-Impersonation Support: Signed Diagnostic Receipts
+  // -------------------------------------------------------------
+
+  // 33. Diagnostic receipts carry states and counts only
+  await test("B8 Diagnostic Receipt: content-free, tenant-scoped and verifiable after transport", async () => {
+    const key = crypto.randomUUID();
+    const res = await generateDiagnosticReceipt({ who: whoA, actor: actorA, idempotencyKey: key });
+    const replay = await generateDiagnosticReceipt({ who: whoA, actor: actorA, idempotencyKey: key });
+    const receipt = JSON.parse(JSON.stringify(res.body)); // as received by support
+
+    assert.strictEqual(receipt.tenantId, tenantAId);
+    assert.strictEqual(replay.body.receiptId, res.body.receiptId, "Idempotent replay returns the same receipt");
+    assert.strictEqual(verifyDiagnosticReceipt(receipt).valid, true);
+    assert.ok(receipt.sections.connections.length >= 1);
+    assert.strictEqual(receipt.sections.retention.coverage, "COVERED");
+
+    const dump = JSON.stringify(receipt);
+    const pseudonyms = Array.from(memDb.workFactRevisions.values()).map(f => f.subject_pseudonym);
+    const subjects = Array.from(memDb.principals.values()).map(p => p.external_subject);
+    const foreignConnections = Array.from(memDb.connections.values()).filter(c => c.tenant_id !== tenantAId).map(c => c.id);
+    assert.ok(pseudonyms.length > 0 && subjects.length > 0);
+    for (const secret of [...pseudonyms, ...subjects, ...foreignConnections]) {
+      assert.ok(!dump.includes(secret), "Receipt must not contain pseudonyms, identities or another tenant's resources");
+    }
+  });
+
+  // 34. Tampering is detected
+  await test("B8 Diagnostic Receipt: any edit after issue, or a forged receipt, fails verification", async () => {
+    const res = await generateDiagnosticReceipt({ who: whoB, actor: actorB, idempotencyKey: crypto.randomUUID() });
+    const edited = JSON.parse(JSON.stringify(res.body));
+    edited.sections.outbox.pendingEvents += 1;
+    const retargeted = { ...JSON.parse(JSON.stringify(res.body)), tenantId: tenantAId };
+
+    assert.strictEqual(verifyDiagnosticReceipt(res.body).valid, true);
+    assert.strictEqual(verifyDiagnosticReceipt(edited).valid, false);
+    assert.strictEqual(verifyDiagnosticReceipt(retargeted).valid, false);
+    assert.strictEqual(verifyDiagnosticReceipt({ ...res.body, signature: "0".repeat(64) }).valid, false);
+    assert.strictEqual(verifyDiagnosticReceipt({ signature: "not-hex" }).valid, false);
+    assert.strictEqual(verifyDiagnosticReceipt(null).valid, false);
   });
 
   console.log(`\x1b[32m[SUCCESS] All ${passed} boundary, isolation, and reliability tests passed.\x1b[0m`);
