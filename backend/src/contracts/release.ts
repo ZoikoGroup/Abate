@@ -17,33 +17,33 @@ export type SemanticQuery = z.infer<typeof SemanticQueryV1>;
 
 export type ReleaseView =
   | {
-      status: "RELEASED";
-      releaseId: string;
-      metricId: string;
-      metricName: string;
-      version: number;
-      value: number | null;
-      unit: string;
-      cohortRef: string;
-      periodStart: string;
-      periodEnd: string;
-      quality: "VALID" | "DEGRADED" | "NOT_APPLICABLE" | "PARTIAL";
-      releasedAt: string;
-      freshness: "FRESH" | "SUPERSEDED" | "REVOKED";
-      interpretation?: string;
-      limits?: string;
-      assuranceLabel: string;
-    }
+    status: "RELEASED";
+    releaseId: string;
+    metricId: string;
+    metricName: string;
+    version: number;
+    value: number | null;
+    unit: string;
+    cohortRef: string;
+    periodStart: string;
+    periodEnd: string;
+    quality: "VALID" | "DEGRADED" | "NOT_APPLICABLE" | "PARTIAL";
+    releasedAt: string;
+    freshness: "FRESH" | "SUPERSEDED" | "REVOKED";
+    interpretation?: string;
+    limits?: string;
+    assuranceLabel: string;
+  }
   | {
-      status: "STALE";
-      releaseId: string;
-      reason: string;
-      supersededAt?: string;
-      asOf?: string;
-    }
+    status: "STALE";
+    releaseId: string;
+    reason: string;
+    supersededAt?: string;
+    asOf?: string;
+  }
   | {
-      status: "UNAVAILABLE";
-      code: "NOT_AVAILABLE";
-      message?: string;
-    };
+    status: "UNAVAILABLE";
+    code: "NOT_AVAILABLE";
+    message?: string;
+  };
 
