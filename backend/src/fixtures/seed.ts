@@ -2,6 +2,7 @@
 import { GOLDEN_01 } from "./golden01";
 import { memDb, appPool } from "../platform/db/with-tenant";
 import { assertNotProduction } from "../platform/config";
+import { packContentHash } from "../domains/lifecycle/jurisdiction";
 
 export async function seedTwoTenants(opts: { clock?: Date } = {}) {
   // Enforce mandatory playbook guard: refuses to run in staging or production
@@ -15,7 +16,7 @@ export async function seedTwoTenants(opts: { clock?: Date } = {}) {
     id: GOLDEN_01.tenantA.id,
     name: GOLDEN_01.tenantA.name,
     region: GOLDEN_01.tenantA.region,
-    jurisdiction_config_ref: "legal-uk-sra-v1",
+    jurisdiction_config_ref: "legal-uk-sra",
     created_at: validFrom
   };
   memDb.tenants.set(tA.id, tA);
@@ -100,7 +101,7 @@ export async function seedTwoTenants(opts: { clock?: Date } = {}) {
     id: GOLDEN_01.tenantB.id,
     name: GOLDEN_01.tenantB.name,
     region: GOLDEN_01.tenantB.region,
-    jurisdiction_config_ref: "legal-uk-bar-v1",
+    jurisdiction_config_ref: "legal-uk-bar",
     created_at: validFrom
   };
   memDb.tenants.set(tB.id, tB);
@@ -190,6 +191,34 @@ export async function seedTwoTenants(opts: { clock?: Date } = {}) {
     expected_cadence_seconds: 3600
   };
   memDb.connections.set(connB.id, connB);
+
+  // Seed Phase 5 jurisdiction pack for Tenant A only. SYNTHETIC: the durations and citations below are
+  // test values, not legal content; real packs come from the Legal & Policy Lead. Tenant B's pack
+  // ("legal-uk-bar") is deliberately unpublished so its retention configuration fails closed.
+  const packContent = {
+    title: "SYNTHETIC TEST PACK - UK legal sector (not legal advice)",
+    sourceRefs: ["SYNTHETIC-FIXTURE: replace with Legal & Policy Lead citations"],
+    retention: {
+      WORK_FACT: {
+        floor: { days: 90, citation: "SYNTHETIC-FIXTURE floor" },
+        ceiling: { days: 730, citation: "SYNTHETIC-FIXTURE ceiling" }
+      }
+    }
+  };
+  const packA = {
+    pack_id: tA.jurisdiction_config_ref,
+    version: 1,
+    jurisdiction: "UK",
+    sector: "LEGAL",
+    effective_from: validFrom,
+    effective_to: null,
+    status: "APPROVED",
+    content: packContent,
+    content_hash: packContentHash(packContent),
+    approved_by: "SYNTHETIC-FIXTURE",
+    approved_at: validFrom
+  };
+  memDb.jurisdictionPacks.set(`${packA.pack_id}:${packA.version}`, packA);
 
   return {
     tenantA: { tenant: tA, org: orgA, principal: principalA, membership: membershipA, connection: connA },

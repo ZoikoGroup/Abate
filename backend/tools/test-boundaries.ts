@@ -14,6 +14,16 @@ import { AppError } from "../src/platform/errors";
 import { boundaryIntrusionShare, union, minutes } from "../src/domains/measure";
 import { compileRelease, getRelease } from "../src/domains/privacy";
 import { materialHash, canTransition, evaluateSuggestion, exportEvidencePackage } from "../src/domains/control";
+import {
+  publishPackVersion,
+  resolveEffectivePack,
+  setRetentionClass,
+  placeLegalHold,
+  releaseLegalHold,
+  runRetention,
+  previewRetention,
+  getRetentionState
+} from "../src/domains/lifecycle";
 
 console.log("\x1b[36m=== Abate Task Runner: test-boundaries (Constitutional & Isolation Gates) ===\x1b[0m");
 
@@ -676,6 +686,278 @@ async function run() {
       assert.strictEqual(hazardItem?.id, hazardId);
       assert.ok(hazardItem?.sha256.length === 64);
     });
+  });
+
+  // -------------------------------------------------------------
+  // Phase 5 (B5) Jurisdiction Packs, Retention & Legal Hold
+  // -------------------------------------------------------------
+
+  const NOW = new Date();
+  const daysAgo = (d: number, hour = 9) => {
+    const t = new Date(NOW.getTime() - d * 24 * 3600 * 1000);
+    t.setUTCHours(hour, 0, 0, 0);
+    return t.toISOString();
+  };
+  const isCode = (code: string) => (err: any) => err instanceof AppError && err.code === code;
+  const factBySource = (recordId: string) =>
+    Array.from(memDb.workFactRevisions.values()).find(f => f.source_record_id === recordId);
+
+  const whoB = {
+    tenantId: tenantBId,
+    subject: "auth0|user-tenant-b-risk-owner",
+    purpose: "WORKPLACE_RISK_ASSESSMENT",
+    role: "RISK_OWNER"
+  };
+  const actorB = {
+    principalId: "00000000-0000-4000-b002-000000000001",
+    tenantId: tenantBId,
+    memberships: [{ organization_id: "00000000-0000-4000-b001-000000000001", domain_role: "RISK_OWNER" }]
+  };
+
+  // Second Tenant A connection so a hold can be scoped to one source only
+  const connA2Id = "00000000-0000-4000-a004-000000000002";
+  memDb.connections.set(connA2Id, {
+    id: connA2Id,
+    tenant_id: tenantAId,
+    source: "ZoikoTime",
+    contract_id: "00000000-0000-4000-a005-000000000001",
+    state: "ACTIVE",
+    last_success_at: NOW.toISOString(),
+    expected_cadence_seconds: 3600
+  });
+
+  const workItem = (recordId: string, endDaysAgo: number) => ({
+    recordId,
+    revision: 1,
+    subjectRef: `emp-${recordId}`,
+    startUtc: daysAgo(endDaysAgo, 8),
+    endUtc: daysAgo(endDaysAgo, 10),
+    workTz: "Europe/London",
+    kind: "WORK" as const
+  });
+
+  const packContent = (floorDays: number) => ({
+    title: "SYNTHETIC boundary-test pack",
+    sourceRefs: ["SYNTHETIC-TEST"],
+    retention: { WORK_FACT: { floor: { days: floorDays, citation: "SYNTHETIC-TEST floor" } } }
+  });
+
+  // 22. Effective-dated jurisdiction pack resolution
+  await test("Phase 5 Jurisdiction: Pack resolution is effective-dated and fails closed outside coverage", async () => {
+    await withTenant(tenantAId, async (tx) => {
+      await publishPackVersion(tx, {
+        packId: "test-dating-pack", version: 1, jurisdiction: "UK", sector: "LEGAL",
+        effectiveFrom: "2026-01-01T00:00:00.000Z", content: packContent(90), approvedBy: "SYNTHETIC-TEST"
+      });
+      await publishPackVersion(tx, {
+        packId: "test-dating-pack", version: 2, jurisdiction: "UK", sector: "LEGAL",
+        effectiveFrom: "2026-06-01T00:00:00.000Z", content: packContent(120), approvedBy: "SYNTHETIC-TEST"
+      });
+
+      const rows = (await tx.q("SELECT * FROM jurisdiction_pack WHERE pack_id = $1", ["test-dating-pack"])).rows;
+      assert.strictEqual(rows.find(r => r.version === 1)?.effective_to, "2026-06-01T00:00:00.000Z", "v1 must be closed where v2 starts");
+      assert.strictEqual(resolveEffectivePack(rows, new Date("2026-03-01T00:00:00Z"))?.version, 1);
+      assert.strictEqual(resolveEffectivePack(rows, new Date("2026-06-01T00:00:00Z"))?.version, 2, "Boundary instant belongs to the new version");
+      assert.strictEqual(resolveEffectivePack(rows, new Date("2025-12-31T23:59:59Z")), null, "Before coverage there is no pack");
+    });
+  });
+
+  // 23. Published pack versions are immutable and sequential
+  await test("Phase 5 Jurisdiction: Published versions are immutable; out-of-sequence or overlapping versions are refused", async () => {
+    await withTenant(tenantAId, async (tx) => {
+      const v1Before = (await tx.q("SELECT * FROM jurisdiction_pack WHERE pack_id = $1", ["test-dating-pack"])).rows
+        .find(r => r.version === 1)?.content_hash;
+      const base = { packId: "test-dating-pack", jurisdiction: "UK", sector: "LEGAL", content: packContent(1), approvedBy: "SYNTHETIC-TEST" };
+
+      await assert.rejects(() => publishPackVersion(tx, { ...base, version: 2, effectiveFrom: "2026-09-01T00:00:00.000Z" }), isCode("CONFLICT"));
+      await assert.rejects(() => publishPackVersion(tx, { ...base, version: 5, effectiveFrom: "2026-09-01T00:00:00.000Z" }), isCode("CONFLICT"));
+      await assert.rejects(() => publishPackVersion(tx, { ...base, version: 3, effectiveFrom: "2026-05-01T00:00:00.000Z" }), isCode("CONFLICT"));
+
+      const v1After = (await tx.q("SELECT * FROM jurisdiction_pack WHERE pack_id = $1", ["test-dating-pack"])).rows
+        .find(r => r.version === 1)?.content_hash;
+      assert.strictEqual(v1After, v1Before, "Approved content must never change");
+    });
+  });
+
+  // Facts used by the retention tests: two expired (one per connection) and one recent
+  await ingestBatch({
+    who: whoA, actor: actorA,
+    batch: { connectionId: connAId, batchId: `batch-ret-a-${crypto.randomUUID()}`, items: [workItem("ret-old-a", 200), workItem("ret-new-a", 5)] }
+  });
+  await ingestBatch({
+    who: whoA, actor: actorA,
+    batch: { connectionId: connA2Id, batchId: `batch-ret-a2-${crypto.randomUUID()}`, items: [workItem("ret-old-a2", 200)] }
+  });
+
+  // 24. No invented default duration
+  await test("Phase 5 Retention: With no configured class a run deletes nothing (no invented default)", async () => {
+    const before = memDb.workFactRevisions.size;
+    const res = await runRetention({ who: whoA, actor: actorA, dataCategory: "WORK_FACT", idempotencyKey: crypto.randomUUID(), now: NOW });
+    assert.strictEqual(res.body.status, "NO_POLICY");
+    assert.strictEqual(res.body.purged, 0);
+    assert.strictEqual(memDb.workFactRevisions.size, before, "No rows may be deleted without a tenant-configured class");
+  });
+
+  // 25. Durations bounded by the pack; no pack => refused
+  await test("Phase 5 Retention: Durations outside the pack floor/ceiling, or without pack coverage, are refused", async () => {
+    const setA = (days: number) => setRetentionClass({
+      who: whoA, actor: actorA, idempotencyKey: crypto.randomUUID(),
+      input: { dataCategory: "WORK_FACT", retentionDays: days, basis: "Boundary test duration" }
+    });
+    await assert.rejects(() => setA(10), isCode("VALIDATION"));   // below 28-day measurement minimum
+    await assert.rejects(() => setA(60), isCode("VALIDATION"));   // below synthetic pack floor (90)
+    await assert.rejects(() => setA(1000), isCode("VALIDATION")); // above synthetic pack ceiling (730)
+
+    // Tenant B's pack (legal-uk-bar) is not published: configuration fails closed
+    await assert.rejects(() => setRetentionClass({
+      who: whoB, actor: actorB, idempotencyKey: crypto.randomUUID(),
+      input: { dataCategory: "WORK_FACT", retentionDays: 365, basis: "Boundary test duration" }
+    }), isCode("VALIDATION"));
+
+    assert.strictEqual(Array.from(memDb.retentionClasses.values()).length, 0, "Refused configurations must leave no class behind");
+  });
+
+  let scopedHoldId = "";
+
+  // 26. Legal hold overrides retention; verified tombstones
+  await test("Phase 5 Legal Hold: Held facts survive purge; eligible = purged + held; tombstones are verified and content-free", async () => {
+    const cls = await setRetentionClass({
+      who: whoA, actor: actorA, idempotencyKey: crypto.randomUUID(),
+      input: { dataCategory: "WORK_FACT", retentionDays: 90, basis: "Synthetic tenant schedule for boundary test" }
+    });
+    assert.strictEqual(cls.body.version, 1);
+    assert.strictEqual(cls.body.packId, "legal-uk-sra");
+
+    const hold = await placeLegalHold({
+      who: whoA, actor: actorA, idempotencyKey: crypto.randomUUID(),
+      input: { dataCategory: "WORK_FACT", scopeConnectionId: connA2Id, matterRef: "MATTER-TEST-1", reason: "Preserve source A2 for litigation" }
+    });
+    scopedHoldId = hold.body.id;
+
+    const deletedPseudonym = factBySource("ret-old-a")?.subject_pseudonym;
+    assert.ok(deletedPseudonym);
+
+    const preview = await previewRetention({ who: whoA, actor: actorA, dataCategory: "WORK_FACT", now: NOW });
+    const key = crypto.randomUUID();
+    const run = await runRetention({ who: whoA, actor: actorA, dataCategory: "WORK_FACT", idempotencyKey: key, now: NOW });
+    const replay = await runRetention({ who: whoA, actor: actorA, dataCategory: "WORK_FACT", idempotencyKey: key, now: NOW });
+
+    assert.strictEqual(run.body.status, "COMPLETED");
+    assert.strictEqual(run.body.eligible, run.body.purged + run.body.held, "Counts must reconcile");
+    assert.strictEqual(run.body.purged, preview.purgeable, "Preview must predict the run");
+    assert.strictEqual(run.body.verified, run.body.purged, "Every deletion must be verified");
+    assert.ok(run.body.held >= 1);
+    assert.strictEqual(replay.body.runId, run.body.runId, "Idempotent replay returns the same receipt");
+
+    assert.strictEqual(factBySource("ret-old-a"), undefined, "Expired, unheld fact must be purged");
+    assert.ok(factBySource("ret-old-a2"), "Fact under legal hold must survive");
+    assert.ok(factBySource("ret-new-a"), "Fact inside the retention window must survive");
+
+    const tombstones = Array.from(memDb.deletionTombstones.values()).filter(t => t.run_id === run.body.runId);
+    assert.strictEqual(tombstones.length, run.body.purged);
+    assert.ok(tombstones.every(t => t.verified_at), "All tombstones must be verified");
+    const dump = JSON.stringify(tombstones);
+    assert.ok(!dump.includes(deletedPseudonym!) && !dump.includes("ret-old-a"), "Tombstones must not keep pseudonyms or source record ids");
+  });
+
+  // 27. Releasing the hold lets retention proceed
+  await test("Phase 5 Legal Hold: Releasing the hold lets the next run purge; releasing twice is CONFLICT", async () => {
+    await releaseLegalHold({
+      who: whoA, actor: actorA, holdId: scopedHoldId, idempotencyKey: crypto.randomUUID(),
+      input: { releaseReason: "Matter closed for boundary test" }
+    });
+    const run = await runRetention({ who: whoA, actor: actorA, dataCategory: "WORK_FACT", idempotencyKey: crypto.randomUUID(), now: NOW });
+    assert.strictEqual(run.body.held, 0);
+    assert.strictEqual(factBySource("ret-old-a2"), undefined, "Released fact is purged on the next run");
+
+    await assert.rejects(() => releaseLegalHold({
+      who: whoA, actor: actorA, holdId: scopedHoldId, idempotencyKey: crypto.randomUUID(),
+      input: { releaseReason: "Second release attempt" }
+    }), isCode("CONFLICT"));
+  });
+
+  // 28. Purged records are not resurrected
+  await test("Phase 5 Tombstone: A purged record re-delivered by the source is counted duplicate, not resurrected", async () => {
+    const res = await ingestBatch({
+      who: whoA, actor: actorA,
+      batch: { connectionId: connAId, batchId: `batch-ret-redeliver-${crypto.randomUUID()}`, items: [workItem("ret-old-a", 200)] }
+    });
+    assert.strictEqual(res.body.accepted, 0);
+    assert.strictEqual(res.body.duplicate, 1);
+    assert.strictEqual(factBySource("ret-old-a"), undefined);
+  });
+
+  // 29. Storage-layer purge guard (mirrors the PostgreSQL trigger)
+  await test("Phase 5 Purge Guard: Deleting a work fact without a tombstone, or under legal hold, is refused by storage", async () => {
+    const recent = factBySource("ret-new-a");
+    assert.ok(recent);
+
+    await assert.rejects(() => withTenant(tenantAId, async (tx) => {
+      await tx.q("DELETE FROM work_fact_revision WHERE id = $1", [recent!.id]);
+    }), /without a deletion tombstone/);
+
+    const hold = await placeLegalHold({
+      who: whoA, actor: actorA, idempotencyKey: crypto.randomUUID(),
+      input: { dataCategory: "WORK_FACT", matterRef: "MATTER-TEST-2", reason: "Category-wide preservation" }
+    });
+    await assert.rejects(() => withTenant(tenantAId, async (tx) => {
+      await tx.q(
+        "INSERT INTO deletion_tombstone (id, tenant_id, run_id, data_category, record_ref, record_digest, record_key_digest) VALUES ($1, $2, $3, $4, $5, $6, $7)",
+        [crypto.randomUUID(), tenantAId, crypto.randomUUID(), "WORK_FACT", recent!.id, "digest", "key-digest"]
+      );
+      await tx.q("DELETE FROM work_fact_revision WHERE id = $1", [recent!.id]);
+    }), /under legal hold/);
+
+    assert.ok(factBySource("ret-new-a"), "Refused delete must leave the fact intact");
+    assert.ok(!Array.from(memDb.deletionTombstones.values()).some(t => t.record_ref === recent!.id), "Rolled-back tombstone must not persist");
+
+    await releaseLegalHold({
+      who: whoA, actor: actorA, holdId: hold.body.id, idempotencyKey: crypto.randomUUID(),
+      input: { releaseReason: "Boundary test cleanup" }
+    });
+  });
+
+  // 30. Tenant isolation of retention state
+  await test("Phase 5 Isolation: Tenant B sees none of Tenant A's classes, holds, runs or tombstones and cannot release A's hold", async () => {
+    const stateB = await getRetentionState({ who: whoB, actor: actorB });
+    assert.strictEqual(stateB.classes.length, 0);
+    assert.strictEqual(stateB.holds.length, 0);
+    assert.strictEqual(stateB.runs.length, 0);
+    assert.strictEqual(stateB.tombstones.total, 0);
+    assert.strictEqual(stateB.coverage.status, "NOT_COVERED");
+
+    await assert.rejects(() => releaseLegalHold({
+      who: whoB, actor: actorB, holdId: scopedHoldId, idempotencyKey: crypto.randomUUID(),
+      input: { releaseReason: "Cross-tenant release attempt" }
+    }), isCode("NOT_FOUND"));
+  });
+
+  // 31. Only accountable owners change retention
+  await test("Phase 5 Authority: MEMBER and CONTROL_OWNER cannot place legal holds or run retention (FORBIDDEN)", async () => {
+    for (const role of ["MEMBER", "CONTROL_OWNER"]) {
+      const actor = { ...actorA, principalId: "00000000-0000-4000-a002-000000000002", memberships: [{ organization_id: "00000000-0000-4000-a001-000000000001", domain_role: role }] };
+      await assert.rejects(() => placeLegalHold({
+        who: whoA, actor, idempotencyKey: crypto.randomUUID(),
+        input: { dataCategory: "WORK_FACT", matterRef: "MATTER-X", reason: "Unauthorised hold attempt" }
+      }), isCode("FORBIDDEN"));
+      await assert.rejects(() => runRetention({ who: whoA, actor, dataCategory: "WORK_FACT", idempotencyKey: crypto.randomUUID(), now: NOW }), isCode("FORBIDDEN"));
+    }
+  });
+
+  // 32. A newer pack invalidating the configured duration blocks deletion
+  await test("Phase 5 Fail Closed: A class outside a newer pack version's floor blocks the run instead of deleting", async () => {
+    await withTenant(tenantAId, async (tx) => {
+      await publishPackVersion(tx, {
+        packId: "legal-uk-sra", version: 2, jurisdiction: "UK", sector: "LEGAL",
+        effectiveFrom: daysAgo(1, 0), content: packContent(400), approvedBy: "SYNTHETIC-TEST"
+      });
+    });
+    const before = memDb.workFactRevisions.size;
+    const run = await runRetention({ who: whoA, actor: actorA, dataCategory: "WORK_FACT", idempotencyKey: crypto.randomUUID(), now: NOW });
+    assert.strictEqual(run.body.status, "BLOCKED");
+    assert.ok(run.body.blockedReason?.includes("floor"));
+    assert.strictEqual(run.body.purged, 0);
+    assert.strictEqual(memDb.workFactRevisions.size, before);
   });
 
   console.log(`\x1b[32m[SUCCESS] All ${passed} boundary, isolation, and reliability tests passed.\x1b[0m`);

@@ -7,11 +7,12 @@ import { createOrganization, getOrganization, listOrganizations } from "../src/d
 import { ingestBatch } from "../src/domains/ingest/ingest-batch";
 import { compileRelease } from "../src/domains/privacy";
 import { materialHash, canTransition, evaluateSuggestion, exportEvidencePackage } from "../src/domains/control";
+import { getJurisdictionCoverage, setRetentionClass, placeLegalHold, releaseLegalHold, runRetention } from "../src/domains/lifecycle";
 import { drainOnce } from "../src/worker/outbox-publisher";
 import { withTenant, memDb } from "../src/platform/db/with-tenant";
 
 console.log("\x1b[35m============================================================\x1b[0m");
-console.log("\x1b[35m=== ZOIKO ABATE: Golden Demo Cycle (Phases 0, 1, 2, 3, 4) ===\x1b[0m");
+console.log("\x1b[35m=== ZOIKO ABATE: Golden Demo Cycle (Phases 0, 1, 2, 3, 4, 5) ===\x1b[0m");
 console.log("\x1b[35m============================================================\x1b[0m\n");
 
 async function runDemoCycle() {
@@ -236,20 +237,46 @@ async function runDemoCycle() {
   console.log("  ✔ Artifacts bundled:", evidencePkg.artifacts.length);
   console.log("  ✔ Manifest SHA-256 Digest:", evidencePkg.manifest.manifestHash);
 
-  console.log("Step 13. Draining transactional outbox via worker process...");
+  console.log("Step 13. Jurisdiction Pack, Retention Schedule & Legal Hold (Phase 5)...");
+  const coverage = await getJurisdictionCoverage({ who: whoA, actor: actorA });
+  if (coverage.status !== "COVERED") throw new Error("Tenant A must be covered by a jurisdiction pack");
+  console.log(`  ✔ Jurisdiction pack in effect: ${coverage.pack.packId} v${coverage.pack.version} (${coverage.pack.content.title})`);
+
+  const coverageB = await getJurisdictionCoverage({ who: whoB, actor: actorB });
+  console.log(`  ✔ Tenant B coverage: ${coverageB.status} -> retention configuration fails closed`);
+
+  const retentionClass = await setRetentionClass({
+    who: whoA, actor: actorA, idempotencyKey: `idem-${crypto.randomUUID()}`,
+    input: { dataCategory: "WORK_FACT", retentionDays: 90, basis: "SYNTHETIC demo schedule (tenant-configured)" }
+  });
+  console.log(`  ✔ Tenant retention class set: WORK_FACT ${retentionClass.body.retentionDays} days (validated against ${retentionClass.body.packId} v${retentionClass.body.packVersion})`);
+
+  const hold = await placeLegalHold({
+    who: whoA, actor: actorA, idempotencyKey: `idem-${crypto.randomUUID()}`,
+    input: { dataCategory: "WORK_FACT", matterRef: "MATTER-DEMO-001", reason: "Preserve work-pattern evidence for a pending claim" }
+  });
+  const heldRun = await runRetention({ who: whoA, actor: actorA, dataCategory: "WORK_FACT", idempotencyKey: `idem-${crypto.randomUUID()}` });
+  console.log(`  ✔ Run under legal hold: eligible ${heldRun.body.eligible}, held ${heldRun.body.held}, purged ${heldRun.body.purged}`);
+
+  await releaseLegalHold({
+    who: whoA, actor: actorA, holdId: hold.body.id, idempotencyKey: `idem-${crypto.randomUUID()}`,
+    input: { releaseReason: "Claim settled; preservation no longer required" }
+  });
+  const purgeRun = await runRetention({ who: whoA, actor: actorA, dataCategory: "WORK_FACT", idempotencyKey: `idem-${crypto.randomUUID()}` });
+  console.log(`  ✔ Run after hold release: eligible ${purgeRun.body.eligible}, purged ${purgeRun.body.purged}, verified tombstones ${purgeRun.body.verified}`);
+
+  const redelivery = await ingestBatch({ who: whoA, actor: actorA, batch: { ...batch, batchId: `batch-demo-redeliver-${crypto.randomUUID()}` } });
+  console.log(`  ✔ Purged records re-delivered by source: accepted ${redelivery.body.accepted}, duplicate ${redelivery.body.duplicate} (no resurrection)\n`);
+
+  console.log("Step 14. Draining transactional outbox via worker process...");
   const drainReport = await drainOnce();
   console.log(`  ✔ Outbox drained: ${drainReport.drained} events published.`);
   console.log(`  ✔ Total audit events recorded in append-only log: ${memDb.auditEvents.length}\n`);
 
   console.log("\x1b[32m====================================================================\x1b[0m");
-  console.log("\x1b[32m=== DEMO CYCLE COMPLETED SUCCESSFULLY: ALL PHASES 0-4 VERIFIED ===\x1b[0m");
+  console.log("\x1b[32m=== DEMO CYCLE COMPLETED SUCCESSFULLY: ALL PHASES 0-5 VERIFIED ===\x1b[0m");
   console.log("\x1b[32m====================================================================\x1b[0m");
 }
-
-runDemoCycle().catch(err => {
-  console.error("\x1b[31m[DEMO CYCLE FAILED]\x1b[0m", err);
-  process.exit(1);
-});
 
 runDemoCycle().catch(err => {
   console.error("\x1b[31m[DEMO CYCLE FAILED]\x1b[0m", err);

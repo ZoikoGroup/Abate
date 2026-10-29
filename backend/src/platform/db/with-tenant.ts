@@ -84,6 +84,13 @@ class MemoryDatabase {
   public implementationReceipts: Map<string, any> = new Map();
   public evaluations: Map<string, any> = new Map();
 
+  // Phase 5 Jurisdiction Packs & Retention
+  public jurisdictionPacks: Map<string, any> = new Map(); // global catalog, key pack_id:version
+  public retentionClasses: Map<string, any> = new Map();
+  public legalHolds: Map<string, any> = new Map();
+  public retentionRuns: Map<string, any> = new Map();
+  public deletionTombstones: Map<string, any> = new Map();
+
   clear() {
     this.tenants.clear();
     this.principals.clear();
@@ -110,6 +117,11 @@ class MemoryDatabase {
     this.approvals.clear();
     this.implementationReceipts.clear();
     this.evaluations.clear();
+    this.jurisdictionPacks.clear();
+    this.retentionClasses.clear();
+    this.legalHolds.clear();
+    this.retentionRuns.clear();
+    this.deletionTombstones.clear();
   }
 }
 
@@ -162,7 +174,12 @@ class MemoryClient {
         interventions: Array.from(memDb.interventions.entries()),
         approvals: Array.from(memDb.approvals.entries()),
         implementationReceipts: Array.from(memDb.implementationReceipts.entries()),
-        evaluations: Array.from(memDb.evaluations.entries())
+        evaluations: Array.from(memDb.evaluations.entries()),
+        jurisdictionPacks: Array.from(memDb.jurisdictionPacks.entries()),
+        retentionClasses: Array.from(memDb.retentionClasses.entries()),
+        legalHolds: Array.from(memDb.legalHolds.entries()),
+        retentionRuns: Array.from(memDb.retentionRuns.entries()),
+        deletionTombstones: Array.from(memDb.deletionTombstones.entries())
       });
       return { rows: [], rowCount: 0, command: "BEGIN", oid: 0, fields: [] };
     }
@@ -203,6 +220,11 @@ class MemoryClient {
         if (snap.approvals) memDb.approvals = new Map(snap.approvals);
         if (snap.implementationReceipts) memDb.implementationReceipts = new Map(snap.implementationReceipts);
         if (snap.evaluations) memDb.evaluations = new Map(snap.evaluations);
+        if (snap.jurisdictionPacks) memDb.jurisdictionPacks = new Map(snap.jurisdictionPacks);
+        if (snap.retentionClasses) memDb.retentionClasses = new Map(snap.retentionClasses);
+        if (snap.legalHolds) memDb.legalHolds = new Map(snap.legalHolds);
+        if (snap.retentionRuns) memDb.retentionRuns = new Map(snap.retentionRuns);
+        if (snap.deletionTombstones) memDb.deletionTombstones = new Map(snap.deletionTombstones);
       }
       this.inTransaction = false;
       this.tenantContext = null;
@@ -226,7 +248,7 @@ class MemoryClient {
     }
 
     // Fail-Closed RLS Enforcement: If querying tenant-isolated tables without tenant context, return 0 rows
-    const isTenantTable = /FROM\s+(principal|organization|effective_membership|idempotency_record|audit_event|outbox_event|source_contract|connection|watermark|ingest_receipt|work_fact_revision|metric_snapshot|privacy_decision|privacy_release|released_artifact|disclosure_ledger|hazard|cause|intervention|approval|implementation_receipt|evaluation)/i.test(trimmed);
+    const isTenantTable = /FROM\s+(principal|organization|effective_membership|idempotency_record|audit_event|outbox_event|source_contract|connection|watermark|ingest_receipt|work_fact_revision|metric_snapshot|privacy_decision|privacy_release|released_artifact|disclosure_ledger|hazard|cause|intervention|approval|implementation_receipt|evaluation|retention_class|legal_hold|retention_run|deletion_tombstone)/i.test(trimmed);
     if (isTenantTable && !this.tenantContext) {
       return { rows: [], rowCount: 0, command: "SELECT", oid: 0, fields: [] };
     }
@@ -409,6 +431,235 @@ class MemoryClient {
       const entry = { consumer, event_id: eventId, tenant_id: tenantId, received_at: new Date().toISOString() };
       memDb.inboxEvents.set(key, entry);
       return { rows: [entry], rowCount: 1, command: "INSERT", oid: 0, fields: [] };
+    }
+
+    // -------------------------------------------------------------
+    // Phase 5 Jurisdiction Packs & Retention Handlers
+    // Kept ahead of Phase 2 so the purge DELETE is not matched as a work fact SELECT.
+    // -------------------------------------------------------------
+
+    // Jurisdiction Pack Insert (global catalog, not tenant-scoped)
+    if (upper.includes("INSERT INTO JURISDICTION_PACK")) {
+      const [packId, version, jurisdiction, sector, effectiveFrom, effectiveTo, status, content, contentHash, approvedBy] = params;
+      const key = `${packId}:${version}`;
+      if (memDb.jurisdictionPacks.has(key)) {
+        throw new Error("duplicate key value violates unique constraint jurisdiction_pack_pkey");
+      }
+      const rec = {
+        pack_id: packId,
+        version,
+        jurisdiction,
+        sector,
+        effective_from: effectiveFrom,
+        effective_to: effectiveTo,
+        status,
+        content,
+        content_hash: contentHash,
+        approved_by: approvedBy,
+        approved_at: new Date().toISOString()
+      };
+      memDb.jurisdictionPacks.set(key, rec);
+      return { rows: [rec], rowCount: 1, command: "INSERT", oid: 0, fields: [] };
+    }
+
+    // Jurisdiction Pack close-out of an open-ended predecessor
+    if (upper.includes("UPDATE JURISDICTION_PACK SET EFFECTIVE_TO")) {
+      const [effectiveTo, packId, version] = params;
+      const rec = memDb.jurisdictionPacks.get(`${packId}:${version}`);
+      if (rec) rec.effective_to = effectiveTo;
+      return { rows: rec ? [rec] : [], rowCount: rec ? 1 : 0, command: "UPDATE", oid: 0, fields: [] };
+    }
+
+    // Jurisdiction Pack Select
+    if (upper.includes("FROM JURISDICTION_PACK")) {
+      const rows = Array.from(memDb.jurisdictionPacks.values()).filter(p => params.length === 0 || p.pack_id === params[0]);
+      return { rows, rowCount: rows.length, command: "SELECT", oid: 0, fields: [] };
+    }
+
+    // Retention Class Insert (append-only versions)
+    if (upper.includes("INSERT INTO RETENTION_CLASS")) {
+      const [id, tId, category, days, basis, version, packId, packVersion, setBy] = params;
+      if (this.tenantContext && tId !== this.tenantContext) {
+        throw new Error("RLS WITH CHECK violation: cross-tenant retention_class write rejected");
+      }
+      const clash = Array.from(memDb.retentionClasses.values())
+        .some(c => c.tenant_id === tId && c.data_category === category && c.version === version);
+      if (clash) {
+        throw new Error("duplicate key value violates unique constraint retention_class_tenant_id_data_category_version_key");
+      }
+      const rec = {
+        id,
+        tenant_id: tId,
+        data_category: category,
+        retention_days: days,
+        basis,
+        version,
+        status: "ACTIVE",
+        pack_id: packId,
+        pack_version: packVersion,
+        set_by: setBy,
+        created_at: new Date().toISOString()
+      };
+      memDb.retentionClasses.set(id, rec);
+      return { rows: [rec], rowCount: 1, command: "INSERT", oid: 0, fields: [] };
+    }
+
+    // Retention Class supersession
+    if (upper.includes("UPDATE RETENTION_CLASS SET STATUS = 'SUPERSEDED'")) {
+      const rec = memDb.retentionClasses.get(params[0]);
+      if (rec && rec.tenant_id === this.tenantContext) {
+        rec.status = "SUPERSEDED";
+        return { rows: [rec], rowCount: 1, command: "UPDATE", oid: 0, fields: [] };
+      }
+      return { rows: [], rowCount: 0, command: "UPDATE", oid: 0, fields: [] };
+    }
+
+    // Retention Class Select
+    if (upper.includes("FROM RETENTION_CLASS")) {
+      const rows = Array.from(memDb.retentionClasses.values()).filter(c => c.tenant_id === this.tenantContext);
+      return { rows, rowCount: rows.length, command: "SELECT", oid: 0, fields: [] };
+    }
+
+    // Legal Hold Insert
+    if (upper.includes("INSERT INTO LEGAL_HOLD")) {
+      const [id, tId, category, scopeConnectionId, matterRef, reason, placedBy, placedAt] = params;
+      if (this.tenantContext && tId !== this.tenantContext) {
+        throw new Error("RLS WITH CHECK violation: cross-tenant legal_hold write rejected");
+      }
+      const rec = {
+        id,
+        tenant_id: tId,
+        data_category: category,
+        scope_connection_id: scopeConnectionId || null,
+        matter_ref: matterRef,
+        reason,
+        placed_by: placedBy,
+        placed_at: placedAt || new Date().toISOString(),
+        released_by: null,
+        released_at: null,
+        release_reason: null
+      };
+      memDb.legalHolds.set(id, rec);
+      return { rows: [rec], rowCount: 1, command: "INSERT", oid: 0, fields: [] };
+    }
+
+    // Legal Hold Release
+    if (upper.includes("UPDATE LEGAL_HOLD")) {
+      const [releasedBy, releasedAt, releaseReason, id] = params;
+      const rec = memDb.legalHolds.get(id);
+      if (rec && rec.tenant_id === this.tenantContext) {
+        rec.released_by = releasedBy;
+        rec.released_at = releasedAt;
+        rec.release_reason = releaseReason;
+        return { rows: [rec], rowCount: 1, command: "UPDATE", oid: 0, fields: [] };
+      }
+      return { rows: [], rowCount: 0, command: "UPDATE", oid: 0, fields: [] };
+    }
+
+    // Legal Hold Select
+    if (upper.includes("FROM LEGAL_HOLD")) {
+      const rows = Array.from(memDb.legalHolds.values()).filter(h => h.tenant_id === this.tenantContext);
+      return { rows, rowCount: rows.length, command: "SELECT", oid: 0, fields: [] };
+    }
+
+    // Retention Run Insert (append-only receipt)
+    if (upper.includes("INSERT INTO RETENTION_RUN")) {
+      const [id, tId, category, status, blockedReason, classId, classVersion, cutoff, eligible, held, purged, verified, runBy, completedAt] = params;
+      if (this.tenantContext && tId !== this.tenantContext) {
+        throw new Error("RLS WITH CHECK violation: cross-tenant retention_run write rejected");
+      }
+      const rec = {
+        id,
+        tenant_id: tId,
+        data_category: category,
+        status,
+        blocked_reason: blockedReason,
+        retention_class_id: classId,
+        retention_class_version: classVersion,
+        cutoff,
+        eligible,
+        held,
+        purged,
+        verified,
+        run_by: runBy,
+        completed_at: completedAt || new Date().toISOString()
+      };
+      memDb.retentionRuns.set(id, rec);
+      return { rows: [rec], rowCount: 1, command: "INSERT", oid: 0, fields: [] };
+    }
+
+    // Retention Run Select
+    if (upper.includes("FROM RETENTION_RUN")) {
+      const rows = Array.from(memDb.retentionRuns.values()).filter(r => r.tenant_id === this.tenantContext);
+      return { rows, rowCount: rows.length, command: "SELECT", oid: 0, fields: [] };
+    }
+
+    // Deletion Tombstone Insert
+    if (upper.includes("INSERT INTO DELETION_TOMBSTONE")) {
+      const [id, tId, runId, category, recordRef, recordDigest, recordKeyDigest] = params;
+      if (this.tenantContext && tId !== this.tenantContext) {
+        throw new Error("RLS WITH CHECK violation: cross-tenant deletion_tombstone write rejected");
+      }
+      const clash = Array.from(memDb.deletionTombstones.values()).some(t => t.tenant_id === tId && t.record_ref === recordRef);
+      if (clash) {
+        throw new Error("duplicate key value violates unique constraint deletion_tombstone_tenant_id_record_ref_key");
+      }
+      const rec = {
+        id,
+        tenant_id: tId,
+        run_id: runId,
+        data_category: category,
+        record_ref: recordRef,
+        record_digest: recordDigest,
+        record_key_digest: recordKeyDigest,
+        deleted_at: new Date().toISOString(),
+        verified_at: null
+      };
+      memDb.deletionTombstones.set(id, rec);
+      return { rows: [rec], rowCount: 1, command: "INSERT", oid: 0, fields: [] };
+    }
+
+    // Deletion Tombstone verification stamp (the only permitted update)
+    if (upper.includes("UPDATE DELETION_TOMBSTONE SET VERIFIED_AT")) {
+      const [verifiedAt, recordRef] = params;
+      const rec = Array.from(memDb.deletionTombstones.values())
+        .find(t => t.tenant_id === this.tenantContext && t.record_ref === recordRef);
+      if (rec) rec.verified_at = verifiedAt;
+      return { rows: rec ? [rec] : [], rowCount: rec ? 1 : 0, command: "UPDATE", oid: 0, fields: [] };
+    }
+
+    // Deletion Tombstone Select (optionally by record_key_digest)
+    if (upper.includes("FROM DELETION_TOMBSTONE")) {
+      const rows = Array.from(memDb.deletionTombstones.values())
+        .filter(t => t.tenant_id === this.tenantContext)
+        .filter(t => params.length === 0 || t.record_key_digest === params[0]);
+      return { rows, rowCount: rows.length, command: "SELECT", oid: 0, fields: [] };
+    }
+
+    // Work Fact purge: mirrors the work_fact_purge_guard trigger in 0050_retention_jurisdiction.sql
+    if (upper.includes("DELETE FROM WORK_FACT_REVISION")) {
+      const entry = Array.from(memDb.workFactRevisions.entries())
+        .find(([, r]) => r.id === params[0] && r.tenant_id === this.tenantContext);
+      if (!entry) {
+        return { rows: [], rowCount: 0, command: "DELETE", oid: 0, fields: [] };
+      }
+      const [key, fact] = entry;
+      const hasTombstone = Array.from(memDb.deletionTombstones.values())
+        .some(t => t.tenant_id === fact.tenant_id && t.record_ref === fact.id);
+      if (!hasTombstone) {
+        throw new Error(`work_fact_revision ${fact.id} cannot be deleted without a deletion tombstone`);
+      }
+      const held = Array.from(memDb.legalHolds.values()).some(h =>
+        h.tenant_id === fact.tenant_id &&
+        h.data_category === "WORK_FACT" &&
+        !h.released_at &&
+        (!h.scope_connection_id || h.scope_connection_id === fact.connection_id)
+      );
+      if (held) {
+        throw new Error(`work_fact_revision ${fact.id} is under legal hold`);
+      }
+      memDb.workFactRevisions.delete(key);
+      return { rows: [fact], rowCount: 1, command: "DELETE", oid: 0, fields: [] };
     }
 
     // -------------------------------------------------------------
