@@ -1,5 +1,5 @@
 // backend/src/index.ts
-import express, { Request, Response } from "express";
+import express, { Request, Response, NextFunction } from "express";
 import cors from "cors";
 import { loadConfig } from "./platform/config";
 import { toErrorResponse, AppError } from "./platform/errors";
@@ -43,6 +43,15 @@ import {
   releaseLegalHold,
   runRetention
 } from "./domains/lifecycle";
+import { telemetry, telemetryMiddleware } from "./platform/telemetry";
+import { buildSloReport } from "./platform/slo";
+import { SupportTokenRequestBody } from "./contracts/support";
+import {
+  createSupportToken,
+  authenticateSupport,
+  generateDiagnosticReceipt,
+  verifyDiagnosticReceipt
+} from "./domains/support";
 import { withTenant } from "./platform/db/with-tenant";
 import { drainOnce } from "./worker/outbox-publisher";
 import { memDb } from "./platform/db/with-tenant";
@@ -50,6 +59,9 @@ import { seedTwoTenants } from "./fixtures/seed";
 
 const cfg = loadConfig();
 const app = express();
+
+// B8: per-request id, latency and status for SLOs (route templates only, no content)
+app.use(telemetryMiddleware);
 
 app.use(cors({
   origin: cfg.clientUrl,
@@ -87,7 +99,8 @@ app.get("/api/health", (_req: Request, res: Response) => {
       surveillanceMining: "PROHIBITED",
       clinicalDependency: "PROHIBITED",
       privacyGate: "CLASS_B_C_MIN_10_CONTRIBUTORS",
-      planeSeparation: "PLANE_B_CANNOT_MUTATE_PLANE_A"
+      planeSeparation: "PLANE_B_CANNOT_MUTATE_PLANE_A",
+      supportModel: "ZERO_IMPERSONATION_SIGNED_DIAGNOSTICS"
     }
   });
 });
@@ -1211,13 +1224,99 @@ app.post("/api/v2/legal-holds/:id/release", async (req: Request, res: Response) 
 });
 
 // -------------------------------------------------------------
+// B8: SLOs & Zero-Impersonation Support
+// -------------------------------------------------------------
+
+// Dev-only issuance; production support credentials come from the identity provider
+app.post("/api/v2/auth/support-token", (req: Request, res: Response) => {
+  try {
+    if (cfg.appEnv !== "local" && cfg.appEnv !== "test") {
+      throw new AppError("NOT_FOUND", "Not found.");
+    }
+    const { operator } = SupportTokenRequestBody.parse(req.body);
+    res.status(200).json({ token: createSupportToken({ operator }), tokenType: "Bearer", expiresIn: "1h", operator });
+  } catch (err) {
+    toErrorResponse(err, res);
+  }
+});
+
+app.get("/api/v2/ops/slo", (req: Request, res: Response) => {
+  try {
+    authenticateSupport(getHeader(req, "authorization"));
+    res.status(200).json(buildSloReport(telemetry.snapshot()));
+  } catch (err) {
+    toErrorResponse(err, res);
+  }
+});
+
+// Look up what happened to a request a tenant reported (by the requestId in their error)
+app.get("/api/v2/ops/requests/:requestId", (req: Request, res: Response) => {
+  try {
+    authenticateSupport(getHeader(req, "authorization"));
+    const record = telemetry.find(String(req.params.requestId));
+    if (!record) {
+      throw new AppError("NOT_FOUND", "Not found.");
+    }
+    const errorLog = telemetry.errorLog.find(e => e.requestId === record.requestId) ?? null;
+    res.status(200).json({ ...record, errorLog });
+  } catch (err) {
+    toErrorResponse(err, res);
+  }
+});
+
+app.get("/api/v2/ops/errors", (req: Request, res: Response) => {
+  try {
+    authenticateSupport(getHeader(req, "authorization"));
+    res.status(200).json(telemetry.errorLog.slice(-50).reverse());
+  } catch (err) {
+    toErrorResponse(err, res);
+  }
+});
+
+app.post("/api/v2/ops/diagnostic-receipts/verify", (req: Request, res: Response) => {
+  try {
+    authenticateSupport(getHeader(req, "authorization"));
+    res.status(200).json(verifyDiagnosticReceipt(req.body));
+  } catch (err) {
+    toErrorResponse(err, res);
+  }
+});
+
+// Tenant side: issue a signed, content-free health snapshot to hand to support
+app.post("/api/v2/support/diagnostic-receipts", async (req: Request, res: Response) => {
+  try {
+    const who = await authenticate(getHeader(req, "authorization"));
+    const actor = await resolveActor(who.tenantId, who.subject, new Date());
+    const result = await generateDiagnosticReceipt({
+      who,
+      actor,
+      idempotencyKey: getHeader(req, "idempotency-key") || getHeader(req, "x-idempotency-key")
+    });
+    res.status(result.status).json(result.body);
+  } catch (err) {
+    toErrorResponse(err, res);
+  }
+});
+
+// Final handler: body-parser and any unrouted error get the safe envelope, never Express's HTML/stack page
+app.use((err: any, _req: Request, res: Response, _next: NextFunction) => {
+  if (err?.type === "entity.parse.failed" || err?.type === "entity.too.large") {
+    return toErrorResponse(new AppError("VALIDATION", "The request body could not be parsed."), res);
+  }
+  return toErrorResponse(err, res);
+});
+
+// -------------------------------------------------------------
 // Server Initialization
 // -------------------------------------------------------------
 
-const server = app.listen(cfg.port, "0.0.0.0", () => {
-  console.log(`\x1b[32m[Zoiko Abate Server] Running at http://localhost:${cfg.port}\x1b[0m`);
-  console.log(`[Config] Environment: ${cfg.appEnv} | Client URL: ${cfg.clientUrl}`);
-  console.log(`[Config] Fixed Clock: ${cfg.fixedClock}`);
-});
+// Only listen when run as the entrypoint, so tools can mount the app on an ephemeral port
+const server = require.main === module
+  ? app.listen(cfg.port, "0.0.0.0", () => {
+    console.log(`\x1b[32m[Zoiko Abate Server] Running at http://localhost:${cfg.port}\x1b[0m`);
+    console.log(`[Config] Environment: ${cfg.appEnv} | Client URL: ${cfg.clientUrl}`);
+    console.log(`[Config] Fixed Clock: ${cfg.fixedClock}`);
+  })
+  : null;
 
 export { app, server };

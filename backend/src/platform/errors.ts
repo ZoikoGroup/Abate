@@ -2,6 +2,7 @@
 import { Response } from "express";
 import crypto from "node:crypto";
 import { ZodError } from "zod";
+import { logSafeError } from "./telemetry";
 
 export type ErrorCode = 
   | "UNAUTHENTICATED"
@@ -44,18 +45,22 @@ export class AppError extends Error {
 }
 
 export function toErrorResponse(error: unknown, res: Response) {
-  const requestId = crypto.randomUUID();
+  // One id per request (set by telemetryMiddleware) so support can correlate a reported error
+  const locals = res.locals ?? {};
+  const requestId: string = locals.requestId ?? (error instanceof AppError ? error.requestId : crypto.randomUUID());
 
   if (error instanceof AppError) {
+    locals.errorCode = error.code;
     return res.status(error.statusCode).json({
       code: error.code,
       message: error.message,
-      requestId: error.requestId
+      requestId
     });
   }
 
   // Map Zod schema validation errors to safe 400 VALIDATION response (Phase 0 / Phase 1 standard)
   if (error instanceof ZodError || (error && (error as any).name === "ZodError")) {
+    locals.errorCode = "VALIDATION";
     return res.status(400).json({
       code: "VALIDATION",
       message: "The request was not valid.",
@@ -63,8 +68,10 @@ export function toErrorResponse(error: unknown, res: Response) {
     });
   }
 
-  // Safe fallback: never leak internal stack traces or database errors
-  console.error(`[Error-${requestId}] Internal exception:`, error);
+  // Safe fallback: log a fingerprint, never the message or stack (driver errors embed row values)
+  const entry = logSafeError(requestId, error);
+  locals.errorCode = "UNAVAILABLE";
+  locals.errorFingerprint = entry.fingerprint;
   return res.status(500).json({
     code: "UNAVAILABLE",
     message: "An internal error occurred. Please contact support.",

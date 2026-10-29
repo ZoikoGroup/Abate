@@ -827,3 +827,84 @@ export async function releaseLegalHold(
     token
   });
 }
+
+// ==========================================
+// B8: SLOs & Zero-Impersonation Support
+// ==========================================
+
+export type SloStatus = "MET" | "BREACHED" | "NO_DATA";
+
+export interface SloReport {
+  generatedAt: string;
+  window: { from: string | null; to: string | null; requests: number };
+  latency: Array<{ routeClass: string; targetP95Ms: number; p95Ms: number | null; requests: number; status: SloStatus }>;
+  availability: {
+    requests: number;
+    serverErrors: number;
+    ratio: number | null;
+    target: number;
+    errorBudget: { allowedFailures: number; consumed: number; remaining: number };
+    status: SloStatus;
+  };
+  slowestRoutes: Array<{ route: string; method: string; routeClass: string; p95Ms: number; requests: number }>;
+  overall: SloStatus;
+  scope: string;
+}
+
+export interface OpsRequestRecord {
+  requestId: string;
+  at: string;
+  method: string;
+  route: string;
+  routeClass: string;
+  status: number;
+  durationMs: number;
+  errorCode: string | null;
+  errorFingerprint: string | null;
+  errorLog: { errorName: string; fingerprint: string } | null;
+}
+
+export interface SafeErrorLogEntry {
+  level: "error";
+  at: string;
+  requestId: string;
+  errorName: string;
+  fingerprint: string;
+}
+
+export interface DiagnosticReceipt {
+  receiptId: string;
+  schemaVersion: string;
+  tenantId: string;
+  generatedAt: string;
+  sections: Record<string, unknown>;
+  excluded: string[];
+  signature: string;
+}
+
+export async function requestSupportToken(operator: string): Promise<{ token: string; operator: string }> {
+  return api("/api/v2/auth/support-token", { method: "POST", body: JSON.stringify({ operator }) });
+}
+
+export async function fetchSloReport(supportToken: string): Promise<SloReport> {
+  return api<SloReport>("/api/v2/ops/slo", { token: supportToken });
+}
+
+export async function fetchOpsErrors(supportToken: string): Promise<SafeErrorLogEntry[]> {
+  return api<SafeErrorLogEntry[]>("/api/v2/ops/errors", { token: supportToken });
+}
+
+export async function lookupOpsRequest(requestId: string, supportToken: string): Promise<OpsRequestRecord> {
+  return api<OpsRequestRecord>(`/api/v2/ops/requests/${encodeURIComponent(requestId)}`, { token: supportToken });
+}
+
+export async function issueDiagnosticReceipt(idempotencyKey: string, token: string): Promise<DiagnosticReceipt> {
+  return api<DiagnosticReceipt>("/api/v2/support/diagnostic-receipts", { method: "POST", idempotencyKey, token });
+}
+
+export async function verifyDiagnosticReceipt(
+  receipt: unknown,
+  supportToken: string
+): Promise<{ valid: boolean; receiptId: string | null; tenantId: string | null; generatedAt: string | null }> {
+  return api("/api/v2/ops/diagnostic-receipts/verify", { method: "POST", body: JSON.stringify(receipt), token: supportToken });
+}
