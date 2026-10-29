@@ -68,7 +68,7 @@ export function IngestionTab({ currentTenant, token, onRefresh }: IngestionTabPr
       setFeedback({
         type: "success",
         title: `Connection ${action.toUpperCase()}D`,
-        message: `Connection "${conn.name}" (${conn.id.slice(0, 8)}...) is now ${action === "pause" ? "PAUSED" : action === "resume" ? "ACTIVE" : "REVOKED"}.`
+        message: `Connection "${conn.source}" (${conn.id.slice(0, 8)}...) is now ${action === "pause" ? "PAUSED" : action === "resume" ? "ACTIVE" : "REVOKED"}.`
       });
       await loadData();
       onRefresh();
@@ -98,30 +98,26 @@ export function IngestionTab({ currentTenant, token, onRefresh }: IngestionTabPr
     try {
       const receipt = await submitZoikoBatch(
         {
-          batchId,
           connectionId: activeConn.id,
-          sentAt: now.toISOString(),
-          sourceWatermark: now.toISOString(),
-          records: [
+          batchId,
+          items: [
             {
               recordId: `rec-${crypto.randomUUID().slice(0, 8)}`,
               revision: 1,
-              recordedAt: now.toISOString(),
-              subjectId: "emp-senior-analyst-049",
-              intervalStart: interval1Start,
-              intervalEnd: interval1End,
+              subjectRef: "emp-senior-analyst-049",
+              startUtc: interval1Start,
+              endUtc: interval1End,
               workTz: "Europe/London",
-              kind: "ACTIVE_WORK"
+              kind: "WORK"
             },
             {
               recordId: `rec-${crypto.randomUUID().slice(0, 8)}`,
               revision: 1,
-              recordedAt: now.toISOString(),
-              subjectId: "emp-lead-counsel-102",
-              intervalStart: interval1Start,
-              intervalEnd: interval1End,
+              subjectRef: "emp-lead-counsel-102",
+              startUtc: interval1Start,
+              endUtc: interval1End,
               workTz: "Europe/London",
-              kind: "ACTIVE_WORK"
+              kind: "WORK"
             }
           ]
         },
@@ -131,7 +127,7 @@ export function IngestionTab({ currentTenant, token, onRefresh }: IngestionTabPr
       setFeedback({
         type: "success",
         title: "Standard Batch Ingested Successfully",
-        message: `Batch "${receipt.batch_id}" accepted ${receipt.accepted_count} records. Watermark advanced. Pseudonym hashes derived without leaking plaintext subject IDs.`
+        message: `Batch "${receipt.batch_id}" accepted ${receipt.accepted} records. Watermark advanced. Pseudonym hashes derived without leaking plaintext subject IDs.`
       });
       await loadData();
       onRefresh();
@@ -165,19 +161,17 @@ export function IngestionTab({ currentTenant, token, onRefresh }: IngestionTabPr
     try {
       const receipt = await submitZoikoBatch(
         {
-          batchId: lastReceipt.batch_id, // Replaying the exact same batch ID
           connectionId: activeConn.id,
-          sentAt: new Date().toISOString(),
-          records: [
+          batchId: lastReceipt.batch_id, // Replaying the exact same batch ID
+          items: [
             {
               recordId: "rec-replay-static-01",
               revision: 1,
-              recordedAt: new Date().toISOString(),
-              subjectId: "emp-senior-analyst-049",
-              intervalStart: "2026-10-28T08:00:00.000Z",
-              intervalEnd: "2026-10-28T09:00:00.000Z",
+              subjectRef: "emp-senior-analyst-049",
+              startUtc: "2026-10-28T08:00:00.000Z",
+              endUtc: "2026-10-28T09:00:00.000Z",
               workTz: "Europe/London",
-              kind: "ACTIVE_WORK"
+              kind: "WORK"
             }
           ]
         },
@@ -187,7 +181,7 @@ export function IngestionTab({ currentTenant, token, onRefresh }: IngestionTabPr
       setFeedback({
         type: "success",
         title: "Duplicate Batch Handled Idempotently",
-        message: `Replayed batch "${receipt.batch_id}". Accepted: 0 new facts. Existing receipt returned without corrupting work fact counts.`
+        message: `Replayed batch "${receipt.batch_id}". Accepted: ${receipt.accepted} new facts. Existing receipt returned without corrupting work fact counts.`
       });
       await loadData();
       onRefresh();
@@ -212,24 +206,31 @@ export function IngestionTab({ currentTenant, token, onRefresh }: IngestionTabPr
     try {
       await submitZoikoBatch(
         {
-          batchId: `batch-decoy-${Date.now().toString(36)}`,
           connectionId: activeConn.id,
-          sentAt: new Date().toISOString(),
-          records: [
+          batchId: `batch-decoy-${Date.now().toString(36)}`,
+          items: [
+            {
+              recordId: `rec-valid-${crypto.randomUUID().slice(0, 8)}`,
+              revision: 1,
+              subjectRef: "emp-decoy-control",
+              startUtc: "2026-10-28T08:00:00.000Z",
+              endUtc: "2026-10-28T09:00:00.000Z",
+              workTz: "Europe/London",
+              kind: "WORK"
+            },
             {
               recordId: `rec-decoy-${crypto.randomUUID().slice(0, 8)}`,
               revision: 1,
-              recordedAt: new Date().toISOString(),
-              subjectId: "emp-decoy-subject",
-              intervalStart: "2026-10-28T09:00:00.000Z",
-              intervalEnd: "2026-10-28T10:00:00.000Z",
+              subjectRef: "emp-decoy-subject",
+              startUtc: "2026-10-28T09:00:00.000Z",
+              endUtc: "2026-10-28T10:00:00.000Z",
               workTz: "Europe/London",
-              kind: "ACTIVE_WORK",
+              kind: "WORK",
               // Prohibited surveillance fields injected by rogue connector:
               screenshotUrl: "https://spyware.example/screen_snapshot.png",
               sickReason: "Severe mental burnout and depression",
               windowTitle: "Confidential Mergers & Acquisitions Client File"
-            }
+            } as any
           ]
         },
         token
@@ -265,7 +266,6 @@ export function IngestionTab({ currentTenant, token, onRefresh }: IngestionTabPr
     const activeConn = connections.find(c => c.state === "ACTIVE") || connections[0];
     const targetRecordId = workFacts[0]?.source_record_id || `rec-fixed-target-${Date.now().toString(36)}`;
     const batchId = `batch-rev2-${Date.now().toString(36)}`;
-    const now = new Date();
 
     setActionLoading("batch-rev2");
     setFeedback(null);
@@ -273,20 +273,17 @@ export function IngestionTab({ currentTenant, token, onRefresh }: IngestionTabPr
     try {
       const receipt = await submitZoikoBatch(
         {
-          batchId,
           connectionId: activeConn.id,
-          sentAt: now.toISOString(),
-          sourceWatermark: now.toISOString(),
-          records: [
+          batchId,
+          items: [
             {
               recordId: targetRecordId,
               revision: 2, // Higher revision
-              recordedAt: now.toISOString(),
-              subjectId: "emp-senior-analyst-049",
-              intervalStart: "2026-10-28T08:00:00.000Z",
-              intervalEnd: "2026-10-28T10:30:00.000Z", // Adjusted duration
+              subjectRef: "emp-senior-analyst-049",
+              startUtc: "2026-10-28T08:00:00.000Z",
+              endUtc: "2026-10-28T10:30:00.000Z", // Adjusted duration
               workTz: "Europe/London",
-              kind: "ACTIVE_WORK"
+              kind: "WORK"
             }
           ]
         },
@@ -464,6 +461,12 @@ export function IngestionTab({ currentTenant, token, onRefresh }: IngestionTabPr
                 ? "badge-coral"
                 : "badge-dark";
 
+              const cadenceMin = Math.round(conn.expected_cadence_seconds / 60);
+              const staleMin = cadenceMin * 3;
+              const lastSyncedText = conn.last_success_at
+                ? `${new Date(conn.last_success_at).toLocaleTimeString()}`
+                : "Never synced";
+
               return (
                 <div
                   key={conn.id}
@@ -479,7 +482,7 @@ export function IngestionTab({ currentTenant, token, onRefresh }: IngestionTabPr
                 >
                   <div style={{ display: "flex", justifyContent: "space-between", alignItems: "center", flexWrap: "wrap", gap: "0.5rem" }}>
                     <div style={{ display: "flex", alignItems: "center", gap: "0.75rem" }}>
-                      <strong style={{ fontSize: "1.05rem", color: "var(--aubergine)" }}>{conn.name}</strong>
+                      <strong style={{ fontSize: "1.05rem", color: "var(--aubergine)" }}>{conn.source}</strong>
                       <span className={`badge ${healthBadgeClass}`}>
                         Health: {conn.health}
                       </span>
@@ -526,24 +529,20 @@ export function IngestionTab({ currentTenant, token, onRefresh }: IngestionTabPr
                       <code>{conn.id.slice(0, 16)}...</code>
                     </div>
                     <div>
-                      <span style={{ color: "var(--muted-text)" }}>Contract:</span>{" "}
-                      <code>{conn.source_contract_id}</code>
+                      <span style={{ color: "var(--muted-text)" }}>Contract ID:</span>{" "}
+                      <code>{conn.contract_id.slice(0, 16)}...</code>
                     </div>
                     <div>
                       <span style={{ color: "var(--muted-text)" }}>Sync Cadence:</span>{" "}
-                      Every {conn.cadence_minutes} minutes
+                      Every {cadenceMin} minutes
                     </div>
                     <div>
                       <span style={{ color: "var(--muted-text)" }}>Staleness Threshold:</span>{" "}
-                      {conn.staleness_threshold_minutes} minutes (3x cadence)
+                      {staleMin} minutes (3x cadence)
                     </div>
                     <div>
-                      <span style={{ color: "var(--muted-text)" }}>Watermark Cursor:</span>{" "}
-                      {conn.watermark_cursor ? <code>{conn.watermark_cursor}</code> : "None"}
-                    </div>
-                    <div>
-                      <span style={{ color: "var(--muted-text)" }}>Sync Lag:</span>{" "}
-                      {conn.lag_minutes !== null ? `${conn.lag_minutes} min ago` : "Never synced"}
+                      <span style={{ color: "var(--muted-text)" }}>Last Sync Success:</span>{" "}
+                      {lastSyncedText}
                     </div>
                   </div>
                 </div>
@@ -574,26 +573,29 @@ export function IngestionTab({ currentTenant, token, onRefresh }: IngestionTabPr
               <thead>
                 <tr>
                   <th>Batch ID</th>
-                  <th>Contract</th>
                   <th>Total</th>
                   <th>Accepted</th>
                   <th>Duplicate</th>
                   <th>Conflicted</th>
-                  <th>Processed At</th>
+                  <th>Rejected</th>
+                  <th>Received At</th>
                 </tr>
               </thead>
               <tbody>
-                {receipts.map(rec => (
-                  <tr key={rec.id}>
-                    <td><code>{rec.batch_id}</code></td>
-                    <td><span className="badge badge-dark">{rec.source_contract_id}</span></td>
-                    <td><strong>{rec.record_count}</strong></td>
-                    <td><span className="badge badge-success">{rec.accepted_count}</span></td>
-                    <td>{rec.duplicate_count > 0 ? <span className="badge badge-warning">{rec.duplicate_count}</span> : "0"}</td>
-                    <td>{rec.conflicted_count > 0 ? <span className="badge badge-coral">{rec.conflicted_count}</span> : "0"}</td>
-                    <td>{new Date(rec.processed_at).toLocaleTimeString()}</td>
-                  </tr>
-                ))}
+                {receipts.map(rec => {
+                  const total = rec.accepted + rec.duplicate + rec.rejected + rec.conflicted;
+                  return (
+                    <tr key={rec.id}>
+                      <td><code>{rec.batch_id}</code></td>
+                      <td><strong>{total}</strong></td>
+                      <td><span className="badge badge-success">{rec.accepted}</span></td>
+                      <td>{rec.duplicate > 0 ? <span className="badge badge-warning">{rec.duplicate}</span> : "0"}</td>
+                      <td>{rec.conflicted > 0 ? <span className="badge badge-coral">{rec.conflicted}</span> : "0"}</td>
+                      <td>{rec.rejected > 0 ? <span className="badge badge-coral">{rec.rejected}</span> : "0"}</td>
+                      <td>{new Date(rec.received_at).toLocaleTimeString()}</td>
+                    </tr>
+                  );
+                })}
               </tbody>
             </table>
           </div>
@@ -623,8 +625,8 @@ export function IngestionTab({ currentTenant, token, onRefresh }: IngestionTabPr
                   <th>Pseudonym Hash (HMAC-SHA256)</th>
                   <th>Source Record</th>
                   <th>Revision</th>
-                  <th>Interval Start (UTC)</th>
-                  <th>Interval End (UTC)</th>
+                  <th>Start (UTC)</th>
+                  <th>End (UTC)</th>
                   <th>Work TZ</th>
                   <th>Kind</th>
                 </tr>
@@ -633,8 +635,8 @@ export function IngestionTab({ currentTenant, token, onRefresh }: IngestionTabPr
                 {workFacts.map(fact => (
                   <tr key={fact.id}>
                     <td>
-                      <code title={fact.pseudonym_id} style={{ fontSize: "0.8rem" }}>
-                        {fact.pseudonym_id.slice(0, 14)}...{fact.pseudonym_id.slice(-6)}
+                      <code title={fact.subject_pseudonym} style={{ fontSize: "0.8rem" }}>
+                        {fact.subject_pseudonym.slice(0, 14)}...{fact.subject_pseudonym.slice(-6)}
                       </code>
                     </td>
                     <td><code>{fact.source_record_id}</code></td>
@@ -643,8 +645,8 @@ export function IngestionTab({ currentTenant, token, onRefresh }: IngestionTabPr
                         rev {fact.revision}
                       </span>
                     </td>
-                    <td>{fact.interval_start}</td>
-                    <td>{fact.interval_end}</td>
+                    <td>{new Date(fact.start_at).toLocaleTimeString()}</td>
+                    <td>{new Date(fact.end_at).toLocaleTimeString()}</td>
                     <td>{fact.work_tz}</td>
                     <td>
                       <span className="badge badge-aubergine">{fact.kind}</span>

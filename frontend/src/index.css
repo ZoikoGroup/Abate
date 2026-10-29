@@ -818,3 +818,161 @@ body {
   border-top: 1px solid rgba(255, 255, 255, 0.1);
   margin-top: auto;
 }
+
+/* =========================================================
+   Phase 3: Cohort Analytics & Privacy Release Design Tokens
+   ========================================================= */
+
+.analytics-metric-box {
+  display: flex;
+  flex-direction: column;
+  justify-content: center;
+  align-items: flex-start;
+  padding: 1.5rem;
+  background: #FAF9F6;
+  border-radius: 8px;
+  border: 1px solid var(--card-border);
+}
+
+.metric-big-value {
+  font-size: 3.25rem;
+  font-weight: 800;
+  color: var(--aubergine);
+  line-height: 1.1;
+  font-family: var(--font-mono);
+}
+
+.lab-banner {
+  background: linear-gradient(135deg, #1C1126 0%, #2B1B38 100%);
+  color: #FFFFFF;
+  border-radius: 10px;
+  padding: 1.5rem;
+  border: 1px solid #44295D;
+  box-shadow: 0 4px 14px rgba(28, 17, 38, 0.25);
+}
+
+.lab-header {
+  display: flex;
+  justify-content: space-between;
+  align-items: center;
+  margin-bottom: 0.65rem;
+  flex-wrap: wrap;
+  gap: 0.5rem;
+}
+
+.lab-title {
+  font-size: 1.1rem;
+  font-weight: 700;
+  color: #FFFFFF;
+  display: flex;
+  align-items: center;
+  gap: 0.5rem;
+}
+
+.lab-badge {
+  font-family: var(--font-mono);
+  font-size: 0.75rem;
+  background: rgba(255, 255, 255, 0.12);
+  border: 1px solid rgba(255, 255, 255, 0.2);
+  color: #E9D5FF;
+  padding: 0.25rem 0.6rem;
+  border-radius: 4px;
+}
+
+.lab-grid {
+  display: grid;
+  grid-template-columns: repeat(auto-fit, minmax(240px, 1fr));
+  gap: 1rem;
+  margin-top: 1.25rem;
+}
+
+.lab-card-btn {
+  background: rgba(255, 255, 255, 0.05);
+  border: 1px solid rgba(255, 255, 255, 0.15);
+  border-radius: 8px;
+  padding: 1rem;
+  text-align: left;
+  cursor: pointer;
+  transition: all 0.2s ease;
+  color: #FFFFFF;
+  display: flex;
+  flex-direction: column;
+  gap: 0.4rem;
+}
+
+.lab-card-btn:hover:not(:disabled) {
+  background: rgba(255, 255, 255, 0.12);
+  transform: translateY(-2px);
+  box-shadow: 0 4px 10px rgba(0, 0, 0, 0.3);
+}
+
+.lab-card-btn:disabled {
+  opacity: 0.5;
+  cursor: not-allowed;
+}
+
+.lab-card-btn.border-rose:hover { border-color: #F87171; }
+.lab-card-btn.border-emerald:hover { border-color: #34D399; }
+.lab-card-btn.border-amber:hover { border-color: #FBBF24; }
+.lab-card-btn.border-cyan:hover { border-color: #38BDF8; }
+
+.lab-btn-title {
+  font-weight: 700;
+  font-size: 0.85rem;
+}
+
+.lab-btn-desc {
+  font-size: 0.775rem;
+  color: #CBD5E1;
+  line-height: 1.35;
+}
+
+.query-grid {
+  display: grid;
+  grid-template-columns: repeat(auto-fit, minmax(220px, 1fr));
+  gap: 1.25rem;
+  margin-bottom: 1.5rem;
+}
+
+.release-grid {
+  display: grid;
+  grid-template-columns: 280px 1fr;
+  gap: 2rem;
+  align-items: start;
+}
+
+@media (max-width: 768px) {
+  .release-grid {
+    grid-template-columns: 1fr;
+  }
+}
+
+.ethical-callout {
+  background: #FFFBEB;
+  border: 1px solid #FCD34D;
+  border-left: 5px solid #F59E0B;
+  border-radius: 8px;
+  padding: 1.25rem 1.5rem;
+  color: #78350F;
+}
+
+.ethical-callout h4 {
+  font-size: 0.95rem;
+  font-weight: 700;
+  color: #92400E;
+  margin-bottom: 0.5rem;
+  display: flex;
+  align-items: center;
+  gap: 0.5rem;
+}
+
+.ethical-callout ul {
+  list-style: disc;
+  margin-left: 1.25rem;
+  display: flex;
+  flex-direction: column;
+  gap: 0.4rem;
+  font-size: 0.85rem;
+  margin-top: 0.5rem;
+}
+

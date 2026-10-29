@@ -15,11 +15,13 @@ import { ConstitutionalTab } from "./components/Tabs/ConstitutionalTab";
 import { IsolationTab } from "./components/Tabs/IsolationTab";
 import { OrganizationsTab } from "./components/Tabs/OrganizationsTab";
 import { IngestionTab } from "./components/Tabs/IngestionTab";
+import { CohortAnalyticsTab } from "./components/Tabs/CohortAnalyticsTab";
+import { HazardControlTab } from "./components/Tabs/HazardControlTab";
 import { OutboxTab } from "./components/Tabs/OutboxTab";
 import { AuditTab } from "./components/Tabs/AuditTab";
 import "./index.css";
 
-type TabKey = "constitutional" | "isolation" | "organizations" | "ingestion" | "outbox" | "audit";
+type TabKey = "constitutional" | "isolation" | "organizations" | "ingestion" | "analytics" | "hazards" | "outbox" | "audit";
 
 export default function App() {
   const [activeTenantId, setActiveTenantId] = useState(PRESET_TENANTS[0].id);
@@ -131,6 +133,20 @@ export default function App() {
         </button>
         <button
           type="button"
+          className={`tab-button ${activeTab === "analytics" ? "active" : ""}`}
+          onClick={() => setActiveTab("analytics")}
+        >
+          Cohort Analytics & Privacy (Phase 3)
+        </button>
+        <button
+          type="button"
+          className={`tab-button ${activeTab === "hazards" ? "active" : ""}`}
+          onClick={() => setActiveTab("hazards")}
+        >
+          Hazards &amp; Controls (Phase 4)
+        </button>
+        <button
+          type="button"
           className={`tab-button ${activeTab === "isolation" ? "active" : ""}`}
           onClick={() => setActiveTab("isolation")}
         >
@@ -194,6 +210,20 @@ export default function App() {
             currentTenant={currentTenant}
             token={token}
             onRefresh={() => fetchTenantData(activeTenantId, activeRole)}
+          />
+        )}
+
+        {activeTab === "analytics" && (
+          <CohortAnalyticsTab
+            currentTenant={currentTenant}
+            token={token}
+          />
+        )}
+
+        {activeTab === "hazards" && (
+          <HazardControlTab
+            currentTenant={currentTenant}
+            token={token}
           />
         )}
 

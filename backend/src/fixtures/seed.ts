@@ -48,6 +48,31 @@ export async function seedTwoTenants(opts: { clock?: Date } = {}) {
   };
   memDb.memberships.set(membershipA.id, membershipA);
 
+  // Seed 15 additional synthetic cohort members for Tenant A (ABATE-GOLDEN-01 cohortSize: 16 total)
+  for (let i = 2; i <= 16; i++) {
+    const pad = i.toString().padStart(3, "0");
+    const pId = `00000000-0000-4000-a002-000000000${pad}`;
+    const p = {
+      id: pId,
+      tenant_id: tA.id,
+      external_subject: `auth0|user-tenant-a-member-${pad}`,
+      kind: "USER"
+    };
+    memDb.principals.set(p.id, p);
+
+    const m = {
+      id: `00000000-0000-4000-a003-000000000${pad}`,
+      tenant_id: tA.id,
+      principal_id: p.id,
+      organization_id: orgA.id,
+      domain_role: "MEMBER",
+      valid_from: validFrom,
+      valid_to: null,
+      recorded_at: validFrom
+    };
+    memDb.memberships.set(m.id, m);
+  }
+
   // Seed Phase 2 Source Contract & Active Connection for Tenant A
   const contractA = {
     id: "00000000-0000-4000-a005-000000000001",
@@ -88,25 +113,61 @@ export async function seedTwoTenants(opts: { clock?: Date } = {}) {
   };
   memDb.organizations.set(orgB.id, orgB);
 
-  const principalB = {
-    id: "00000000-0000-4000-b002-000000000001",
-    tenant_id: tB.id,
-    external_subject: "auth0|user-tenant-b-risk-owner",
-    kind: "USER"
-  };
-  memDb.principals.set(principalB.id, principalB);
+  let principalB: any = null;
+  let membershipB: any = null;
 
-  const membershipB = {
-    id: "00000000-0000-4000-b003-000000000001",
-    tenant_id: tB.id,
-    principal_id: principalB.id,
-    organization_id: orgB.id,
-    domain_role: "RISK_OWNER",
-    valid_from: validFrom,
-    valid_to: null,
-    recorded_at: validFrom
+  // Seed 12 synthetic cohort members for Tenant B (ABATE-GOLDEN-01 cohortSize: 12)
+  for (let i = 1; i <= 12; i++) {
+    const pad = i.toString().padStart(3, "0");
+    const pId = `00000000-0000-4000-b002-000000000${pad}`;
+    const p = {
+      id: pId,
+      tenant_id: tB.id,
+      external_subject: i === 1 ? "auth0|user-tenant-b-risk-owner" : `auth0|user-tenant-b-member-${pad}`,
+      kind: "USER"
+    };
+    memDb.principals.set(p.id, p);
+    if (i === 1) principalB = p;
+
+    const m = {
+      id: `00000000-0000-4000-b003-000000000${pad}`,
+      tenant_id: tB.id,
+      principal_id: p.id,
+      organization_id: orgB.id,
+      domain_role: i === 1 ? "RISK_OWNER" : "MEMBER",
+      valid_from: validFrom,
+      valid_to: null,
+      recorded_at: validFrom
+    };
+    memDb.memberships.set(m.id, m);
+    if (i === 1) membershipB = m;
+  }
+
+  // Seed Phase 3 Approved Metric Definition (BOUNDARY_INTRUSION_SHARE / 1)
+  const metricDef = {
+    id: "BOUNDARY_INTRUSION_SHARE",
+    metric_id: "BOUNDARY_INTRUSION_SHARE",
+    name: "Boundary Intrusion Share",
+    hazard_domain: "Working Time Quality & Rest Deficits",
+    version: 1,
+    tenant_id: null, // global definition
+    formula_id: "boundaryIntrusionShare",
+    contributor_floor: 10,
+    min_window_days: 28,
+    definition: {
+      purpose: "Cohort work-pattern condition. NOT an individual risk score, NOT a legal threshold.",
+      formula: "outside_schedule_minutes / total_work_minutes; percent; 1 decimal",
+      allowedDimensions: ["practice_area", "team"],
+      qualityFloor: 0.8,
+      releaseClass: "CLASS_B",
+      contributorFloor: 10
+    },
+    definition_hash: "sha256-def-boundary-intrusion-share-v1",
+    status: "APPROVED",
+    approved_by: "00000000-0000-4000-a002-000000000001",
+    approved_at: validFrom
   };
-  memDb.memberships.set(membershipB.id, membershipB);
+  memDb.metricDefinitions.set(`${metricDef.metric_id}:${metricDef.version}`, metricDef);
 
   // Seed Phase 2 Source Contract & Connection for Tenant B
   const contractB = {

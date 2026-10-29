@@ -33,8 +33,8 @@ export interface ApiRequestOptions extends RequestInit {
  */
 export async function api<T>(endpoint: string, options: ApiRequestOptions = {}): Promise<T> {
   // Use relative endpoint if in browser (Vite proxy forwards /api to backend)
-  const url = endpoint.startsWith("http") 
-    ? endpoint 
+  const url = endpoint.startsWith("http")
+    ? endpoint
     : (typeof window !== "undefined" ? endpoint : `http://127.0.0.1:5000${endpoint}`);
 
   const headers = new Headers(options.headers);
@@ -196,63 +196,53 @@ export async function requestToken(tenantId: string, subject: string, role = "RI
 export interface Connection {
   id: string;
   tenant_id: string;
-  connector_id: string;
-  name: string;
+  source: string;
+  contract_id: string;
   state: "ACTIVE" | "PAUSED" | "REVOKED";
-  source_contract_id: string;
-  cadence_minutes: number;
-  staleness_threshold_minutes: number;
-  watermark_cursor: string | null;
-  watermark_updated_at: string | null;
+  last_success_at: string | null;
+  expected_cadence_seconds: number;
   health: "FRESH" | "DELAYED" | "STALE" | "NEVER_SYNCED";
-  lag_minutes: number | null;
-  created_at: string;
 }
 
 export interface IngestReceipt {
   id: string;
   tenant_id: string;
   connection_id: string;
-  source_contract_id: string;
   batch_id: string;
-  record_count: number;
-  accepted_count: number;
-  duplicate_count: number;
-  rejected_count: number;
-  conflicted_count: number;
+  accepted: number;
+  duplicate: number;
+  rejected: number;
+  conflicted: number;
   received_at: string;
-  processed_at: string;
 }
 
 export interface WorkFact {
   id: string;
   tenant_id: string;
   connection_id: string;
-  pseudonym_id: string;
   source_record_id: string;
   revision: number;
-  interval_start: string;
-  interval_end: string;
+  subject_pseudonym: string;
+  start_at: string;
+  end_at: string;
   work_tz: string;
   kind: string;
+  payload_hash: string;
+  receipt_id: string;
   recorded_at: string;
-  created_at: string;
 }
 
 export interface ZoikoTimeBatchPayload {
-  batchId: string;
   connectionId: string;
-  sentAt: string;
-  sourceWatermark?: string;
-  records: Array<{
+  batchId: string;
+  items: Array<{
     recordId: string;
     revision: number;
-    recordedAt: string;
-    subjectId: string;
-    intervalStart: string;
-    intervalEnd: string;
+    subjectRef: string;
+    startUtc: string;
+    endUtc: string;
     workTz: string;
-    kind: "ACTIVE_WORK" | "BREAK" | "ON_CALL";
+    kind: "WORK" | "BREAK_UNPAID";
     [key: string]: any;
   }>;
 }
@@ -290,5 +280,382 @@ export async function submitZoikoBatch(
     token
   });
 }
+
+// ==========================================
+// Phase 3: Deterministic Measurement & Privacy Release
+// ==========================================
+
+export interface SemanticQuery {
+  metricId: string;
+  metricVersion: number;
+  cohortRef: string;
+  periodStart: string;
+  periodEnd: string;
+  releaseClass: "CLASS_A" | "CLASS_B";
+}
+
+export type ReleaseView =
+  | {
+    status: "RELEASED";
+    releaseId: string;
+    metricId: string;
+    metricName: string;
+    value: number | null;
+    unit: string;
+    cohortRef: string;
+    periodStart: string;
+    periodEnd: string;
+    quality: "VALID" | "DEGRADED" | "NOT_APPLICABLE" | "PARTIAL";
+    releasedAt: string;
+    freshness: "FRESH" | "SUPERSEDED" | "REVOKED";
+    assuranceLabel: string;
+    interpretation?: string;
+    limits?: string;
+  }
+  | {
+    status: "STALE";
+    releaseId: string;
+    reason: string;
+    supersededAt?: string;
+    asOf?: string;
+  }
+  | {
+    status: "UNAVAILABLE";
+    code: "NOT_AVAILABLE";
+    message?: string;
+  };
+
+export interface MetricDefinition {
+  id: string;
+  version: number;
+  name: string;
+  hazard_domain: string;
+  formula_id: string;
+  contributor_floor: number;
+  min_window_days: number;
+  created_at: string;
+}
+
+export async function queryRelease(
+  query: SemanticQuery,
+  customCohortMembers?: string[],
+  token?: string
+): Promise<ReleaseView> {
+  return api<ReleaseView>("/api/v2/releases/query", {
+    method: "POST",
+    body: JSON.stringify({ query, customCohortMembers }),
+    token
+  });
+}
+
+export async function fetchRelease(releaseId: string, token: string): Promise<ReleaseView> {
+  return api<ReleaseView>(`/api/v2/releases/${releaseId}`, { token });
+}
+
+export async function fetchMetricDefinitions(token: string): Promise<MetricDefinition[]> {
+  return api<MetricDefinition[]>("/api/v2/metrics/definitions", { token });
+}
+
+export async function recalculateMetric(
+  metricId: string,
+  token: string
+): Promise<{ status: string; count: number }> {
+  return api<{ status: string; count: number }>(`/api/v2/metrics/${metricId}/recalculate`, {
+    method: "POST",
+    token
+  });
+}
+
+export async function downloadReleaseCsv(releaseId: string, token: string): Promise<string> {
+  const url = `/api/v2/releases/${releaseId}/export.csv`;
+  const headers = new Headers();
+  if (token) headers.set("Authorization", `Bearer ${token}`);
+  const res = await fetch(url, { headers });
+  if (!res.ok) {
+    throw new Error(`Export failed: ${res.statusText}`);
+  }
+  return res.text();
+}
+
+// -------------------------------------------------------------
+// Phase 4 Hazard, Control & Verification Types & Client Methods
+// -------------------------------------------------------------
+
+export interface Hazard {
+  id: string;
+  tenant_id: string;
+  title: string;
+  owner_principal_id: string;
+  originating_release_id: string;
+  disposition: "OPEN" | "CONTROLLED" | "DEFERRED" | "ACCEPTED" | "VERIFIED_CLOSURE";
+  version: number;
+  created_at: string;
+  causesCount?: number;
+  controlsCount?: number;
+  allowedActions?: string[];
+  dispositionRationale?: string;
+  residualRisk?: string;
+  reviewDate?: string;
+}
+
+export interface Cause {
+  id: string;
+  hazard_id: string;
+  statement: string;
+  status: "PROPOSED" | "REVIEWED_ACCEPTED" | "REVIEWED_REJECTED";
+  reviewed_by?: string | null;
+  reviewed_at?: string | null;
+  version: number;
+  created_at: string;
+}
+
+export interface ControlDetailView {
+  id: string;
+  tenantId: string;
+  hazardId: string;
+  causeId: string;
+  state: "DRAFT" | "PROPOSED" | "REVIEW_REQUIRED" | "CONSULTATION_REQUIRED" | "APPROVAL_REQUIRED" | "APPROVED" | "SCHEDULED" | "IMPLEMENTING" | "IMPLEMENTED" | "VERIFYING" | "CLOSED" | "REOPENED" | "CANCELLED" | "SUPERSEDED";
+  version: number;
+  scope: string;
+  objective: string;
+  ownerPrincipalId: string;
+  dueDate: string;
+  verificationPlan: any;
+  materialHash: string;
+  allowedActions: string[];
+  applicableGates: Array<{ gate: string; satisfied: boolean }>;
+  materialChanges: Array<{ field: string; from: string; to: string }>;
+  etag: string;
+  approval?: {
+    approvedVersion: number;
+    approvedMaterialHash: string;
+    approverPrincipalId: string;
+    approvedAt: string;
+  } | null;
+  receipt?: {
+    kind: string;
+    completedOn: string;
+    evidenceRefs: string[];
+    recordedAt: string;
+  } | null;
+  evaluation?: {
+    plan: any;
+    outcome: "EFFECTIVE" | "PARTIALLY_EFFECTIVE" | "NOT_EFFECTIVE" | "INCONCLUSIVE" | null;
+    reviewerId: string | null;
+    residualRisk: string | null;
+    concludedAt: string | null;
+  } | null;
+}
+
+export interface HazardDetail {
+  hazard: Hazard;
+  causes: Cause[];
+  controls: ControlDetailView[];
+  originatingRelease: ReleaseView;
+}
+
+export interface EvidencePackage {
+  manifest: {
+    packageId: string;
+    hazardId: string;
+    tenantId: string;
+    cutoff: string;
+    issuer: string;
+    classification: "RESTRICTED" | "CONFIDENTIAL";
+    items: Array<{
+      type: string;
+      id: string;
+      version: number;
+      sha256: string;
+    }>;
+    manifestHash: string;
+  };
+  artifacts: Array<{
+    type: string;
+    id: string;
+    version: number;
+    sha256: string;
+    data: any;
+  }>;
+}
+
+export async function fetchHazards(token: string): Promise<Hazard[]> {
+  return api<Hazard[]>("/api/v2/hazards", { token });
+}
+
+export async function fetchHazardDetail(hazardId: string, token: string): Promise<HazardDetail> {
+  return api<HazardDetail>(`/api/v2/hazards/${hazardId}`, { token });
+}
+
+export async function createHazard(
+  data: { title: string; originatingReleaseId: string },
+  token: string
+): Promise<Hazard> {
+  return api<Hazard>("/api/v2/hazards", {
+    method: "POST",
+    body: JSON.stringify(data),
+    token
+  });
+}
+
+export async function proposeCause(
+  hazardId: string,
+  statement: string,
+  token: string
+): Promise<Cause> {
+  return api<Cause>(`/api/v2/hazards/${hazardId}/causes`, {
+    method: "POST",
+    body: JSON.stringify({ statement }),
+    token
+  });
+}
+
+export async function reviewCause(
+  hazardId: string,
+  causeId: string,
+  status: "REVIEWED_ACCEPTED" | "REVIEWED_REJECTED",
+  token: string
+): Promise<{ id: string; status: string; reviewedBy: string; reviewedAt: string }> {
+  return api<{ id: string; status: string; reviewedBy: string; reviewedAt: string }>(
+    `/api/v2/hazards/${hazardId}/causes/${causeId}/review`,
+    {
+      method: "POST",
+      body: JSON.stringify({ status }),
+      token
+    }
+  );
+}
+
+export async function createControl(
+  data: {
+    hazardId: string;
+    causeId: string;
+    scope: string;
+    objective: string;
+    dueDate: string;
+    verificationPlan: any;
+  },
+  token: string
+): Promise<ControlDetailView> {
+  return api<ControlDetailView>("/api/v2/controls", {
+    method: "POST",
+    body: JSON.stringify(data),
+    token
+  });
+}
+
+export async function fetchControlDetail(controlId: string, token: string): Promise<ControlDetailView> {
+  return api<ControlDetailView>(`/api/v2/controls/${controlId}`, { token });
+}
+
+export async function updateControl(
+  controlId: string,
+  data: {
+    scope?: string;
+    objective?: string;
+    dueDate?: string;
+    verificationPlan?: any;
+  },
+  ifMatch: string | number,
+  token: string
+): Promise<ControlDetailView> {
+  return api<ControlDetailView>(`/api/v2/controls/${controlId}`, {
+    method: "PATCH",
+    body: JSON.stringify(data),
+    ifMatch: String(ifMatch),
+    token
+  });
+}
+
+export async function approveControl(
+  controlId: string,
+  ifMatch: string | number,
+  token: string
+): Promise<ControlDetailView> {
+  return api<ControlDetailView>(`/api/v2/controls/${controlId}/approve`, {
+    method: "POST",
+    ifMatch: String(ifMatch),
+    token
+  });
+}
+
+export async function recordImplementation(
+  controlId: string,
+  data: {
+    kind: string;
+    completedOn: string;
+    evidenceRefs: string[];
+  },
+  token: string
+): Promise<ControlDetailView> {
+  return api<ControlDetailView>(`/api/v2/controls/${controlId}/implementation`, {
+    method: "POST",
+    body: JSON.stringify(data),
+    token
+  });
+}
+
+export async function pinVerificationPlan(
+  controlId: string,
+  plan: {
+    primaryMetric: string;
+    baselineReleaseId: string;
+    targetDelta?: number;
+    adjacentReleaseIds?: string[];
+    adjacentTolerance?: number;
+    minDays?: number;
+    seriesBreak?: boolean;
+  },
+  token: string
+): Promise<ControlDetailView> {
+  return api<ControlDetailView>(`/api/v2/controls/${controlId}/verification/pin`, {
+    method: "POST",
+    body: JSON.stringify(plan),
+    token
+  });
+}
+
+export async function concludeVerification(
+  controlId: string,
+  data: {
+    outcome: "EFFECTIVE" | "PARTIALLY_EFFECTIVE" | "NOT_EFFECTIVE" | "INCONCLUSIVE";
+    residualRisk: string;
+  },
+  token: string
+): Promise<ControlDetailView> {
+  return api<ControlDetailView>(`/api/v2/controls/${controlId}/verification/conclude`, {
+    method: "POST",
+    body: JSON.stringify(data),
+    token
+  });
+}
+
+export async function setHazardDisposition(
+  hazardId: string,
+  data: {
+    disposition: "OPEN" | "CONTROLLED" | "DEFERRED" | "ACCEPTED" | "VERIFIED_CLOSURE";
+    rationale: string;
+    residualRisk: string;
+    reviewDate: string;
+  },
+  token: string
+): Promise<Hazard> {
+  return api<Hazard>(`/api/v2/hazards/${hazardId}/disposition`, {
+    method: "POST",
+    body: JSON.stringify(data),
+    token
+  });
+}
+
+export async function exportEvidencePackage(
+  hazardId: string,
+  token: string
+): Promise<EvidencePackage> {
+  return api<EvidencePackage>(`/api/v2/hazards/${hazardId}/evidence-package`, {
+    method: "POST",
+    token
+  });
+}
+
 
 
