@@ -9,6 +9,7 @@
     "seed-demo": "tsx tools/seed-demo.ts",
     "test-fast": "tsx tools/test-fast.ts",
     "test-boundaries": "tsx tools/test-boundaries.ts",
+    "test-slo": "tsx tools/test-slo.ts",
     "demo-cycle": "tsx tools/demo-cycle.ts",
     "build": "tsc",
     "start": "node dist/index.js",
