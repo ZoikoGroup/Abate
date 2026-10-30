@@ -24,7 +24,7 @@ export const JurisdictionPackContent = z.object({
   retention: z.record(DataCategoryEnum, z.object({
     floor: DurationBound.optional(),
     ceiling: DurationBound.optional()
-  }).strict()).default({}),
+  }).strict()).default({} as any),
   notes: z.string().optional()
 }).strict();
 export type JurisdictionPackContent = z.infer<typeof JurisdictionPackContent>;

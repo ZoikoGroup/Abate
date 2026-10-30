@@ -908,3 +908,169 @@ export async function verifyDiagnosticReceipt(
 ): Promise<{ valid: boolean; receiptId: string | null; tenantId: string | null; generatedAt: string | null }> {
   return api("/api/v2/ops/diagnostic-receipts/verify", { method: "POST", body: JSON.stringify(receipt), token: supportToken });
 }
+
+// ==========================================
+// Phase 6: Bounded AI & Safe Action Execution (Domains S08 & S09)
+// ==========================================
+
+export interface AiClaim {
+  id: string;
+  text: string;
+  citations: string[];
+}
+
+export interface AiProposal {
+  title: string;
+  claims: AiClaim[];
+  uncertainty: string;
+  suggestedControls?: string[];
+}
+
+export interface ValidatorReport {
+  ok: boolean;
+  failureCode?: "SCHEMA" | "CITATION" | "NUMERIC_FIDELITY" | "CONTROL_ELIGIBILITY" | "PROHIBITED_INFERENCE" | "REGION_PROVIDER";
+  details?: string;
+  violations?: string[];
+}
+
+export interface AiRunView {
+  id: string;
+  tenantId: string;
+  useCaseKey: string;
+  useCaseVersion: number;
+  actorId: string;
+  contextRefs: Array<{ type: "RELEASE" | "KNOWLEDGE"; id: string }>;
+  output?: AiProposal | null;
+  status: "PROPOSED" | "REJECTED_BY_VALIDATOR" | "ACCEPTED" | "DISCARDED" | "FAILED";
+  validatorReport?: ValidatorReport;
+  modelRef: string;
+  promptVersion: string;
+  tokensIn?: number;
+  tokensOut?: number;
+  costMinor?: number;
+  createdAt: string;
+}
+
+export interface KillSwitchRecord {
+  scope: string;
+  active: boolean;
+  changed_by: string | null;
+  changed_at: string;
+}
+
+export interface ActionAttemptView {
+  id: string;
+  tenantId: string;
+  tool: string;
+  target: string;
+  paramHash: string;
+  resourceVersion: number;
+  approvalRef?: string | null;
+  effectKey: string;
+  state: "PENDING" | "LEASED" | "DISPATCHED" | "SUCCEEDED" | "FAILED" | "UNKNOWN_OUTCOME" | "BLOCKED";
+  leaseOwner?: string | null;
+  fencingToken: number;
+  providerReceipt?: any;
+  createdAt: string;
+}
+
+export async function explainReleaseAi(
+  releaseId: string,
+  question?: string,
+  token?: string
+): Promise<AiRunView> {
+  return api<AiRunView>("/api/v2/ai/explain-release", {
+    method: "POST",
+    body: JSON.stringify({ releaseId, question }),
+    token
+  });
+}
+
+export async function draftCauseAi(
+  hazardId: string,
+  token?: string
+): Promise<AiRunView> {
+  return api<AiRunView>("/api/v2/ai/draft-cause", {
+    method: "POST",
+    body: JSON.stringify({ hazardId }),
+    token
+  });
+}
+
+export async function draftControlAi(
+  hazardId: string,
+  causeId: string,
+  token?: string
+): Promise<AiRunView> {
+  return api<AiRunView>("/api/v2/ai/draft-control", {
+    method: "POST",
+    body: JSON.stringify({ hazardId, causeId }),
+    token
+  });
+}
+
+export async function acceptAiRun(
+  runId: string,
+  options?: { hazardId?: string; causeStatement?: string },
+  token?: string
+): Promise<{ runId: string; status: "ACCEPTED"; createdResourceId?: string; decisionRef: string }> {
+  return api(`/api/v2/ai/runs/${runId}/accept`, {
+    method: "POST",
+    body: JSON.stringify(options || {}),
+    token
+  });
+}
+
+export async function discardAiRun(
+  runId: string,
+  token?: string
+): Promise<{ runId: string; status: "DISCARDED" }> {
+  return api(`/api/v2/ai/runs/${runId}/discard`, {
+    method: "POST",
+    token
+  });
+}
+
+export async function fetchAiRuns(token?: string): Promise<AiRunView[]> {
+  return api<AiRunView[]>("/api/v2/ai/runs", { token });
+}
+
+export async function fetchKillSwitches(token?: string): Promise<KillSwitchRecord[]> {
+  return api<KillSwitchRecord[]>("/api/v2/ops/kill-switches", { token });
+}
+
+export async function setKillSwitch(
+  scope: string,
+  active: boolean,
+  token?: string
+): Promise<KillSwitchRecord> {
+  return api<KillSwitchRecord>("/api/v2/ops/kill-switches", {
+    method: "POST",
+    body: JSON.stringify({ scope, active }),
+    token
+  });
+}
+
+export async function proposeAction(
+  proposal: { tool: string; target: string; params: Record<string, any>; resourceVersion: number; approvalRef?: string },
+  token?: string
+): Promise<{ attempt: ActionAttemptView; grantToken: string }> {
+  return api("/api/v2/actions/proposals", {
+    method: "POST",
+    body: JSON.stringify(proposal),
+    token
+  });
+}
+
+export async function dispatchAction(
+  attemptId: string,
+  params: Record<string, any>,
+  grantToken: string,
+  token?: string
+): Promise<{ state: string; fencingToken: number; receipt?: any; error?: string }> {
+  return api(`/api/v2/actions/${attemptId}/dispatch`, {
+    method: "POST",
+    body: JSON.stringify({ params, grantToken }),
+    token
+  });
+}

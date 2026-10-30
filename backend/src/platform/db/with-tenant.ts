@@ -91,6 +91,55 @@ class MemoryDatabase {
   public retentionRuns: Map<string, any> = new Map();
   public deletionTombstones: Map<string, any> = new Map();
 
+  // Phase 5 Governance, Policy Packs, Evidence & Rights Requests
+  public policyPacks: Map<string, any> = new Map();
+  public tenantPolicyBindings: any[] = [];
+  public decisionEnvelopes: Map<string, any> = new Map();
+  public evidencePackages: Map<string, any> = new Map();
+  public evidenceItems: any[] = [];
+  public rightsRequests: Map<string, any> = new Map();
+
+  // Phase 6 Bounded AI & Action Execution
+  public aiUseCases: Map<string, any> = new Map();
+  public aiRuns: Map<string, any> = new Map();
+  public aiKillSwitches: Map<string, any> = new Map();
+  public toolCatalog: Map<string, any> = new Map();
+  public actionAttempts: Map<string, any> = new Map();
+
+  constructor() {
+    this.seedDefaults();
+  }
+
+  public seedDefaults() {
+    if (!this.metricDefinitions.has("BOUNDARY_INTRUSION_SHARE:1")) {
+      const metricDef = {
+        id: "BOUNDARY_INTRUSION_SHARE",
+        metric_id: "BOUNDARY_INTRUSION_SHARE",
+        name: "Boundary Intrusion Share",
+        hazard_domain: "Working Time Quality & Rest Deficits",
+        version: 1,
+        tenant_id: null,
+        formula_id: "boundaryIntrusionShare",
+        contributor_floor: 10,
+        min_window_days: 28,
+        definition: {
+          purpose: "Cohort work-pattern condition. NOT an individual risk score, NOT a legal threshold.",
+          formula: "outside_schedule_minutes / total_work_minutes; percent; 1 decimal",
+          allowedDimensions: ["practice_area", "team"],
+          qualityFloor: 0.8,
+          releaseClass: "CLASS_B",
+          contributorFloor: 10
+        },
+        definition_hash: "sha256-def-boundary-intrusion-share-v1",
+        status: "APPROVED",
+        approved_by: "00000000-0000-4000-a002-000000000001",
+        approved_at: "2026-03-01T00:00:00.000Z"
+      };
+      this.metricDefinitions.set("BOUNDARY_INTRUSION_SHARE:1", metricDef);
+      this.metricDefinitions.set("BOUNDARY_INTRUSION_SHARE", metricDef);
+    }
+  }
+
   clear() {
     this.tenants.clear();
     this.principals.clear();
@@ -122,6 +171,18 @@ class MemoryDatabase {
     this.legalHolds.clear();
     this.retentionRuns.clear();
     this.deletionTombstones.clear();
+    this.policyPacks.clear();
+    this.tenantPolicyBindings = [];
+    this.decisionEnvelopes.clear();
+    this.evidencePackages.clear();
+    this.evidenceItems = [];
+    this.rightsRequests.clear();
+    this.aiUseCases.clear();
+    this.aiRuns.clear();
+    this.aiKillSwitches.clear();
+    this.toolCatalog.clear();
+    this.actionAttempts.clear();
+    this.seedDefaults();
   }
 }
 
@@ -248,7 +309,7 @@ class MemoryClient {
     }
 
     // Fail-Closed RLS Enforcement: If querying tenant-isolated tables without tenant context, return 0 rows
-    const isTenantTable = /FROM\s+(principal|organization|effective_membership|idempotency_record|audit_event|outbox_event|source_contract|connection|watermark|ingest_receipt|work_fact_revision|metric_snapshot|privacy_decision|privacy_release|released_artifact|disclosure_ledger|hazard|cause|intervention|approval|implementation_receipt|evaluation|retention_class|legal_hold|retention_run|deletion_tombstone)/i.test(trimmed);
+    const isTenantTable = /FROM\s+(principal|organization|effective_membership|idempotency_record|audit_event|outbox_event|source_contract|connection|watermark|ingest_receipt|work_fact_revision|metric_snapshot|privacy_decision|privacy_release|released_artifact|disclosure_ledger|hazard|cause|intervention|approval|implementation_receipt|evaluation|retention_class|legal_hold|retention_run|deletion_tombstone|tenant_policy_binding|decision_envelope|evidence_package|evidence_item|rights_request|ai_run|action_attempt)/i.test(trimmed);
     if (isTenantTable && !this.tenantContext) {
       return { rows: [], rowCount: 0, command: "SELECT", oid: 0, fields: [] };
     }
@@ -1232,6 +1293,450 @@ class MemoryClient {
       let rows = Array.from(memDb.evaluations.values()).filter(e => e.tenant_id === this.tenantContext);
       if (params.length > 0) {
         rows = rows.filter(e => e.intervention_id === params[0] || e.id === params[0]);
+      }
+      return { rows, rowCount: rows.length, command: "SELECT", oid: 0, fields: [] };
+    }
+
+    // -------------------------------------------------------------
+    // Phase 5 Governance, Policy Packs, Evidence & Rights Handlers
+    // -------------------------------------------------------------
+
+    // Policy Pack Insert
+    if (upper.includes("INSERT INTO POLICY_PACK")) {
+      const [packId, version, kind, title, desc, publisher, effFrom, effTo, def, hash, status, approvedBy, approvedAt] = params;
+      const key = `${packId}:${version}`;
+      const rec = {
+        pack_id: packId,
+        version: Number(version),
+        kind,
+        title,
+        description: desc,
+        publisher,
+        effective_from: effFrom,
+        effective_to: effTo || null,
+        definition: typeof def === "string" ? JSON.parse(def) : def,
+        pack_hash: hash,
+        status: status || "APPROVED",
+        approved_by: approvedBy || null,
+        approved_at: approvedAt || new Date().toISOString()
+      };
+      memDb.policyPacks.set(key, rec);
+      return { rows: [rec], rowCount: 1, command: "INSERT", oid: 0, fields: [] };
+    }
+
+    // Policy Pack & Binding Join Select
+    if (upper.includes("FROM POLICY_PACK") && upper.includes("JOIN TENANT_POLICY_BINDING")) {
+      const activeBindings = memDb.tenantPolicyBindings.filter(
+        b => b.tenant_id === this.tenantContext && b.status === "ACTIVE"
+      );
+      const rows = activeBindings.map(b => {
+        const pack = memDb.policyPacks.get(`${b.pack_id}:${b.pack_version}`);
+        return pack ? { ...pack } : null;
+      }).filter(Boolean);
+      return { rows, rowCount: rows.length, command: "SELECT", oid: 0, fields: [] };
+    }
+
+    // Policy Pack Direct Select
+    if (upper.includes("FROM POLICY_PACK")) {
+      let rows = Array.from(memDb.policyPacks.values());
+      if (params.length >= 2) {
+        rows = rows.filter(p => p.pack_id === params[0] && p.version === Number(params[1]));
+      } else if (params.length === 1) {
+        rows = rows.filter(p => p.pack_id === params[0]);
+      }
+      if (upper.includes("STATUS = 'APPROVED'")) {
+        rows = rows.filter(p => p.status === "APPROVED");
+      }
+      return { rows, rowCount: rows.length, command: "SELECT", oid: 0, fields: [] };
+    }
+
+    // Tenant Policy Binding Insert
+    if (upper.includes("INSERT INTO TENANT_POLICY_BINDING")) {
+      const [id, tId, packId, packVer, boundAt, boundBy, status] = params;
+      if (this.tenantContext && tId !== this.tenantContext) {
+        throw new Error("RLS WITH CHECK violation: cross-tenant binding write rejected");
+      }
+      const rec = {
+        id,
+        tenant_id: tId,
+        pack_id: packId,
+        pack_version: Number(packVer),
+        bound_at: boundAt || new Date().toISOString(),
+        bound_by: boundBy || null,
+        status: status || "ACTIVE"
+      };
+      memDb.tenantPolicyBindings.push(rec);
+      return { rows: [rec], rowCount: 1, command: "INSERT", oid: 0, fields: [] };
+    }
+
+    // Tenant Policy Binding Select
+    if (upper.includes("FROM TENANT_POLICY_BINDING")) {
+      const rows = memDb.tenantPolicyBindings.filter(b => b.tenant_id === this.tenantContext);
+      return { rows, rowCount: rows.length, command: "SELECT", oid: 0, fields: [] };
+    }
+
+    // Decision Envelope Insert
+    if (upper.includes("INSERT INTO DECISION_ENVELOPE")) {
+      const [id, tId, controlId, feature, permitted, gates, derivedFromPacks, evaluatedAt, details] = params;
+      if (this.tenantContext && tId !== this.tenantContext) {
+        throw new Error("RLS WITH CHECK violation: cross-tenant decision_envelope write rejected");
+      }
+      const rec = {
+        id,
+        tenant_id: tId,
+        control_id: controlId || null,
+        feature,
+        permitted: Boolean(permitted),
+        gates: typeof gates === "string" ? JSON.parse(gates) : gates,
+        derived_from_packs: typeof derivedFromPacks === "string" ? JSON.parse(derivedFromPacks) : derivedFromPacks,
+        evaluated_at: evaluatedAt,
+        details: typeof details === "string" ? JSON.parse(details) : details
+      };
+      memDb.decisionEnvelopes.set(id, rec);
+      return { rows: [rec], rowCount: 1, command: "INSERT", oid: 0, fields: [] };
+    }
+
+    // Decision Envelope Select
+    if (upper.includes("FROM DECISION_ENVELOPE")) {
+      let rows = Array.from(memDb.decisionEnvelopes.values()).filter(d => d.tenant_id === this.tenantContext);
+      if (params.length > 0) {
+        rows = rows.filter(d => d.id === params[0] || d.control_id === params[0]);
+      }
+      return { rows, rowCount: rows.length, command: "SELECT", oid: 0, fields: [] };
+    }
+
+    // Evidence Package Insert
+    if (upper.includes("INSERT INTO EVIDENCE_PACKAGE")) {
+      const [id, tId, pStart, pEnd, manifestSha, storageKey, count, bytes, status, metadata] = params;
+      if (this.tenantContext && tId !== this.tenantContext) {
+        throw new Error("RLS WITH CHECK violation: cross-tenant evidence_package write rejected");
+      }
+      const rec = {
+        id,
+        tenant_id: tId,
+        period_start: pStart,
+        period_end: pEnd,
+        manifest_sha256: manifestSha,
+        storage_key: storageKey,
+        item_count: count,
+        total_bytes: bytes,
+        status: status || "VALID",
+        superseded_by: null,
+        metadata: typeof metadata === "string" ? JSON.parse(metadata) : metadata,
+        created_at: new Date().toISOString()
+      };
+      memDb.evidencePackages.set(id, rec);
+      return { rows: [rec], rowCount: 1, command: "INSERT", oid: 0, fields: [] };
+    }
+
+    // Evidence Package Update
+    if (upper.includes("UPDATE EVIDENCE_PACKAGE")) {
+      if (upper.includes("SET STATUS = $1, SUPERSEDED_BY = $2")) {
+        const [status, supersededBy, id, tId] = params;
+        const rec = memDb.evidencePackages.get(id);
+        if (rec && rec.tenant_id === (this.tenantContext || tId)) {
+          rec.status = status;
+          rec.superseded_by = supersededBy;
+          return { rows: [rec], rowCount: 1, command: "UPDATE", oid: 0, fields: [] };
+        }
+      } else if (upper.includes("SET STATUS = 'SUPERSEDED'")) {
+        const [id, tId] = params;
+        const rec = memDb.evidencePackages.get(id);
+        if (rec && rec.tenant_id === (this.tenantContext || tId)) {
+          rec.status = "SUPERSEDED";
+          return { rows: [rec], rowCount: 1, command: "UPDATE", oid: 0, fields: [] };
+        }
+      }
+      return { rows: [], rowCount: 0, command: "UPDATE", oid: 0, fields: [] };
+    }
+
+    // Evidence Package Select
+    if (upper.includes("FROM EVIDENCE_PACKAGE")) {
+      let rows = Array.from(memDb.evidencePackages.values()).filter(p => p.tenant_id === this.tenantContext);
+      if (params.length > 0) {
+        rows = rows.filter(p => p.id === params[0]);
+      }
+      return { rows, rowCount: rows.length, command: "SELECT", oid: 0, fields: [] };
+    }
+
+    // Evidence Item Insert
+    if (upper.includes("INSERT INTO EVIDENCE_ITEM")) {
+      const [id, tId, pkgId, kind, sha, storageKey, bytes] = params;
+      if (this.tenantContext && tId !== this.tenantContext) {
+        throw new Error("RLS WITH CHECK violation: cross-tenant evidence_item write rejected");
+      }
+      const rec = {
+        id,
+        tenant_id: tId,
+        package_id: pkgId,
+        kind,
+        item_sha256: sha,
+        storage_key: storageKey,
+        bytes: Number(bytes),
+        created_at: new Date().toISOString()
+      };
+      memDb.evidenceItems.push(rec);
+      return { rows: [rec], rowCount: 1, command: "INSERT", oid: 0, fields: [] };
+    }
+
+    // Evidence Item Select
+    if (upper.includes("FROM EVIDENCE_ITEM")) {
+      let rows = memDb.evidenceItems.filter(i => i.tenant_id === this.tenantContext);
+      if (params.length > 0) {
+        rows = rows.filter(i => i.package_id === params[0]);
+      }
+      return { rows, rowCount: rows.length, command: "SELECT", oid: 0, fields: [] };
+    }
+
+    // Rights Request Insert
+    if (upper.includes("INSERT INTO RIGHTS_REQUEST")) {
+      const [id, tId, subjectRef, status, delCount, heldCount, reqAt, compAt] = params;
+      if (this.tenantContext && tId !== this.tenantContext) {
+        throw new Error("RLS WITH CHECK violation: cross-tenant rights_request write rejected");
+      }
+      const rec = {
+        id,
+        tenant_id: tId,
+        subject_ref: subjectRef,
+        status: status || "COMPLETED",
+        deleted_count: Number(delCount),
+        held_exceptions: Number(heldCount),
+        requested_at: reqAt || new Date().toISOString(),
+        completed_at: compAt || new Date().toISOString()
+      };
+      memDb.rightsRequests.set(id, rec);
+      return { rows: [rec], rowCount: 1, command: "INSERT", oid: 0, fields: [] };
+    }
+
+    // Rights Request Select
+    if (upper.includes("FROM RIGHTS_REQUEST")) {
+      const rows = Array.from(memDb.rightsRequests.values()).filter(r => r.tenant_id === this.tenantContext);
+      return { rows, rowCount: rows.length, command: "SELECT", oid: 0, fields: [] };
+    }
+
+    // Work Fact Select & Delete (compatible with both work_fact and work_fact_revision)
+    if (upper.includes("FROM WORK_FACT") && !upper.includes("WORK_FACT_REVISION")) {
+      const rows = Array.from(memDb.workFactRevisions.values()).filter(r => r.tenant_id === this.tenantContext);
+      return { rows, rowCount: rows.length, command: "SELECT", oid: 0, fields: [] };
+    }
+
+    if (upper.includes("DELETE FROM WORK_FACT") && !upper.includes("WORK_FACT_REVISION")) {
+      const factId = params[0];
+      const entry = Array.from(memDb.workFactRevisions.entries()).find(([, f]) => f.id === factId && f.tenant_id === this.tenantContext);
+      if (entry) {
+        memDb.workFactRevisions.delete(entry[0]);
+        return { rows: [entry[1]], rowCount: 1, command: "DELETE", oid: 0, fields: [] };
+      }
+      return { rows: [], rowCount: 0, command: "DELETE", oid: 0, fields: [] };
+    }
+
+    // -------------------------------------------------------------
+    // Phase 6 Bounded AI & Safe Action Execution Handlers
+    // -------------------------------------------------------------
+
+    // AI Use Case Insert
+    if (upper.includes("INSERT INTO AI_USE_CASE")) {
+      const [key, version, purpose, allowedInputs, outputSchemaRef, promptVersion, modelRef, providerRegion, maxSteps, maxInputTokens, maxOutputTokens, timeoutMs, monthlyBudget, enabled, evalThresholds] = params;
+      const rec = {
+        key,
+        version: Number(version),
+        purpose,
+        allowed_inputs: typeof allowedInputs === "string" ? JSON.parse(allowedInputs) : allowedInputs,
+        output_schema_ref: outputSchemaRef,
+        prompt_version: promptVersion,
+        model_ref: modelRef,
+        provider_region: providerRegion,
+        max_steps: Number(maxSteps),
+        max_input_tokens: Number(maxInputTokens),
+        max_output_tokens: Number(maxOutputTokens),
+        timeout_ms: Number(timeoutMs),
+        monthly_budget_minor: Number(monthlyBudget),
+        enabled: Boolean(enabled),
+        eval_thresholds: typeof evalThresholds === "string" ? JSON.parse(evalThresholds) : evalThresholds
+      };
+      memDb.aiUseCases.set(`${key}:${version}`, rec);
+      return { rows: [rec], rowCount: 1, command: "INSERT", oid: 0, fields: [] };
+    }
+
+    // AI Use Case Select
+    if (upper.includes("FROM AI_USE_CASE")) {
+      let rows = Array.from(memDb.aiUseCases.values());
+      if (params.length > 0) {
+        rows = rows.filter(u => u.key === params[0]);
+      }
+      if (upper.includes("ENABLED = TRUE")) {
+        rows = rows.filter(u => u.enabled);
+      }
+      return { rows, rowCount: rows.length, command: "SELECT", oid: 0, fields: [] };
+    }
+
+    // AI Kill Switch Upsert
+    if (upper.includes("INSERT INTO AI_KILL_SWITCH")) {
+      const [scope, active, changedBy, changedAt] = params;
+      const rec = {
+        scope,
+        active: Boolean(active),
+        changed_by: changedBy || null,
+        changed_at: changedAt || new Date().toISOString()
+      };
+      memDb.aiKillSwitches.set(scope, rec);
+      return { rows: [rec], rowCount: 1, command: "UPSERT", oid: 0, fields: [] };
+    }
+
+    // AI Kill Switch Select
+    if (upper.includes("FROM AI_KILL_SWITCH")) {
+      if (params.length > 0) {
+        const item = memDb.aiKillSwitches.get(params[0]);
+        const rows = item ? [item] : [];
+        return { rows, rowCount: rows.length, command: "SELECT", oid: 0, fields: [] };
+      }
+      const rows = Array.from(memDb.aiKillSwitches.values());
+      return { rows, rowCount: rows.length, command: "SELECT", oid: 0, fields: [] };
+    }
+
+    // AI Run Insert
+    if (upper.includes("INSERT INTO AI_RUN")) {
+      const [id, tId, ucKey, ucVer, actorId, ctxRefs, output, status, valReport, modelRef, promptVer, tokIn, tokOut, costMinor, createdAt] = params;
+      if (this.tenantContext && tId !== this.tenantContext) {
+        throw new Error("RLS WITH CHECK violation: cross-tenant ai_run write rejected");
+      }
+      const rec = {
+        id,
+        tenant_id: tId,
+        use_case_key: ucKey,
+        use_case_version: Number(ucVer),
+        actor_id: actorId,
+        context_refs: typeof ctxRefs === "string" ? JSON.parse(ctxRefs) : ctxRefs,
+        output: output ? (typeof output === "string" ? JSON.parse(output) : output) : null,
+        status,
+        validator_report: valReport ? (typeof valReport === "string" ? JSON.parse(valReport) : valReport) : null,
+        model_ref: modelRef,
+        prompt_version: promptVer,
+        tokens_in: Number(tokIn || 0),
+        tokens_out: Number(tokOut || 0),
+        cost_minor: Number(costMinor || 0),
+        created_at: createdAt || new Date().toISOString()
+      };
+      memDb.aiRuns.set(id, rec);
+      return { rows: [rec], rowCount: 1, command: "INSERT", oid: 0, fields: [] };
+    }
+
+    // AI Run Update
+    if (upper.includes("UPDATE AI_RUN SET STATUS")) {
+      const [status, runId] = params;
+      const rec = memDb.aiRuns.get(runId);
+      if (rec && rec.tenant_id === this.tenantContext) {
+        rec.status = status;
+        return { rows: [rec], rowCount: 1, command: "UPDATE", oid: 0, fields: [] };
+      }
+      return { rows: [], rowCount: 0, command: "UPDATE", oid: 0, fields: [] };
+    }
+
+    // AI Run Select
+    if (upper.includes("FROM AI_RUN")) {
+      let rows = Array.from(memDb.aiRuns.values()).filter(r => r.tenant_id === this.tenantContext);
+      if (params.length > 0) {
+        rows = rows.filter(r => r.id === params[0]);
+      }
+      return { rows, rowCount: rows.length, command: "SELECT", oid: 0, fields: [] };
+    }
+
+    // Tool Catalog Insert/Select
+    if (upper.includes("INSERT INTO TOOL_CATALOG")) {
+      const [tool, schemaRef, enabled] = params;
+      const rec = { tool, schema_ref: schemaRef, enabled: Boolean(enabled) };
+      memDb.toolCatalog.set(tool, rec);
+      return { rows: [rec], rowCount: 1, command: "INSERT", oid: 0, fields: [] };
+    }
+    if (upper.includes("FROM TOOL_CATALOG")) {
+      const rows = Array.from(memDb.toolCatalog.values());
+      return { rows, rowCount: rows.length, command: "SELECT", oid: 0, fields: [] };
+    }
+
+    // Action Attempt Insert
+    if (upper.includes("INSERT INTO ACTION_ATTEMPT")) {
+      const [id, tId, tool, target, paramHash, resVer, approvalRef, effectKey, createdAt] = params;
+      if (this.tenantContext && tId !== this.tenantContext) {
+        throw new Error("RLS WITH CHECK violation: cross-tenant action_attempt write rejected");
+      }
+      const rec = {
+        id,
+        tenant_id: tId,
+        tool,
+        target,
+        param_hash: paramHash,
+        resource_version: Number(resVer),
+        approval_ref: approvalRef || null,
+        effect_key: effectKey,
+        state: "PENDING",
+        lease_owner: null,
+        lease_expires_at: null,
+        fencing_token: 0,
+        provider_receipt: null,
+        created_at: createdAt || new Date().toISOString()
+      };
+      memDb.actionAttempts.set(id, rec);
+      return { rows: [rec], rowCount: 1, command: "INSERT", oid: 0, fields: [] };
+    }
+
+    // Action Attempt Update
+    if (upper.includes("UPDATE ACTION_ATTEMPT")) {
+      if (upper.includes("SET STATE = 'LEASED'")) {
+        const attemptId = params.length >= 3 ? params[2] : params[0];
+        const rec = memDb.actionAttempts.get(attemptId);
+        if (rec && rec.tenant_id === this.tenantContext) {
+          rec.state = "LEASED";
+          if (params.length >= 3) {
+            rec.lease_owner = params[0];
+            rec.lease_expires_at = params[1];
+          }
+          rec.fencing_token = Number(rec.fencing_token || 0) + 1;
+          return { rows: [rec], rowCount: 1, command: "UPDATE", oid: 0, fields: [] };
+        }
+        return { rows: [], rowCount: 0, command: "UPDATE", oid: 0, fields: [] };
+      }
+
+      if (upper.includes("SET STATE = 'SUCCEEDED'")) {
+        const attemptId = params.length >= 3 ? params[1] : params[0];
+        const rec = memDb.actionAttempts.get(attemptId);
+        const tokenMatch = upper.match(/FENCING_TOKEN\s*=\s*(\d+)/);
+        const expectedToken = tokenMatch ? Number(tokenMatch[1]) : (params.length >= 4 ? Number(params[3]) : null);
+        if (rec && rec.tenant_id === this.tenantContext) {
+          if (expectedToken !== null && Number(rec.fencing_token) !== expectedToken) {
+            // Fencing token mismatch: stale worker blocked!
+            return { rows: [], rowCount: 0, command: "UPDATE", oid: 0, fields: [] };
+          }
+          rec.state = "SUCCEEDED";
+          if (params.length >= 3 && params[0]) {
+            rec.provider_receipt = typeof params[0] === "string" ? JSON.parse(params[0]) : params[0];
+          }
+          return { rows: [rec], rowCount: 1, command: "UPDATE", oid: 0, fields: [] };
+        }
+        return { rows: [], rowCount: 0, command: "UPDATE", oid: 0, fields: [] };
+      }
+
+      if (upper.includes("SET STATE = $1, PROVIDER_RECEIPT = $2")) {
+        const [targetState, receipt, attemptId, tId, fencingToken] = params;
+        const rec = memDb.actionAttempts.get(attemptId);
+        if (rec && rec.tenant_id === (this.tenantContext || tId)) {
+          if (Number(rec.fencing_token) !== Number(fencingToken)) {
+            return { rows: [], rowCount: 0, command: "UPDATE", oid: 0, fields: [] };
+          }
+          rec.state = targetState;
+          rec.provider_receipt = typeof receipt === "string" ? JSON.parse(receipt) : receipt;
+          return { rows: [rec], rowCount: 1, command: "UPDATE", oid: 0, fields: [] };
+        }
+      }
+      return { rows: [], rowCount: 0, command: "UPDATE", oid: 0, fields: [] };
+    }
+
+    // Action Attempt Select
+    if (upper.includes("FROM ACTION_ATTEMPT")) {
+      let rows = Array.from(memDb.actionAttempts.values()).filter(a => a.tenant_id === this.tenantContext);
+      if (upper.includes("EFFECT_KEY = $2") && params.length >= 2) {
+        rows = rows.filter(a => a.effect_key === params[1]);
+      } else if (params.length > 0) {
+        rows = rows.filter(a => a.id === params[0]);
       }
       return { rows, rowCount: rows.length, command: "SELECT", oid: 0, fields: [] };
     }

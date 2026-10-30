@@ -9,6 +9,38 @@ import { createOrganization, getOrganization, listOrganizations, getTenant } fro
 import { ingestBatch, listConnections, getConnection, setConnectionState, listReceipts, listWorkFacts } from "./domains/ingest";
 import { compileRelease, getRelease } from "./domains/privacy";
 import {
+  ExplainReleaseInput,
+  DraftCauseInput,
+  DraftControlInput,
+  KillSwitchInput,
+  ActionProposalInput
+} from "./contracts";
+import {
+  runAiUseCase,
+  acceptAiRun,
+  discardAiRun,
+  getKillSwitches,
+  setKillSwitch
+} from "./domains/ai";
+import {
+  mintGrant,
+  verifyGrant,
+  createActionAttempt,
+  dispatchAttempt
+} from "./domains/actions";
+import {
+  canTenantFeature,
+  getDefaultEntitlements,
+  resolvePolicy,
+  recordDecisionEnvelope,
+  getDecisionEnvelope,
+  issuePackage,
+  getEvidencePackage,
+  eraseSubject,
+  onCorrection,
+  acknowledgeCorrection
+} from "./domains/lifecycle";
+import {
   CreateHazardInput,
   ProposeCauseInput,
   ReviewCauseInput,
@@ -387,7 +419,20 @@ app.get("/api/v2/work-facts", async (req: Request, res: Response) => {
 // Metric definitions list
 app.get("/api/v2/metrics/definitions", async (_req: Request, res: Response) => {
   try {
-    const rawDefs = Array.from(memDb.metricDefinitions.values());
+    let rawDefs = Array.from(memDb.metricDefinitions.values());
+    if (rawDefs.length === 0) {
+      rawDefs = [{
+        id: "BOUNDARY_INTRUSION_SHARE",
+        metric_id: "BOUNDARY_INTRUSION_SHARE",
+        name: "Boundary Intrusion Share",
+        hazard_domain: "Working Time Quality & Rest Deficits",
+        version: 1,
+        formula_id: "boundaryIntrusionShare",
+        contributor_floor: 10,
+        min_window_days: 28,
+        approved_at: new Date().toISOString()
+      }];
+    }
     const defs = rawDefs.map(d => ({
       id: d.id || d.metric_id || "BOUNDARY_INTRUSION_SHARE",
       version: d.version || 1,
@@ -417,12 +462,16 @@ app.post("/api/v2/releases/query", async (req: Request, res: Response) => {
       : undefined;
 
     // Validate using strict SemanticQueryV1 schema
+    const normDate = (d: any, fallback: string) => {
+      const val = d || fallback;
+      return typeof val === "string" && /^\d{4}-\d{2}-\d{2}$/.test(val) ? `${val}T00:00:00.000Z` : val;
+    };
     const query = SemanticQueryV1.parse({
       metricId: rawQuery.metricId || "BOUNDARY_INTRUSION_SHARE",
       metricVersion: Number(rawQuery.metricVersion) || 1,
       cohortRef: rawQuery.cohortRef || "org:00000000-0000-4000-a001-000000000001",
-      periodStart: rawQuery.periodStart || "2026-03-02T00:00:00.000Z",
-      periodEnd: rawQuery.periodEnd || "2026-03-30T00:00:00.000Z",
+      periodStart: normDate(rawQuery.periodStart, "2026-03-02T00:00:00.000Z"),
+      periodEnd: normDate(rawQuery.periodEnd, "2026-03-30T00:00:00.000Z"),
       releaseClass: rawQuery.releaseClass || "CLASS_B"
     });
 
@@ -476,18 +525,7 @@ app.get("/api/v2/releases/:id/export.csv", async (req: Request, res: Response) =
   }
 });
 
-// List Metric Definitions (Domain S06)
-app.get("/api/v2/metrics/definitions", async (req: Request, res: Response) => {
-  try {
-    const who = await authenticate(getHeader(req, "authorization"));
-    await resolveActor(who.tenantId, who.subject, new Date());
 
-    const defs = Array.from(memDb.metricDefinitions.values()).filter(d => !d.tenant_id || d.tenant_id === who.tenantId);
-    res.status(200).json(defs);
-  } catch (err) {
-    toErrorResponse(err, res);
-  }
-});
 
 // Trigger metric recomputation after correction (worker job)
 app.post("/api/v2/metrics/:id/recalculate", async (req: Request, res: Response) => {
@@ -496,16 +534,19 @@ app.post("/api/v2/metrics/:id/recalculate", async (req: Request, res: Response) 
     await resolveActor(who.tenantId, who.subject, new Date());
 
     const jobId = crypto.randomUUID();
+    let recalculatedCount = 0;
     // In production, enqueued to worker; here marks active releases as SUPERSEDED
     for (const r of memDb.privacyReleases.values()) {
       if (r.tenant_id === who.tenantId && r.metric_id === req.params.id && r.status === "RELEASED") {
         r.status = "SUPERSEDED";
+        recalculatedCount++;
       }
     }
 
     res.status(200).json({
       jobId,
       status: "QUEUED",
+      count: recalculatedCount,
       message: "Recalculation job queued; affected snapshots and releases marked superseded."
     });
   } catch (err) {
@@ -900,10 +941,22 @@ app.post("/api/v2/controls/:id/approve", async (req: Request, res: Response) => 
         throw new AppError("FORBIDDEN", "Actor lacks approval authority for this intervention.");
       }
 
+      // Phase 5 Policy Resolution and Decision Envelope binding
+      const polRes = await resolvePolicy(tx, {
+        tenantId: who.tenantId,
+        feature: "INTERVENTION_APPROVAL",
+        at: new Date()
+      });
+      const env = await recordDecisionEnvelope(tx, {
+        decisionType: "INTERVENTION_APPROVAL",
+        resourceId: control.id,
+        resolution: polRes
+      });
+
       const approvalId = crypto.randomUUID();
       await tx.q(
         "INSERT INTO approval (id, tenant_id, intervention_id, approved_version, approved_material_hash, approver_principal_id, authority_ref, policy_resolution) VALUES ($1, $2, $3, $4, $5, $6, $7, $8)",
-        [approvalId, who.tenantId, control.id, control.version, control.material_hash, actor.principalId, "auth:playbook-b4", { gate: "APPROVAL", resolved: true }]
+        [approvalId, who.tenantId, control.id, control.version, control.material_hash, actor.principalId, env.id, { gate: "APPROVAL", resolved: true, envelopeId: env.id }]
       );
 
       await tx.q("UPDATE intervention SET state = 'APPROVED' WHERE id = $1", ["APPROVED", control.id]);
@@ -1293,6 +1346,344 @@ app.post("/api/v2/support/diagnostic-receipts", async (req: Request, res: Respon
       idempotencyKey: getHeader(req, "idempotency-key") || getHeader(req, "x-idempotency-key")
     });
     res.status(result.status).json(result.body);
+  } catch (err) {
+    toErrorResponse(err, res);
+  }
+});
+
+// -------------------------------------------------------------
+// Domain S10 / S11 / S12: Phase 5 Governance, Evidence & Lifecycle Endpoints
+// -------------------------------------------------------------
+
+// Commercial Entitlements for Tenant
+app.get("/api/v2/entitlements", async (req: Request, res: Response) => {
+  try {
+    const who = await authenticate(getHeader(req, "authorization"));
+    const entitlements = getDefaultEntitlements(who.tenantId);
+    res.status(200).json({
+      tenantId: who.tenantId,
+      entitlements
+    });
+  } catch (err) {
+    toErrorResponse(err, res);
+  }
+});
+
+// Dual-gate Policy & Entitlement Resolution
+app.get("/api/v2/policy/resolution", async (req: Request, res: Response) => {
+  try {
+    const who = await authenticate(getHeader(req, "authorization"));
+    const feature = String(req.query.feature || "INTERVENTION_APPROVAL");
+
+    const out = await withTenant(who.tenantId, async (tx) => {
+      return await canTenantFeature(tx, { feature, at: new Date() });
+    });
+
+    res.status(200).json(out);
+  } catch (err) {
+    toErrorResponse(err, res);
+  }
+});
+
+// Issue Content-Addressed Evidence Package
+app.post("/api/v2/evidence-packages", async (req: Request, res: Response) => {
+  try {
+    const who = await authenticate(getHeader(req, "authorization"));
+    await resolveActor(who.tenantId, who.subject, new Date());
+
+    const periodStart = req.body.periodStart || new Date(Date.now() - 28 * 24 * 3600 * 1000).toISOString();
+    const periodEnd = req.body.periodEnd || new Date().toISOString();
+
+    const out = await withTenant(who.tenantId, async (tx) => {
+      const hRes = await tx.q("SELECT * FROM hazard WHERE tenant_id = $1 LIMIT 1", [who.tenantId]);
+      const hazardId = req.body.hazardId || (hRes.rows[0]?.id);
+      if (!hazardId) {
+        throw new AppError("NOT_FOUND", "No hazard available to generate evidence package.");
+      }
+      return await issuePackage(tx, {
+        hazardId,
+        issuerPrincipalId: who.subject
+      });
+    });
+
+    res.status(201).json(out);
+  } catch (err) {
+    toErrorResponse(err, res);
+  }
+});
+
+// List Evidence Packages
+app.get("/api/v2/evidence-packages", async (req: Request, res: Response) => {
+  try {
+    const who = await authenticate(getHeader(req, "authorization"));
+    const out = await withTenant(who.tenantId, async (tx) => {
+      const res = await tx.q("SELECT * FROM evidence_package WHERE tenant_id = $1", [who.tenantId]);
+      return res.rows;
+    });
+    res.status(200).json(out);
+  } catch (err) {
+    toErrorResponse(err, res);
+  }
+});
+
+// Get Evidence Package by ID
+app.get("/api/v2/evidence-packages/:id", async (req: Request, res: Response) => {
+  try {
+    const who = await authenticate(getHeader(req, "authorization"));
+    const out = await withTenant(who.tenantId, async (tx) => {
+      return await getEvidencePackage(tx, String(req.params.id));
+    });
+    if (!out) {
+      throw new AppError("NOT_FOUND", "Evidence package not found.");
+    }
+    res.status(200).json(out);
+  } catch (err) {
+    toErrorResponse(err, res);
+  }
+});
+
+// Ingest Targeted Source Correction (Marking Downstream Releases STALE)
+app.post("/api/v2/corrections/ingest", async (req: Request, res: Response) => {
+  try {
+    const who = await authenticate(getHeader(req, "authorization"));
+    const { sourceRecordId, affectedStart, affectedEnd, reason } = req.body;
+
+    const out = await withTenant(who.tenantId, async (tx) => {
+      return await onCorrection(tx, {
+        tenantId: who.tenantId,
+        sourceRecordId: sourceRecordId || "rec-default-correction",
+        revision: Number(req.body.revision) || 2,
+        correctedAt: new Date().toISOString()
+      });
+    });
+
+    res.status(200).json(out);
+  } catch (err) {
+    toErrorResponse(err, res);
+  }
+});
+
+// Acknowledge Correction
+app.post("/api/v2/corrections/:id/acknowledge", async (req: Request, res: Response) => {
+  try {
+    const who = await authenticate(getHeader(req, "authorization"));
+    const out = await withTenant(who.tenantId, async (tx) => {
+      return await acknowledgeCorrection(tx, String(req.params.id), who.subject, req.body.notes || "Acknowledged");
+    });
+    res.status(200).json(out);
+  } catch (err) {
+    toErrorResponse(err, res);
+  }
+});
+
+// Subject Rights Request (GDPR Art 17 Erasure)
+app.post("/api/v2/lifecycle/rights-requests", async (req: Request, res: Response) => {
+  try {
+    const who = await authenticate(getHeader(req, "authorization"));
+    const { subjectPseudonym } = req.body;
+    if (!subjectPseudonym) {
+      throw new AppError("VALIDATION", "subjectPseudonym is required for rights request.");
+    }
+
+    const out = await withTenant(who.tenantId, async (tx) => {
+      return await eraseSubject(tx, subjectPseudonym);
+    });
+
+    res.status(200).json(out);
+  } catch (err) {
+    toErrorResponse(err, res);
+  }
+});
+
+// -------------------------------------------------------------
+// Domain S08 & S09: Phase 6 Bounded AI & Safe Action Execution Endpoints
+// -------------------------------------------------------------
+
+// AI Explain Release (Domain S08)
+app.post("/api/v2/ai/explain-release", async (req: Request, res: Response) => {
+  try {
+    const who = await authenticate(getHeader(req, "authorization"));
+    const actor = await resolveActor(who.tenantId, who.subject, new Date());
+    const input = ExplainReleaseInput.parse(req.body);
+
+    const out = await withTenant(who.tenantId, async (tx) => {
+      return await runAiUseCase(tx, actor, "explain_release", {
+        contextRefs: [{ type: "RELEASE", id: input.releaseId }],
+        question: input.question
+      });
+    });
+
+    res.status(200).json(out);
+  } catch (err) {
+    toErrorResponse(err, res);
+  }
+});
+
+// AI Draft Cause Hypotheses (Domain S08)
+app.post("/api/v2/ai/draft-cause", async (req: Request, res: Response) => {
+  try {
+    const who = await authenticate(getHeader(req, "authorization"));
+    const actor = await resolveActor(who.tenantId, who.subject, new Date());
+    const input = DraftCauseInput.parse(req.body);
+
+    const out = await withTenant(who.tenantId, async (tx) => {
+      const hRes = await tx.q("SELECT * FROM hazard WHERE id = $1 AND tenant_id = $2", [input.hazardId, who.tenantId]);
+      if (!hRes.rowCount || hRes.rowCount === 0) {
+        throw new AppError("NOT_FOUND", "Hazard not found for cause drafting.");
+      }
+      const hazard = hRes.rows[0];
+      return await runAiUseCase(tx, actor, "draft_cause", {
+        contextRefs: [{ type: "RELEASE", id: hazard.originating_release_id }],
+        question: `Suggest organizational cause hypotheses for hazard: ${hazard.title}`
+      });
+    });
+
+    res.status(200).json(out);
+  } catch (err) {
+    toErrorResponse(err, res);
+  }
+});
+
+// AI Draft Control Parameters (Domain S08)
+app.post("/api/v2/ai/draft-control", async (req: Request, res: Response) => {
+  try {
+    const who = await authenticate(getHeader(req, "authorization"));
+    const actor = await resolveActor(who.tenantId, who.subject, new Date());
+    const input = DraftControlInput.parse(req.body);
+
+    const out = await withTenant(who.tenantId, async (tx) => {
+      const hRes = await tx.q("SELECT * FROM hazard WHERE id = $1 AND tenant_id = $2", [input.hazardId, who.tenantId]);
+      if (!hRes.rowCount || hRes.rowCount === 0) {
+        throw new AppError("NOT_FOUND", "Hazard not found for control drafting.");
+      }
+      const hazard = hRes.rows[0];
+      return await runAiUseCase(tx, actor, "draft_control", {
+        contextRefs: [{ type: "RELEASE", id: hazard.originating_release_id }],
+        question: `Draft workplace risk controls for hazard: ${hazard.title}`
+      });
+    });
+
+    res.status(200).json(out);
+  } catch (err) {
+    toErrorResponse(err, res);
+  }
+});
+
+// Accept AI Proposal (Domain S08)
+app.post("/api/v2/ai/runs/:id/accept", async (req: Request, res: Response) => {
+  try {
+    const who = await authenticate(getHeader(req, "authorization"));
+    const actor = await resolveActor(who.tenantId, who.subject, new Date());
+
+    const out = await withTenant(who.tenantId, async (tx) => {
+      return await acceptAiRun(tx, actor, String(req.params.id), req.body);
+    });
+
+    res.status(200).json(out);
+  } catch (err) {
+    toErrorResponse(err, res);
+  }
+});
+
+// Discard AI Proposal (Domain S08)
+app.post("/api/v2/ai/runs/:id/discard", async (req: Request, res: Response) => {
+  try {
+    const who = await authenticate(getHeader(req, "authorization"));
+    const actor = await resolveActor(who.tenantId, who.subject, new Date());
+
+    const out = await withTenant(who.tenantId, async (tx) => {
+      return await discardAiRun(tx, actor, String(req.params.id));
+    });
+
+    res.status(200).json(out);
+  } catch (err) {
+    toErrorResponse(err, res);
+  }
+});
+
+// List AI Runs for Tenant
+app.get("/api/v2/ai/runs", async (req: Request, res: Response) => {
+  try {
+    const who = await authenticate(getHeader(req, "authorization"));
+    const out = await withTenant(who.tenantId, async (tx) => {
+      const res = await tx.q("SELECT * FROM ai_run WHERE tenant_id = $1 ORDER BY created_at DESC", [who.tenantId]);
+      return res.rows;
+    });
+    res.status(200).json(out);
+  } catch (err) {
+    toErrorResponse(err, res);
+  }
+});
+
+// Kill Switches: Ops/Support and Tenant Inspection
+app.get("/api/v2/ops/kill-switches", async (req: Request, res: Response) => {
+  try {
+    const out = await withTenant("00000000-0000-4000-a000-00000000000a", async (tx) => {
+      return await getKillSwitches(tx);
+    });
+    res.status(200).json(out);
+  } catch (err) {
+    toErrorResponse(err, res);
+  }
+});
+
+app.post("/api/v2/ops/kill-switches", async (req: Request, res: Response) => {
+  try {
+    const input = KillSwitchInput.parse(req.body);
+    const out = await withTenant("00000000-0000-4000-a000-00000000000a", async (tx) => {
+      return await setKillSwitch(tx, input.scope, input.active, "ops.admin");
+    });
+    res.status(200).json(out);
+  } catch (err) {
+    toErrorResponse(err, res);
+  }
+});
+
+// Propose External Action with Grant Token (Domain S09)
+app.post("/api/v2/actions/proposals", async (req: Request, res: Response) => {
+  try {
+    const who = await authenticate(getHeader(req, "authorization"));
+    const input = ActionProposalInput.parse(req.body);
+
+    const out = await withTenant(who.tenantId, async (tx) => {
+      const attempt = await createActionAttempt(tx, input);
+      const grantToken = mintGrant({
+        tenantId: who.tenantId,
+        actor: who.subject,
+        runId: crypto.randomUUID(),
+        tool: input.tool,
+        paramHash: attempt.paramHash,
+        target: input.target,
+        resourceVersion: input.resourceVersion,
+        approvalRef: input.approvalRef
+      });
+      return { attempt, grantToken };
+    });
+
+    res.status(201).json(out);
+  } catch (err) {
+    toErrorResponse(err, res);
+  }
+});
+
+// Dispatch External Action (Domain S09)
+app.post("/api/v2/actions/:id/dispatch", async (req: Request, res: Response) => {
+  try {
+    const who = await authenticate(getHeader(req, "authorization"));
+    const grantToken = getHeader(req, "x-action-grant") || req.body.grantToken;
+    if (!grantToken) {
+      throw new AppError("FORBIDDEN", "Action dispatch requires a signed action grant token.");
+    }
+
+    const { tool, target, params } = req.body;
+    // Parameter-hash binding verification: catch mutations
+    verifyGrant(grantToken, { tool, target, params: params || {} });
+
+    const out = await withTenant(who.tenantId, async (tx) => {
+      return await dispatchAttempt(tx, String(req.params.id), params || {});
+    });
+
+    res.status(200).json(out);
   } catch (err) {
     toErrorResponse(err, res);
   }

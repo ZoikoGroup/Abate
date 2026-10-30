@@ -170,6 +170,41 @@ export async function seedTwoTenants(opts: { clock?: Date } = {}) {
   };
   memDb.metricDefinitions.set(`${metricDef.metric_id}:${metricDef.version}`, metricDef);
 
+  // Seed Phase 3 Baseline Privacy Release (for Hazard/Control anchoring)
+  const baselineReleaseId = "00000000-0000-4000-a003-000000000001";
+  const baselineRelease = {
+    id: baselineReleaseId,
+    tenant_id: tA.id,
+    decision_id: "00000000-0000-4000-a003-000000000000",
+    snapshot_id: "00000000-0000-4000-a003-000000000002",
+    metric_id: "BOUNDARY_INTRUSION_SHARE",
+    metric_version: 1,
+    release_class: "CLASS_B",
+    status: "RELEASED",
+    superseded_by: null,
+    released_at: validFrom
+  };
+  memDb.privacyReleases.set(baselineReleaseId, baselineRelease);
+  memDb.privacyReleases.set("rel-baseline-1", { ...baselineRelease, id: "rel-baseline-1" });
+
+  const baselineArtifact = {
+    release_id: baselineReleaseId,
+    tenant_id: tA.id,
+    metric_id: "BOUNDARY_INTRUSION_SHARE",
+    metric_version: 1,
+    value: 23.4,
+    unit: "percent",
+    period_start: "2026-03-02T00:00:00.000Z",
+    period_end: "2026-03-30T00:00:00.000Z",
+    quality: "VALID",
+    interpretation: "23.4% of recorded minutes occurred outside scheduled boundary windows.",
+    status: "RELEASED",
+    artifact_hash: "sha256-baseline-artifact-1"
+  };
+  memDb.releasedArtifacts.set(baselineReleaseId, baselineArtifact);
+  memDb.releasedArtifacts.set("rel-baseline-1", { ...baselineArtifact, release_id: "rel-baseline-1" });
+
+
   // Seed Phase 2 Source Contract & Connection for Tenant B
   const contractB = {
     id: "00000000-0000-4000-b005-000000000001",
@@ -219,6 +254,204 @@ export async function seedTwoTenants(opts: { clock?: Date } = {}) {
     approved_at: validFrom
   };
   memDb.jurisdictionPacks.set(`${packA.pack_id}:${packA.version}`, packA);
+
+  // Seed Phase 5 Multi-Kind Policy Packs & Bindings (Playbook B5 §4)
+  const policyPackSra = {
+    pack_id: 'legal-uk-sra',
+    version: 1,
+    kind: 'JURISDICTION',
+    title: 'UK SRA Workplace Standards',
+    description: 'Solicitors Regulation Authority workplace risk and governance standard',
+    publisher: 'SRA-Standards-Board',
+    effective_from: validFrom,
+    effective_to: null,
+    definition: {
+      permittedFeatures: ['*'],
+      gates: { APPROVAL: ['RISK_OWNER'], REVIEW: ['WORKS_COUNCIL'] },
+      privacyFloor: 10,
+      aiAuthority: 'ADVISORY'
+    },
+    pack_hash: 'sha256-pack-legal-uk-sra-v1',
+    status: 'APPROVED',
+    approved_by: 'LEGAL_LEAD',
+    approved_at: validFrom
+  };
+  memDb.policyPacks.set('legal-uk-sra:1', policyPackSra);
+
+  const policyPackSector = {
+    pack_id: 'sector-legal',
+    version: 1,
+    kind: 'SECTOR',
+    title: 'Legal Professional Services Sector Standard',
+    description: 'Demand windows, prohibited work product surveillance, and baseline privacy rules',
+    publisher: 'Legal-Sector-Council',
+    effective_from: validFrom,
+    effective_to: null,
+    definition: {
+      permittedFeatures: ['*'],
+      demandWindows: ['TRIAL_PREP', 'TRIAL', 'CLOSING', 'FILING_DEADLINE'],
+      forbiddenWorkProduct: ['substantiveWorkProduct'],
+      privacyFloor: 10
+    },
+    pack_hash: 'sha256-pack-sector-legal-v1',
+    status: 'APPROVED',
+    approved_by: 'LEGAL_LEAD',
+    approved_at: validFrom
+  };
+  memDb.policyPacks.set('sector-legal:1', policyPackSector);
+
+  const policyPackBar = {
+    pack_id: 'legal-uk-bar',
+    version: 1,
+    kind: 'JURISDICTION',
+    title: 'UK Bar Council Standards',
+    description: 'Bar Standards Board governance policy',
+    publisher: 'Bar-Council',
+    effective_from: validFrom,
+    effective_to: null,
+    definition: {
+      permittedFeatures: ['*'],
+      gates: { APPROVAL: ['RISK_OWNER'] },
+      privacyFloor: 10
+    },
+    pack_hash: 'sha256-pack-legal-uk-bar-v1',
+    status: 'APPROVED',
+    approved_by: 'LEGAL_LEAD',
+    approved_at: validFrom
+  };
+  memDb.policyPacks.set('legal-uk-bar:1', policyPackBar);
+
+  const policyPackExpired = {
+    pack_id: 'jurisdiction-expired',
+    version: 1,
+    kind: 'JURISDICTION',
+    title: 'Expired Jurisdiction Policy Pack',
+    description: 'Demonstrates fail-closed compliance claims upon expiration',
+    publisher: 'Deprecated-Authority',
+    effective_from: '2020-01-01T00:00:00.000Z',
+    effective_to: '2021-01-01T00:00:00.000Z',
+    definition: { permittedFeatures: ['*'] },
+    pack_hash: 'sha256-pack-expired-v1',
+    status: 'APPROVED',
+    approved_by: 'LEGAL_LEAD',
+    approved_at: '2020-01-01T00:00:00.000Z'
+  };
+  memDb.policyPacks.set('jurisdiction-expired:1', policyPackExpired);
+
+  // Bind Tenant A -> legal-uk-sra:1 & sector-legal:1
+  memDb.tenantPolicyBindings.push(
+    {
+      id: '00000000-0000-4000-a006-000000000001',
+      tenant_id: tA.id,
+      pack_id: 'legal-uk-sra',
+      pack_version: 1,
+      bound_at: validFrom,
+      bound_by: 'SYSTEM',
+      status: 'ACTIVE'
+    },
+    {
+      id: '00000000-0000-4000-a006-000000000002',
+      tenant_id: tA.id,
+      pack_id: 'sector-legal',
+      pack_version: 1,
+      bound_at: validFrom,
+      bound_by: 'SYSTEM',
+      status: 'ACTIVE'
+    }
+  );
+
+  // Bind Tenant B -> legal-uk-bar:1 & sector-legal:1
+  memDb.tenantPolicyBindings.push(
+    {
+      id: '00000000-0000-4000-b006-000000000001',
+      tenant_id: tB.id,
+      pack_id: 'legal-uk-bar',
+      pack_version: 1,
+      bound_at: validFrom,
+      bound_by: 'SYSTEM',
+      status: 'ACTIVE'
+    },
+    {
+      id: '00000000-0000-4000-b006-000000000002',
+      tenant_id: tB.id,
+      pack_id: 'sector-legal',
+      pack_version: 1,
+      bound_at: validFrom,
+      bound_by: 'SYSTEM',
+      status: 'ACTIVE'
+    }
+  );
+
+
+  // Seed Phase 6 Bounded AI Use Cases & Tool Catalog
+  const explainUseCase = {
+    key: "explain_release",
+    version: 1,
+    purpose: "Explain released cohort psychosocial hazard indicators and suggest organizational mitigations.",
+    allowed_inputs: ["RELEASE", "KNOWLEDGE"],
+    output_schema_ref: "schema:ai_proposal_v1",
+    prompt_version: "explain_release_v1",
+    model_ref: "zoiko-mock-v1",
+    provider_region: "eu-west-2",
+    max_steps: 1,
+    max_input_tokens: 2048,
+    max_output_tokens: 1024,
+    timeout_ms: 8000,
+    monthly_budget_minor: 100000,
+    enabled: true,
+    eval_thresholds: { usefulness: 0.9, groundedness: 1.0, numericFidelity: 1.0, safety: 1.0 }
+  };
+  memDb.aiUseCases.set("explain_release:1", explainUseCase);
+
+  const causeUseCase = {
+    key: "draft_cause",
+    version: 1,
+    purpose: "Propose organizational cause hypotheses from verified cohort hazard conditions.",
+    allowed_inputs: ["RELEASE", "KNOWLEDGE"],
+    output_schema_ref: "schema:ai_proposal_v1",
+    prompt_version: "draft_cause_v1",
+    model_ref: "zoiko-mock-v1",
+    provider_region: "eu-west-2",
+    max_steps: 1,
+    max_input_tokens: 2048,
+    max_output_tokens: 1024,
+    timeout_ms: 8000,
+    monthly_budget_minor: 100000,
+    enabled: true,
+    eval_thresholds: { usefulness: 0.9, groundedness: 1.0, numericFidelity: 1.0, safety: 1.0 }
+  };
+  memDb.aiUseCases.set("draft_cause:1", causeUseCase);
+
+  const controlUseCase = {
+    key: "draft_control",
+    version: 1,
+    purpose: "Draft control parameters and suggested verification criteria from the approved catalog.",
+    allowed_inputs: ["RELEASE", "KNOWLEDGE"],
+    output_schema_ref: "schema:ai_proposal_v1",
+    prompt_version: "draft_control_v1",
+    model_ref: "zoiko-mock-v1",
+    provider_region: "eu-west-2",
+    max_steps: 1,
+    max_input_tokens: 2048,
+    max_output_tokens: 1024,
+    timeout_ms: 8000,
+    monthly_budget_minor: 100000,
+    enabled: true,
+    eval_thresholds: { usefulness: 0.9, groundedness: 1.0, numericFidelity: 1.0, safety: 1.0 }
+  };
+  memDb.aiUseCases.set("draft_control:1", controlUseCase);
+
+  // Seed Tool Catalog
+  memDb.toolCatalog.set("ticket_notification", {
+    tool: "ticket_notification",
+    schema_ref: "schema:ticket_notification_v1",
+    enabled: true
+  });
+  memDb.toolCatalog.set("calendar_window", {
+    tool: "calendar_window",
+    schema_ref: "schema:calendar_window_v1",
+    enabled: true
+  });
 
   return {
     tenantA: { tenant: tA, org: orgA, principal: principalA, membership: membershipA, connection: connA },
