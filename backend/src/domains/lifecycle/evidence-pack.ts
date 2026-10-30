@@ -236,6 +236,7 @@ export async function getEvidencePackage(
       itemVersion: r.item_version,
       sha256: r.sha256,
       objectKey: r.object_key
+
     }))
   };
 }
