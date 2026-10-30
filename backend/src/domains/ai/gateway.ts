@@ -138,7 +138,7 @@ export class DeterministicMockProvider implements ModelProvider {
 
     // Extract release ID
     const matchId = userMsg.match(/<item id="([^"]+)">/);
-    const releaseId = matchId ? matchId[1] : "release:rel-baseline-1";
+    const releaseId = matchId ? matchId[1] : "release:00000000-0000-4000-a003-000000000001";
 
     return {
       text: JSON.stringify({

@@ -10,7 +10,7 @@ import { materialHash, canTransition, evaluateSuggestion, exportEvidencePackage 
 import { getJurisdictionCoverage, setRetentionClass, placeLegalHold, releaseLegalHold, runRetention } from "../src/domains/lifecycle";
 import { generateDiagnosticReceipt, verifyDiagnosticReceipt } from "../src/domains/support";
 import { runAiUseCase, acceptAiRun } from "../src/domains/ai";
-import { mintGrant, verifyGrant, createActionAttempt, dispatchAttempt } from "../src/domains/actions";
+import { proposeAction, dispatchAction } from "../src/domains/actions";
 
 import { drainOnce } from "../src/worker/outbox-publisher";
 import { withTenant, memDb } from "../src/platform/db/with-tenant";
@@ -299,26 +299,27 @@ async function runDemoCycle() {
     const acceptRes = await acceptAiRun(tx, actorA, aiRun.id);
     console.log(`  ✔ Proposal Accepted: ${acceptRes.decisionRef} (AI writes drafts only; human workflow commands required)`);
 
-    // 16.3 Safe Action Broker with Signed Grant & Fencing
-    const attempt = await createActionAttempt(tx, {
+  });
+
+  // 16.3 Safe Action Broker: approval-bound grant, lease + fencing, provider called outside any transaction
+  const proposal = await proposeAction({
+    who: whoA,
+    actor: actorA,
+    input: {
       tool: "ticket_notification",
       target: "team-litigation",
       params: { window: "scheduled-rest" },
-      resourceVersion: 1
-    });
-    const grantToken = mintGrant({
-      tenantId: whoA.tenantId,
-      actor: whoA.subject,
-      runId: aiRun.id,
-      tool: "ticket_notification",
-      paramHash: attempt.paramHash,
-      target: "team-litigation",
-      resourceVersion: 1
-    });
-    verifyGrant(grantToken, { tool: "ticket_notification", target: "team-litigation", params: { window: "scheduled-rest" } });
-    const dispRes = await dispatchAttempt(tx, attempt.id, { window: "scheduled-rest" }, "worker-demo");
-    console.log(`  ✔ Action Attempt Dispatched: State ${dispRes.state} with fencing token ${dispRes.fencingToken} (parameter-hash verified)\n`);
+      resourceVersion: 1,
+      approvalRef: GOLDEN_01.approvedControl.approvalId
+    }
   });
+  const dispRes = await dispatchAction({
+    who: whoA,
+    actor: actorA,
+    attemptId: proposal.attempt.id,
+    input: { params: { window: "scheduled-rest" }, grantToken: proposal.grantToken }
+  });
+  console.log(`  ✔ Action Attempt Dispatched: State ${dispRes.state} with fencing token ${dispRes.fencingToken} (approval-bound grant verified)\n`);
 
   console.log("\x1b[32m====================================================================\x1b[0m");
   console.log("\x1b[32m=== DEMO CYCLE COMPLETED SUCCESSFULLY: ALL PHASES 0-6 + B8 VERIFIED ===\x1b[0m");

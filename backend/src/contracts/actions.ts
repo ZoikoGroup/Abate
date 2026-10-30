@@ -15,12 +15,13 @@ export type ActionAttemptState = z.infer<typeof ActionAttemptStateEnum>;
 export const ActionGrantPayloadSchema = z.object({
   tenantId: z.string().uuid(),
   actor: z.string().min(1),
-  runId: z.string().uuid(),
+  attemptId: z.string().uuid(), // a grant authorises exactly one attempt
+  runId: z.string().uuid().optional(), // originating AI run, when the action came from a proposal
   tool: z.string().min(1),
-  paramHash: z.string().min(1),
+  paramHash: z.string().regex(/^[0-9a-f]{64}$/),
   target: z.string().min(1),
   resourceVersion: z.number().int().nonnegative(),
-  approvalRef: z.string().uuid().optional(),
+  approvalRef: z.string().uuid(),
   exp: z.number().int().positive()
 }).strict();
 export type ActionGrantPayload = z.infer<typeof ActionGrantPayloadSchema>;
@@ -30,7 +31,7 @@ export const ActionProposalInput = z.object({
   target: z.string().min(1),
   params: z.record(z.string(), z.any()),
   resourceVersion: z.number().int().nonnegative(),
-  approvalRef: z.string().uuid().optional()
+  approvalRef: z.string().uuid() // Phase 4 approval that authorises this external effect
 }).strict();
 export type ActionProposalInput = z.infer<typeof ActionProposalInput>;
 
@@ -51,3 +52,8 @@ export const ActionAttemptViewSchema = z.object({
 }).strict();
 export type ActionAttemptView = z.infer<typeof ActionAttemptViewSchema>;
 
+export const ActionDispatchInput = z.object({
+  params: z.record(z.string(), z.any()),
+  grantToken: z.string().min(1).optional()
+}).strict();
+export type ActionDispatchInput = z.infer<typeof ActionDispatchInput>;

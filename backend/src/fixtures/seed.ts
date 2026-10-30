@@ -2,7 +2,9 @@
 import { GOLDEN_01 } from "./golden01";
 import { memDb, appPool } from "../platform/db/with-tenant";
 import { assertNotProduction } from "../platform/config";
+import crypto from "node:crypto";
 import { packContentHash } from "../domains/lifecycle/jurisdiction";
+import { materialHash } from "../domains/control/material";
 
 export async function seedTwoTenants(opts: { clock?: Date } = {}) {
   // Enforce mandatory playbook guard: refuses to run in staging or production
@@ -185,7 +187,6 @@ export async function seedTwoTenants(opts: { clock?: Date } = {}) {
     released_at: validFrom
   };
   memDb.privacyReleases.set(baselineReleaseId, baselineRelease);
-  memDb.privacyReleases.set("rel-baseline-1", { ...baselineRelease, id: "rel-baseline-1" });
 
   const baselineArtifact = {
     release_id: baselineReleaseId,
@@ -202,7 +203,6 @@ export async function seedTwoTenants(opts: { clock?: Date } = {}) {
     artifact_hash: "sha256-baseline-artifact-1"
   };
   memDb.releasedArtifacts.set(baselineReleaseId, baselineArtifact);
-  memDb.releasedArtifacts.set("rel-baseline-1", { ...baselineArtifact, release_id: "rel-baseline-1" });
 
 
   // Seed Phase 2 Source Contract & Connection for Tenant B
@@ -255,133 +255,145 @@ export async function seedTwoTenants(opts: { clock?: Date } = {}) {
   };
   memDb.jurisdictionPacks.set(`${packA.pack_id}:${packA.version}`, packA);
 
-  // Seed Phase 5 Multi-Kind Policy Packs & Bindings (Playbook B5 §4)
-  const policyPackSra = {
-    pack_id: 'legal-uk-sra',
+  // Seed Phase 5 Multi-Kind Policy Packs & Bindings (Playbook B5 §4).
+  // Rows use the 0051_governance_evidence.sql columns so the resolver reads the same shape as PostgreSQL.
+  const policyPack = (
+    key: string,
+    kind: "JURISDICTION" | "SECTOR" | "CUSTOMER",
+    effectiveFrom: string,
+    effectiveTo: string | null,
+    content: Record<string, unknown>
+  ) => ({
+    id: crypto.randomUUID(),
+    pack_key: key,
     version: 1,
-    kind: 'JURISDICTION',
-    title: 'UK SRA Workplace Standards',
-    description: 'Solicitors Regulation Authority workplace risk and governance standard',
-    publisher: 'SRA-Standards-Board',
-    effective_from: validFrom,
-    effective_to: null,
-    definition: {
-      permittedFeatures: ['*'],
-      gates: { APPROVAL: ['RISK_OWNER'], REVIEW: ['WORKS_COUNCIL'] },
+    kind,
+    effective_from: effectiveFrom,
+    effective_to: effectiveTo,
+    status: "APPROVED",
+    source_refs: [content.publisher],
+    accountable_reviewer: "LEGAL_LEAD",
+    review_date: "2027-01-01",
+    content,
+    content_hash: packContentHash(content)
+  });
+
+  const seededPolicyPacks = [
+    policyPack("legal-uk-sra", "JURISDICTION", validFrom, null, {
+      title: "UK SRA Workplace Standards",
+      description: "Solicitors Regulation Authority workplace risk and governance standard",
+      publisher: "SRA-Standards-Board",
+      permittedFeatures: ["*"],
+      gates: { APPROVAL: ["RISK_OWNER"], REVIEW: ["WORKS_COUNCIL"] },
       privacyFloor: 10,
-      aiAuthority: 'ADVISORY'
-    },
-    pack_hash: 'sha256-pack-legal-uk-sra-v1',
-    status: 'APPROVED',
-    approved_by: 'LEGAL_LEAD',
-    approved_at: validFrom
-  };
-  memDb.policyPacks.set('legal-uk-sra:1', policyPackSra);
-
-  const policyPackSector = {
-    pack_id: 'sector-legal',
-    version: 1,
-    kind: 'SECTOR',
-    title: 'Legal Professional Services Sector Standard',
-    description: 'Demand windows, prohibited work product surveillance, and baseline privacy rules',
-    publisher: 'Legal-Sector-Council',
-    effective_from: validFrom,
-    effective_to: null,
-    definition: {
-      permittedFeatures: ['*'],
-      demandWindows: ['TRIAL_PREP', 'TRIAL', 'CLOSING', 'FILING_DEADLINE'],
-      forbiddenWorkProduct: ['substantiveWorkProduct'],
+      aiAuthority: "ADVISORY"
+    }),
+    policyPack("sector-legal", "SECTOR", validFrom, null, {
+      title: "Legal Professional Services Sector Standard",
+      description: "Demand windows, prohibited work product surveillance, and baseline privacy rules",
+      publisher: "Legal-Sector-Council",
+      permittedFeatures: ["*"],
+      demandWindows: ["TRIAL_PREP", "TRIAL", "CLOSING", "FILING_DEADLINE"],
+      forbiddenWorkProduct: ["substantiveWorkProduct"],
       privacyFloor: 10
-    },
-    pack_hash: 'sha256-pack-sector-legal-v1',
-    status: 'APPROVED',
-    approved_by: 'LEGAL_LEAD',
-    approved_at: validFrom
-  };
-  memDb.policyPacks.set('sector-legal:1', policyPackSector);
-
-  const policyPackBar = {
-    pack_id: 'legal-uk-bar',
-    version: 1,
-    kind: 'JURISDICTION',
-    title: 'UK Bar Council Standards',
-    description: 'Bar Standards Board governance policy',
-    publisher: 'Bar-Council',
-    effective_from: validFrom,
-    effective_to: null,
-    definition: {
-      permittedFeatures: ['*'],
-      gates: { APPROVAL: ['RISK_OWNER'] },
+    }),
+    policyPack("legal-uk-bar", "JURISDICTION", validFrom, null, {
+      title: "UK Bar Council Standards",
+      description: "Bar Standards Board governance policy",
+      publisher: "Bar-Council",
+      permittedFeatures: ["*"],
+      gates: { APPROVAL: ["RISK_OWNER"] },
       privacyFloor: 10
-    },
-    pack_hash: 'sha256-pack-legal-uk-bar-v1',
-    status: 'APPROVED',
-    approved_by: 'LEGAL_LEAD',
-    approved_at: validFrom
-  };
-  memDb.policyPacks.set('legal-uk-bar:1', policyPackBar);
+    }),
+    policyPack("jurisdiction-expired", "JURISDICTION", "2020-01-01T00:00:00.000Z", "2021-01-01T00:00:00.000Z", {
+      title: "Expired Jurisdiction Policy Pack",
+      description: "Demonstrates fail-closed compliance claims upon expiration",
+      publisher: "Deprecated-Authority",
+      permittedFeatures: ["*"]
+    })
+  ];
+  for (const pack of seededPolicyPacks) {
+    memDb.policyPacks.set(`${pack.pack_key}:${pack.version}`, pack);
+  }
 
-  const policyPackExpired = {
-    pack_id: 'jurisdiction-expired',
-    version: 1,
-    kind: 'JURISDICTION',
-    title: 'Expired Jurisdiction Policy Pack',
-    description: 'Demonstrates fail-closed compliance claims upon expiration',
-    publisher: 'Deprecated-Authority',
-    effective_from: '2020-01-01T00:00:00.000Z',
-    effective_to: '2021-01-01T00:00:00.000Z',
-    definition: { permittedFeatures: ['*'] },
-    pack_hash: 'sha256-pack-expired-v1',
-    status: 'APPROVED',
-    approved_by: 'LEGAL_LEAD',
-    approved_at: '2020-01-01T00:00:00.000Z'
-  };
-  memDb.policyPacks.set('jurisdiction-expired:1', policyPackExpired);
-
-  // Bind Tenant A -> legal-uk-sra:1 & sector-legal:1
+  // Tenant A -> legal-uk-sra + sector-legal; Tenant B -> legal-uk-bar + sector-legal
+  const binding = (tenantId: string, packKey: string) => ({
+    tenant_id: tenantId,
+    pack_key: packKey,
+    pack_version: 1,
+    applies_to: {},
+    bound_from: validFrom,
+    bound_to: null
+  });
   memDb.tenantPolicyBindings.push(
-    {
-      id: '00000000-0000-4000-a006-000000000001',
-      tenant_id: tA.id,
-      pack_id: 'legal-uk-sra',
-      pack_version: 1,
-      bound_at: validFrom,
-      bound_by: 'SYSTEM',
-      status: 'ACTIVE'
-    },
-    {
-      id: '00000000-0000-4000-a006-000000000002',
-      tenant_id: tA.id,
-      pack_id: 'sector-legal',
-      pack_version: 1,
-      bound_at: validFrom,
-      bound_by: 'SYSTEM',
-      status: 'ACTIVE'
-    }
+    binding(tA.id, "legal-uk-sra"),
+    binding(tA.id, "sector-legal"),
+    binding(tB.id, "legal-uk-bar"),
+    binding(tB.id, "sector-legal")
   );
 
-  // Bind Tenant B -> legal-uk-bar:1 & sector-legal:1
-  memDb.tenantPolicyBindings.push(
-    {
-      id: '00000000-0000-4000-b006-000000000001',
-      tenant_id: tB.id,
-      pack_id: 'legal-uk-bar',
-      pack_version: 1,
-      bound_at: validFrom,
-      bound_by: 'SYSTEM',
-      status: 'ACTIVE'
-    },
-    {
-      id: '00000000-0000-4000-b006-000000000002',
-      tenant_id: tB.id,
-      pack_id: 'sector-legal',
-      pack_version: 1,
-      bound_at: validFrom,
-      bound_by: 'SYSTEM',
-      status: 'ACTIVE'
-    }
-  );
-
+  // Seed an approved control chain for Tenant A (hazard -> accepted cause -> APPROVED control -> approval),
+  // so external actions have a real Phase 4 approval to bind to.
+  const ac = GOLDEN_01.approvedControl;
+  memDb.hazards.set(ac.hazardId, {
+    id: ac.hazardId,
+    tenant_id: tA.id,
+    title: "After-hours client contact intrusion (seeded)",
+    owner_principal_id: principalA.id,
+    originating_release_id: baselineReleaseId,
+    disposition: "OPEN",
+    version: 1,
+    created_at: validFrom
+  });
+  memDb.causes.set(ac.causeId, {
+    id: ac.causeId,
+    tenant_id: tA.id,
+    hazard_id: ac.hazardId,
+    statement: "Client matters are routed to individuals outside working hours with no rota.",
+    status: "REVIEWED_ACCEPTED",
+    reviewed_by: principalA.id,
+    reviewed_at: validFrom,
+    version: 1,
+    created_at: validFrom
+  });
+  const controlDraft = {
+    hazardId: ac.hazardId,
+    causeId: ac.causeId,
+    scope: "Corporate Litigation Practice",
+    objective: "Route after-hours client contact through a staffed rota",
+    ownerPrincipalId: principalA.id,
+    dueDate: "2026-12-31",
+    verificationPlan: { baselineReleaseId, primaryMetric: "BOUNDARY_INTRUSION_SHARE", minDays: 28 }
+  };
+  const controlHash = materialHash(controlDraft);
+  memDb.interventions.set(ac.interventionId, {
+    id: ac.interventionId,
+    tenant_id: tA.id,
+    hazard_id: ac.hazardId,
+    cause_id: ac.causeId,
+    state: "APPROVED",
+    version: 1,
+    scope: controlDraft.scope,
+    objective: controlDraft.objective,
+    owner_principal_id: principalA.id,
+    due_date: controlDraft.dueDate,
+    verification_plan: controlDraft.verificationPlan,
+    material_hash: controlHash,
+    created_at: validFrom
+  });
+  memDb.approvals.set(ac.approvalId, {
+    id: ac.approvalId,
+    tenant_id: tA.id,
+    intervention_id: ac.interventionId,
+    approved_version: 1,
+    approved_material_hash: controlHash,
+    approver_principal_id: principalA.id,
+    authority_ref: "auth:playbook-b4",
+    policy_resolution: { gate: "APPROVAL", resolved: true },
+    expires_at: null,
+    revoked_at: null,
+    approved_at: validFrom
+  });
 
   // Seed Phase 6 Bounded AI Use Cases & Tool Catalog
   const explainUseCase = {

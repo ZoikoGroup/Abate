@@ -93,3 +93,23 @@
 - Golden Demo Cycle (`demo-cycle`): **16/16 Steps Passing**
 - Frontend Production Build (`vite build`): **Clean (30 modules, 0 errors)**
 
+
+---
+
+## 6. Review Fixes (30 October 2026)
+
+A code review found defects the original suites did not cover. Each fix has a regression test that fails without it.
+
+| # | Defect | Fix |
+|---|---|---|
+| 1 | GDPR erasure reported `deleted: n` but deleted nothing (memory engine matched the DELETE as a SELECT; on PostgreSQL the `work_fact` table does not exist). Tombstones were stamped verified before deletion and used a key ingest does not check. | `requestErasure` uses the shared tombstone → guarded delete → re-read verification path (`purgeWithTombstones`), respects legal holds, blocks re-ingestion, and runs as an idempotent, audited command limited to Risk Owner / Employer Admin. |
+| 2 | `GET/POST /api/v2/ops/kill-switches` had no authentication and hard-coded Tenant A's id. | Require a support-operator token; run on a tenant-less `withPlatform` transaction; record the operator. Tenants get read-only `GET /api/v2/ai/kill-switches`. |
+| 3 | Entitlements, policy resolution, evidence package by id, corrections, AI run list, action proposals and erasure skipped membership checks. | All call `resolveActor`; state-changing routes check roles. |
+| 4 | Policy resolution always returned no packs: `FROM tenant_policy_binding` was answered by the `FROM tenant` branch, and seeded rows did not use the 0051 column names. | Word-boundary match for the tenant table; seed and memory engine use the migration's columns (`pack_key`, `bound_from`, `applies_to`, ...). |
+| 5 | Action grants: signing secret hard-coded; grant not bound to tenant, attempt or approval; no approval required; tool/target read from the request body (so UI dispatch always failed); provider called inside the DB transaction; live leases could be stolen. | `ACTION_GRANT_SECRET` config, timing-safe check, schema-validated payload bound to tenant + attempt + approval; proposals require a Phase 4 approval that still binds the control's current version (re-checked at dispatch, else `BLOCKED` without sending); tool/target/params come from the stored attempt; dispatch is claim (commit) → provider call outside any transaction → fenced result write; only PENDING or expired leases can be claimed. |
+| 6 | `evidence_item` had RLS forced with no policy; AI catalogs writable by `abate_app`; Phase 6 memory tables missing from the rollback snapshot; hazard/control/release ids accepted any string. | Migration `0061_phase6_hardening.sql` (verified on PostgreSQL 16.2); rollback covers all tables; UUID validation restored (non-UUID `rel-baseline-1` alias removed). |
+| 7 | The Bounded AI tab had no navigation button. | Added "Bounded AI & Actions (Phase 6)". |
+
+**Open:** `policy_pack` (0051) and `jurisdiction_pack` (0050) are two catalogs for the same concept, so the team needs to agree on one. `corrections.ts` passes SQL parameters out of order (`SET status = 'STALE' WHERE id = $1` with `["STALE", id]`), which only works on the memory engine.
+
+Suites after fixes: `test-fast` 9/9, `test-boundaries` 48/48 (6 new), `test-slo` 8/8 (2 new), demo cycle complete, frontend build clean.

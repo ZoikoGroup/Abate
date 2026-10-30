@@ -157,6 +157,13 @@ export default function App() {
         </button>
         <button
           type="button"
+          className={`tab-button ${activeTab === "ai" ? "active" : ""}`}
+          onClick={() => setActiveTab("ai")}
+        >
+          Bounded AI &amp; Actions (Phase 6)
+        </button>
+        <button
+          type="button"
           className={`tab-button ${activeTab === "operations" ? "active" : ""}`}
           onClick={() => setActiveTab("operations")}
         >
@@ -244,7 +251,7 @@ export default function App() {
           />
         )}
 
-                {activeTab === "retention" && (
+        {activeTab === "retention" && (
           <RetentionTab
             currentTenant={currentTenant}
             token={token}

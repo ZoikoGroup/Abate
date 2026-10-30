@@ -1035,24 +1035,25 @@ export async function fetchAiRuns(token?: string): Promise<AiRunView[]> {
   return api<AiRunView[]>("/api/v2/ai/runs", { token });
 }
 
+// Tenant view (read-only). Changing a switch is an ops action: setKillSwitch needs a support-operator token.
 export async function fetchKillSwitches(token?: string): Promise<KillSwitchRecord[]> {
-  return api<KillSwitchRecord[]>("/api/v2/ops/kill-switches", { token });
+  return api<KillSwitchRecord[]>("/api/v2/ai/kill-switches", { token });
 }
 
 export async function setKillSwitch(
   scope: string,
   active: boolean,
-  token?: string
+  supportToken: string
 ): Promise<KillSwitchRecord> {
   return api<KillSwitchRecord>("/api/v2/ops/kill-switches", {
     method: "POST",
     body: JSON.stringify({ scope, active }),
-    token
+    token: supportToken
   });
 }
 
 export async function proposeAction(
-  proposal: { tool: string; target: string; params: Record<string, any>; resourceVersion: number; approvalRef?: string },
+  proposal: { tool: string; target: string; params: Record<string, any>; resourceVersion: number; approvalRef: string },
   token?: string
 ): Promise<{ attempt: ActionAttemptView; grantToken: string }> {
   return api("/api/v2/actions/proposals", {
@@ -1074,3 +1075,7 @@ export async function dispatchAction(
     token
   });
 }
+
+// Seeded ABATE-GOLDEN-01 fixtures used by the lab screens (Tenant A)
+export const BASELINE_RELEASE_ID = "00000000-0000-4000-a003-000000000001";
+export const SEEDED_APPROVAL_ID = "00000000-0000-4000-a007-000000000004";

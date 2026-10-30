@@ -19,7 +19,8 @@ import {
   concludeVerification,
   setHazardDisposition,
   exportEvidencePackage,
-  PRESET_TENANTS
+  PRESET_TENANTS,
+  BASELINE_RELEASE_ID
 } from "../../api/client";
 
 interface HazardControlTabProps {
@@ -37,7 +38,7 @@ export function HazardControlTab({ currentTenant, token }: HazardControlTabProps
 
   // Form states
   const [newHazardTitle, setNewHazardTitle] = useState("Chronic After-Hours Boundary Intrusion");
-  const [newOriginatingReleaseId, setNewOriginatingReleaseId] = useState("rel-baseline-1");
+  const [newOriginatingReleaseId, setNewOriginatingReleaseId] = useState(BASELINE_RELEASE_ID);
   const [newCauseStatement, setNewCauseStatement] = useState("Unpredictable late-night cross-border partner filing demands");
   const [newControlScope, setNewControlScope] = useState("Corporate Litigation practice group");
   const [newControlObjective, setNewControlObjective] = useState("Enforce scheduled delivery windows and silent night servers");
@@ -191,7 +192,7 @@ export function HazardControlTab({ currentTenant, token }: HazardControlTabProps
       setFeedback(null);
       const plan = {
         primaryMetric: "BOUNDARY_INTRUSION_SHARE",
-        baselineReleaseId: hazardDetail?.hazard.originating_release_id || "rel-baseline-1",
+        baselineReleaseId: hazardDetail?.hazard.originating_release_id || BASELINE_RELEASE_ID,
         targetDelta: -10.0,
         adjacentTolerance: 5.0,
         minDays: 28
@@ -333,7 +334,7 @@ export function HazardControlTab({ currentTenant, token }: HazardControlTabProps
       setFeedback(null);
       const plan = {
         primaryMetric: "BOUNDARY_INTRUSION_SHARE",
-        baselineReleaseId: hazardDetail?.hazard.originating_release_id || "rel-baseline-1",
+        baselineReleaseId: hazardDetail?.hazard.originating_release_id || BASELINE_RELEASE_ID,
         targetDelta: -10.0,
         adjacentTolerance: 5.0,
         minDays: 28,

@@ -148,6 +148,36 @@ async function run() {
     assert.strictEqual(await verify({ ...issued, generatedAt: new Date(0).toISOString() }), false);
   });
 
+  await check("Kill switches: only a support operator can read or flip them; tenants get a read-only view", async () => {
+    const flip = (token?: string) => call("/api/v2/ops/kill-switches", { method: "POST", ...(token ? { token } : {}), body: JSON.stringify({ scope: "use_case:explain_release", active: false }) });
+    assert.strictEqual((await flip()).status, 401, "Unauthenticated callers must not change global AI state");
+    assert.strictEqual((await flip(tenantToken)).status, 401, "Tenant tokens must not change global AI state");
+    const bySupport = await flip(supportToken);
+    assert.strictEqual(bySupport.status, 200);
+    assert.strictEqual((await bySupport.json()).changed_by, "ops.slo-gate", "The operator is recorded");
+    assert.strictEqual((await call("/api/v2/ops/kill-switches")).status, 401);
+    assert.strictEqual((await call("/api/v2/ai/kill-switches", { token: tenantToken })).status, 200);
+  });
+
+  await check("Membership: a valid token for a subject with no membership is refused on every Phase 6 route", async () => {
+    const strangerToken = (await (await call("/api/v2/auth/token", {
+      method: "POST",
+      body: JSON.stringify({ tenantId: GOLDEN_01.tenantA.id, subject: "auth0|not-a-member", role: "RISK_OWNER" })
+    })).json()).token as string;
+    const probes: Array<[string, RequestInit]> = [
+      ["/api/v2/entitlements", {}],
+      ["/api/v2/policy/resolution", {}],
+      ["/api/v2/ai/runs", {}],
+      ["/api/v2/evidence-packages/00000000-0000-4000-a000-000000000001", {}],
+      ["/api/v2/corrections/ingest", { method: "POST", body: "{}" }],
+      ["/api/v2/lifecycle/rights-requests", { method: "POST", body: JSON.stringify({ subjectPseudonym: "x" }) }],
+      ["/api/v2/actions/proposals", { method: "POST", body: JSON.stringify({ tool: "ticket_notification", target: "t", params: {}, resourceVersion: 1, approvalRef: GOLDEN_01.approvedControl.approvalId }) }]
+    ];
+    for (const [path, init] of probes) {
+      assert.strictEqual((await call(path, { ...init, token: strangerToken, key: crypto.randomUUID() })).status, 403, path);
+    }
+  });
+
   server.close();
   console.log(`\x1b[32m[SUCCESS] All ${passed} SLO and support gates passed.\x1b[0m`);
   process.exit(0);

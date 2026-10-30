@@ -240,7 +240,18 @@ class MemoryClient {
         retentionClasses: Array.from(memDb.retentionClasses.entries()),
         legalHolds: Array.from(memDb.legalHolds.entries()),
         retentionRuns: Array.from(memDb.retentionRuns.entries()),
-        deletionTombstones: Array.from(memDb.deletionTombstones.entries())
+        deletionTombstones: Array.from(memDb.deletionTombstones.entries()),
+        policyPacks: Array.from(memDb.policyPacks.entries()),
+        decisionEnvelopes: Array.from(memDb.decisionEnvelopes.entries()),
+        evidencePackages: Array.from(memDb.evidencePackages.entries()),
+        rightsRequests: Array.from(memDb.rightsRequests.entries()),
+        aiUseCases: Array.from(memDb.aiUseCases.entries()),
+        aiRuns: Array.from(memDb.aiRuns.entries()),
+        aiKillSwitches: Array.from(memDb.aiKillSwitches.entries()),
+        toolCatalog: Array.from(memDb.toolCatalog.entries()),
+        actionAttempts: Array.from(memDb.actionAttempts.entries()),
+        tenantPolicyBindings: memDb.tenantPolicyBindings,
+        evidenceItems: memDb.evidenceItems
       });
       return { rows: [], rowCount: 0, command: "BEGIN", oid: 0, fields: [] };
     }
@@ -286,6 +297,17 @@ class MemoryClient {
         if (snap.legalHolds) memDb.legalHolds = new Map(snap.legalHolds);
         if (snap.retentionRuns) memDb.retentionRuns = new Map(snap.retentionRuns);
         if (snap.deletionTombstones) memDb.deletionTombstones = new Map(snap.deletionTombstones);
+        if (snap.policyPacks) memDb.policyPacks = new Map(snap.policyPacks);
+        if (snap.decisionEnvelopes) memDb.decisionEnvelopes = new Map(snap.decisionEnvelopes);
+        if (snap.evidencePackages) memDb.evidencePackages = new Map(snap.evidencePackages);
+        if (snap.rightsRequests) memDb.rightsRequests = new Map(snap.rightsRequests);
+        if (snap.aiUseCases) memDb.aiUseCases = new Map(snap.aiUseCases);
+        if (snap.aiRuns) memDb.aiRuns = new Map(snap.aiRuns);
+        if (snap.aiKillSwitches) memDb.aiKillSwitches = new Map(snap.aiKillSwitches);
+        if (snap.toolCatalog) memDb.toolCatalog = new Map(snap.toolCatalog);
+        if (snap.actionAttempts) memDb.actionAttempts = new Map(snap.actionAttempts);
+        if (snap.tenantPolicyBindings) memDb.tenantPolicyBindings = snap.tenantPolicyBindings;
+        if (snap.evidenceItems) memDb.evidenceItems = snap.evidenceItems;
       }
       this.inTransaction = false;
       this.tenantContext = null;
@@ -460,7 +482,8 @@ class MemoryClient {
     }
 
     // Tenant select
-    if (upper.includes("FROM TENANT")) {
+    // Word boundary: "FROM tenant_policy_binding" must not be answered with tenant rows
+    if (/\bFROM\s+TENANT\b/.test(upper)) {
       let rows = Array.from(memDb.tenants.values());
       if (this.tenantContext) {
         rows = rows.filter(t => t.id === this.tenantContext);
@@ -1324,46 +1347,28 @@ class MemoryClient {
       return { rows: [rec], rowCount: 1, command: "INSERT", oid: 0, fields: [] };
     }
 
-    // Policy Pack & Binding Join Select
-    if (upper.includes("FROM POLICY_PACK") && upper.includes("JOIN TENANT_POLICY_BINDING")) {
-      const activeBindings = memDb.tenantPolicyBindings.filter(
-        b => b.tenant_id === this.tenantContext && b.status === "ACTIVE"
-      );
-      const rows = activeBindings.map(b => {
-        const pack = memDb.policyPacks.get(`${b.pack_id}:${b.pack_version}`);
-        return pack ? { ...pack } : null;
-      }).filter(Boolean);
-      return { rows, rowCount: rows.length, command: "SELECT", oid: 0, fields: [] };
-    }
-
-    // Policy Pack Direct Select
+    // Policy Pack Select (global catalog; columns as in 0051_governance_evidence.sql)
     if (upper.includes("FROM POLICY_PACK")) {
       let rows = Array.from(memDb.policyPacks.values());
-      if (params.length >= 2) {
-        rows = rows.filter(p => p.pack_id === params[0] && p.version === Number(params[1]));
-      } else if (params.length === 1) {
-        rows = rows.filter(p => p.pack_id === params[0]);
-      }
-      if (upper.includes("STATUS = 'APPROVED'")) {
-        rows = rows.filter(p => p.status === "APPROVED");
-      }
+      if (params.length >= 1) rows = rows.filter(p => p.pack_key === params[0]);
+      if (params.length >= 2) rows = rows.filter(p => p.version === Number(params[1]));
+      if (upper.includes("STATUS = 'APPROVED'")) rows = rows.filter(p => p.status === "APPROVED");
       return { rows, rowCount: rows.length, command: "SELECT", oid: 0, fields: [] };
     }
 
     // Tenant Policy Binding Insert
     if (upper.includes("INSERT INTO TENANT_POLICY_BINDING")) {
-      const [id, tId, packId, packVer, boundAt, boundBy, status] = params;
+      const [tId, packKey, packVersion, appliesTo, boundFrom, boundTo] = params;
       if (this.tenantContext && tId !== this.tenantContext) {
         throw new Error("RLS WITH CHECK violation: cross-tenant binding write rejected");
       }
       const rec = {
-        id,
         tenant_id: tId,
-        pack_id: packId,
-        pack_version: Number(packVer),
-        bound_at: boundAt || new Date().toISOString(),
-        bound_by: boundBy || null,
-        status: status || "ACTIVE"
+        pack_key: packKey,
+        pack_version: Number(packVersion),
+        applies_to: typeof appliesTo === "string" ? JSON.parse(appliesTo) : (appliesTo ?? {}),
+        bound_from: boundFrom,
+        bound_to: boundTo ?? null
       };
       memDb.tenantPolicyBindings.push(rec);
       return { rows: [rec], rowCount: 1, command: "INSERT", oid: 0, fields: [] };
@@ -1512,22 +1517,6 @@ class MemoryClient {
     if (upper.includes("FROM RIGHTS_REQUEST")) {
       const rows = Array.from(memDb.rightsRequests.values()).filter(r => r.tenant_id === this.tenantContext);
       return { rows, rowCount: rows.length, command: "SELECT", oid: 0, fields: [] };
-    }
-
-    // Work Fact Select & Delete (compatible with both work_fact and work_fact_revision)
-    if (upper.includes("FROM WORK_FACT") && !upper.includes("WORK_FACT_REVISION")) {
-      const rows = Array.from(memDb.workFactRevisions.values()).filter(r => r.tenant_id === this.tenantContext);
-      return { rows, rowCount: rows.length, command: "SELECT", oid: 0, fields: [] };
-    }
-
-    if (upper.includes("DELETE FROM WORK_FACT") && !upper.includes("WORK_FACT_REVISION")) {
-      const factId = params[0];
-      const entry = Array.from(memDb.workFactRevisions.entries()).find(([, f]) => f.id === factId && f.tenant_id === this.tenantContext);
-      if (entry) {
-        memDb.workFactRevisions.delete(entry[0]);
-        return { rows: [entry[1]], rowCount: 1, command: "DELETE", oid: 0, fields: [] };
-      }
-      return { rows: [], rowCount: 0, command: "DELETE", oid: 0, fields: [] };
     }
 
     // -------------------------------------------------------------
@@ -1684,7 +1673,10 @@ class MemoryClient {
       if (upper.includes("SET STATE = 'LEASED'")) {
         const attemptId = params.length >= 3 ? params[2] : params[0];
         const rec = memDb.actionAttempts.get(attemptId);
-        if (rec && rec.tenant_id === this.tenantContext) {
+        // Mirrors: state = 'PENDING' OR (state = 'LEASED' AND lease_expires_at < $5)
+        const claimable = params.length < 5 || rec?.state === "PENDING" ||
+          (rec?.state === "LEASED" && rec.lease_expires_at && new Date(rec.lease_expires_at) < new Date(params[4]));
+        if (rec && rec.tenant_id === this.tenantContext && claimable) {
           rec.state = "LEASED";
           if (params.length >= 3) {
             rec.lease_owner = params[0];
@@ -1803,6 +1795,42 @@ export async function withTenant<T>(tenantId: string, fn: (tx: Tx) => Promise<T>
     await memClient.query("BEGIN");
     await memClient.query("SELECT set_config('app.tenant_id', $1, true)", [tenantId]);
     const out = await fn({ q: memClient.query.bind(memClient), tenantId });
+    await memClient.query("COMMIT");
+    return out;
+  } catch (e) {
+    await memClient.query("ROLLBACK");
+    throw e;
+  } finally {
+    memClient.release();
+  }
+}
+
+/**
+ * withPlatform: Transaction with NO tenant context, for platform-global tables (e.g. ai_kill_switch).
+ * Tenant tables stay invisible here (RLS fails closed), so this cannot be used to reach tenant data.
+ */
+export async function withPlatform<T>(fn: (tx: Tx) => Promise<T>): Promise<T> {
+  const usePg = await checkPgHealth();
+
+  if (usePg && appPool) {
+    const client: PoolClient = await appPool.connect();
+    try {
+      await client.query("BEGIN");
+      const out = await fn({ q: client.query.bind(client) as QueryFn, tenantId: "" });
+      await client.query("COMMIT");
+      return out;
+    } catch (e) {
+      await client.query("ROLLBACK").catch(() => {});
+      throw e;
+    } finally {
+      client.release();
+    }
+  }
+
+  const memClient = new MemoryClient();
+  try {
+    await memClient.query("BEGIN");
+    const out = await fn({ q: memClient.query.bind(memClient), tenantId: "" });
     await memClient.query("COMMIT");
     return out;
   } catch (e) {
