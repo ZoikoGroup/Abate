@@ -30,7 +30,7 @@ const DAY_MS = 24 * 3600 * 1000;
 // Retention and legal holds change what evidence survives; only accountable owners may set them.
 const RETENTION_ADMIN_ROLES = ["RISK_OWNER", "EMPLOYER_ADMIN"];
 
-function requireRetentionAdmin(actor: Actor, command: string): void {
+export function requireRetentionAdmin(actor: Actor, command: string): void {
   authorize(actor, command);
   if (!actor.memberships.some(m => RETENTION_ADMIN_ROLES.includes(m.domain_role))) {
     throw new AppError("FORBIDDEN", "Only a Risk Owner or Employer Admin may change retention or legal holds.");
@@ -351,6 +351,54 @@ export async function releaseLegalHold(args: {
 }
 
 /**
+ * Tombstone, delete, then re-read to confirm each fact is gone. Shared by retention runs and
+ * rights-request erasure. The storage guard refuses any delete without a prior tombstone or under
+ * an active legal hold; any verification miss throws and rolls the caller's transaction back.
+ * Returns the number of verified deletions.
+ */
+export async function purgeWithTombstones(
+  tx: Tx,
+  facts: Array<FactRow & Record<string, any>>,
+  opts: { runId: string; category: DataCategory; tenantSecret: string }
+): Promise<number> {
+  for (const fact of facts) {
+    await tx.q(
+      `INSERT INTO deletion_tombstone (id, tenant_id, run_id, data_category, record_ref, record_digest, record_key_digest)
+       VALUES ($1, $2, $3, $4, $5, $6, $7)`,
+      [
+        crypto.randomUUID(),
+        tx.tenantId,
+        opts.runId,
+        opts.category,
+        fact.id,
+        sha256Hex(canonicalJson(fact)),
+        recordKeyDigest(opts.tenantSecret, {
+          connectionId: fact.connection_id,
+          sourceRecordId: fact.source_record_id,
+          revision: fact.revision
+        })
+      ]
+    );
+    await tx.q(`DELETE FROM work_fact_revision WHERE id = $1`, [fact.id]);
+  }
+
+  if (facts.length === 0) return 0;
+
+  const purgedIds = facts.map(f => f.id);
+  const remaining = new Set(
+    (await tx.q(`SELECT id FROM work_fact_revision WHERE id = ANY($1)`, [purgedIds])).rows.map((r: any) => r.id)
+  );
+  const verifiedAt = new Date().toISOString();
+  for (const id of purgedIds) {
+    if (remaining.has(id)) {
+      throw new AppError("UNAVAILABLE", "Deletion could not be verified; the operation was rolled back.");
+    }
+    await tx.q(`UPDATE deletion_tombstone SET verified_at = $1 WHERE record_ref = $2`, [verifiedAt, id]);
+  }
+  return purgedIds.length;
+}
+
+/**
  * Purge run: for each expired, unheld fact write a tombstone, delete the row, then re-read to
  * verify absence. Any verification miss rolls the whole run back. The receipt holds counts only.
  */
@@ -375,42 +423,7 @@ export async function runRetention(args: {
       const runId = crypto.randomUUID();
       const plan = await planRun(tx, args.dataCategory, now);
 
-      let verified = 0;
-      for (const fact of plan.purge) {
-        await tx.q(
-          `INSERT INTO deletion_tombstone (id, tenant_id, run_id, data_category, record_ref, record_digest, record_key_digest)
-           VALUES ($1, $2, $3, $4, $5, $6, $7)`,
-          [
-            crypto.randomUUID(),
-            tx.tenantId,
-            runId,
-            args.dataCategory,
-            fact.id,
-            sha256Hex(canonicalJson(fact)),
-            recordKeyDigest(tenantSecret, {
-              connectionId: fact.connection_id,
-              sourceRecordId: fact.source_record_id,
-              revision: fact.revision
-            })
-          ]
-        );
-        await tx.q(`DELETE FROM work_fact_revision WHERE id = $1`, [fact.id]);
-      }
-
-      if (plan.purge.length > 0) {
-        const purgedIds = plan.purge.map(f => f.id);
-        const remaining = new Set(
-          (await tx.q(`SELECT id FROM work_fact_revision WHERE id = ANY($1)`, [purgedIds])).rows.map((r: any) => r.id)
-        );
-        const verifiedAt = new Date().toISOString();
-        for (const id of purgedIds) {
-          if (remaining.has(id)) {
-            throw new AppError("UNAVAILABLE", "Deletion could not be verified; the retention run was rolled back.");
-          }
-          await tx.q(`UPDATE deletion_tombstone SET verified_at = $1 WHERE record_ref = $2`, [verifiedAt, id]);
-          verified++;
-        }
-      }
+      const verified = await purgeWithTombstones(tx, plan.purge, { runId, category: args.dataCategory, tenantSecret });
 
       const receipt: RetentionRunReceipt = {
         runId,

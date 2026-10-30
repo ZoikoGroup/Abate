@@ -14,6 +14,7 @@ export interface AppConfig {
   authIssuer: string;
   authAudience: string;
   authSecret: string;
+  actionGrantSecret: string;
   fixedClock: string;
 }
 
@@ -31,6 +32,7 @@ export function loadConfig(): AppConfig {
     authIssuer: process.env.AUTH_ISSUER || "http://localhost:5000/auth",
     authAudience: process.env.AUTH_AUDIENCE || "abate-api",
     authSecret: process.env.AUTH_SECRET || "dev_secret_key_abate_foundation_do_not_use_in_prod_min_32_chars!",
+    actionGrantSecret: process.env.ACTION_GRANT_SECRET || "dev_action_grant_key_abate_do_not_use_in_prod_min_32_chars!",
     fixedClock: process.env.FIXED_CLOCK || "2026-03-02T09:00:00Z"
   };
 }

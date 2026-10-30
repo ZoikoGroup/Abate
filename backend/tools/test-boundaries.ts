@@ -25,8 +25,9 @@ import {
   getRetentionState
 } from "../src/domains/lifecycle";
 import { generateDiagnosticReceipt, verifyDiagnosticReceipt } from "../src/domains/support";
+import { requestErasure, resolvePolicy } from "../src/domains/lifecycle";
 import { runAiUseCase, setKillSwitch, seedApprovedKnowledge } from "../src/domains/ai";
-import { mintGrant, verifyGrant, createActionAttempt, dispatchAttempt } from "../src/domains/actions";
+import { mintGrant, verifyGrant, paramHashOf, createActionAttempt, dispatchAttempt, proposeAction, dispatchAction, toolProviders } from "../src/domains/actions";
 
 
 console.log("\x1b[36m=== Abate Task Runner: test-boundaries (Constitutional & Isolation Gates) ===\x1b[0m");
@@ -1074,17 +1075,20 @@ async function run() {
 
   // 39. Mutated Action Parameters Fail Grant Verification
   await test("Phase 6 Action Lab 5: Mutated action parameters fail grant verification (FORBIDDEN)", async () => {
+    const proposed = { message: "Scheduled rest window notice" };
     const grantToken = mintGrant({
       tenantId: tenantAId,
-      actor: whoA.subject,
-      runId: crypto.randomUUID(),
+      actor: actorA.principalId,
+      attemptId: crypto.randomUUID(),
       tool: "ticket_notification",
-      paramHash: "sha256-original-hash",
+      paramHash: paramHashOf(proposed),
       target: "team-litigation",
-      resourceVersion: 1
+      resourceVersion: 1,
+      approvalRef: GOLDEN_01.approvedControl.approvalId
     });
 
-    // Tampered parameters: grant was for something else
+    // Untampered parameters verify; tampered ones are refused
+    verifyGrant(grantToken, { tool: "ticket_notification", target: "team-litigation", params: proposed });
     assert.throws(() => {
       verifyGrant(grantToken, {
         tool: "ticket_notification",
@@ -1096,35 +1100,37 @@ async function run() {
 
   // 40. Ambiguous Timeout Leads to UNKNOWN_OUTCOME and Reconciliation
   await test("Phase 6 Action Lab 6: Timeout after provider dispatch records UNKNOWN_OUTCOME", async () => {
-    await withTenant(tenantAId, async (tx) => {
-      const attempt = await createActionAttempt(tx, {
-        tool: "ticket_notification",
-        target: "team-litigation",
-        params: { simulateTimeout: true },
-        resourceVersion: 1
-      });
+    const attempt = await withTenant(tenantAId, tx => createActionAttempt(tx, {
+      tool: "ticket_notification",
+      target: "team-litigation",
+      params: { simulateTimeout: true },
+      resourceVersion: 1,
+      approvalRef: GOLDEN_01.approvedControl.approvalId
+    }));
 
-      const res = await dispatchAttempt(tx, attempt.id, { simulateTimeout: true });
-      assert.strictEqual(res.state, "UNKNOWN_OUTCOME", "Network timeout must not be guessed as failed or retried blindly");
+    const res = await dispatchAttempt(tenantAId, attempt.id, { simulateTimeout: true });
+    assert.strictEqual(res.state, "UNKNOWN_OUTCOME", "Network timeout must not be guessed as failed or retried blindly");
 
-      const row = (await tx.q("SELECT * FROM action_attempt WHERE id = $1", [attempt.id])).rows[0];
-      assert.strictEqual(row.state, "UNKNOWN_OUTCOME");
-    });
+    const row = await withTenant(tenantAId, async tx => (await tx.q("SELECT * FROM action_attempt WHERE id = $1", [attempt.id])).rows[0]);
+    assert.strictEqual(row.state, "UNKNOWN_OUTCOME");
+    await assert.rejects(() => dispatchAttempt(tenantAId, attempt.id, { simulateTimeout: true }), isCode("CONFLICT"), "UNKNOWN_OUTCOME must not be re-dispatched blindly");
   });
 
   // 41. Stale Worker Fencing Token Guard
   await test("Phase 6 Action Lab 7: Stale worker write blocked by fencing token mismatch", async () => {
+    const attempt = await withTenant(tenantAId, tx => createActionAttempt(tx, {
+      tool: "calendar_window",
+      target: "team-litigation",
+      params: { window: "silent-night" },
+      resourceVersion: 1,
+      approvalRef: GOLDEN_01.approvedControl.approvalId
+    }));
+
+    // Worker 1 claims and completes -> fencing token = 1
+    const first = await dispatchAttempt(tenantAId, attempt.id, { window: "silent-night" }, { workerId: "worker-1" });
+    assert.strictEqual(first.fencingToken, 1);
+
     await withTenant(tenantAId, async (tx) => {
-      const attempt = await createActionAttempt(tx, {
-        tool: "calendar_window",
-        target: "team-litigation",
-        params: { window: "silent-night" },
-        resourceVersion: 1
-      });
-
-      // Worker 1 claims attempt -> fencing token = 1
-      await dispatchAttempt(tx, attempt.id, { window: "silent-night" }, "worker-1");
-
       // Worker 2 takes over -> fencing token = 2
       const claim2 = await tx.q(
         "UPDATE action_attempt SET state = 'LEASED', fencing_token = fencing_token + 1 WHERE id = $1 RETURNING fencing_token",
@@ -1158,6 +1164,134 @@ async function run() {
       // Deactivate kill switch for subsequent tests
       await setKillSwitch(tx, "all_ai", false, "ops.admin");
     });
+  });
+
+  // -------------------------------------------------------------
+  // Phase 6 review fixes (each of these failed on the code as first merged)
+  // -------------------------------------------------------------
+
+  const memberA = { ...actorA, principalId: "00000000-0000-4000-a002-000000000002", memberships: [{ organization_id: "00000000-0000-4000-a001-000000000001", domain_role: "MEMBER" }] };
+  const subjectFacts = (pseudonym: string) => Array.from(memDb.workFactRevisions.values()).filter(f => f.subject_pseudonym === pseudonym);
+
+  // 43. Erasure really deletes, proves it, keeps held data, and blocks re-delivery
+  await test("Review fix: GDPR erasure deletes with verified tombstones, keeps held facts, and refuses re-delivery", async () => {
+    const item = (recordId: string) => ({ ...workItem(recordId, 3), subjectRef: "emp-erasure-subject" });
+    await ingestBatch({ who: whoA, actor: actorA, batch: { connectionId: connAId, batchId: `batch-erase-a-${crypto.randomUUID()}`, items: [item("erase-a-1"), item("erase-a-2")] } });
+    await ingestBatch({ who: whoA, actor: actorA, batch: { connectionId: connA2Id, batchId: `batch-erase-a2-${crypto.randomUUID()}`, items: [item("erase-a2-1")] } });
+    const pseudonym = factBySource("erase-a-1")!.subject_pseudonym;
+    assert.strictEqual(subjectFacts(pseudonym).length, 3);
+
+    const hold = await placeLegalHold({
+      who: whoA, actor: actorA, idempotencyKey: crypto.randomUUID(),
+      input: { dataCategory: "WORK_FACT", scopeConnectionId: connA2Id, matterRef: "MATTER-ERASE", reason: "Preserve source A2 during claim" }
+    });
+
+    await assert.rejects(() => requestErasure({ who: whoA, actor: memberA, input: { subjectPseudonym: pseudonym }, idempotencyKey: crypto.randomUUID() }), isCode("FORBIDDEN"));
+
+    const key = crypto.randomUUID();
+    const res = await requestErasure({ who: whoA, actor: actorA, input: { subjectPseudonym: pseudonym }, idempotencyKey: key });
+    const replay = await requestErasure({ who: whoA, actor: actorA, input: { subjectPseudonym: pseudonym }, idempotencyKey: key });
+    assert.deepStrictEqual([res.body.deleted, res.body.verified, res.body.heldExceptions], [2, 2, 1]);
+    assert.strictEqual(replay.body.requestId, res.body.requestId, "Idempotent replay returns the same receipt");
+
+    const left = subjectFacts(pseudonym);
+    assert.deepStrictEqual(left.map(f => f.source_record_id), ["erase-a2-1"], "Only the held fact may remain");
+    const tombstones = Array.from(memDb.deletionTombstones.values()).filter(t => t.run_id === res.body.requestId);
+    assert.ok(tombstones.length === 2 && tombstones.every(t => t.verified_at), "Every erased fact has a verified tombstone");
+
+    const redelivery = await ingestBatch({ who: whoA, actor: actorA, batch: { connectionId: connAId, batchId: `batch-erase-again-${crypto.randomUUID()}`, items: [item("erase-a-1")] } });
+    assert.deepStrictEqual([redelivery.body.accepted, redelivery.body.duplicate], [0, 1], "Erased record must not be re-ingested");
+
+    await releaseLegalHold({ who: whoA, actor: actorA, holdId: hold.body.id, idempotencyKey: crypto.randomUUID(), input: { releaseReason: "Review test cleanup" } });
+  });
+
+  // 44. Policy bindings resolve (prefix collision with the tenant table)
+  await test("Review fix: tenant policy bindings resolve to the bound packs for each tenant", async () => {
+    const appliedA = await withTenant(tenantAId, tx => resolvePolicy(tx, { tenantId: tenantAId, feature: "INTERVENTION_APPROVAL", at: new Date() }));
+    const appliedB = await withTenant(tenantBId, tx => resolvePolicy(tx, { tenantId: tenantBId, feature: "INTERVENTION_APPROVAL", at: new Date() }));
+    assert.deepStrictEqual(appliedA.applied.map(p => p.key).sort(), ["legal-uk-sra", "sector-legal"]);
+    assert.deepStrictEqual(appliedB.applied.map(p => p.key).sort(), ["legal-uk-bar", "sector-legal"]);
+    assert.ok(appliedA.applied.every(p => /^[0-9a-f]{64}$/.test(p.hash)), "Applied packs carry their content hash");
+  });
+
+  // Spy provider: counts real-world sends
+  let spySends = 0;
+  let releaseSlowSend: () => void = () => {};
+  toolProviders["review_spy"] = { async send() { spySends++; return { messageId: "spy", status: "DELIVERED" }; } };
+  toolProviders["review_slow"] = {
+    async send() {
+      spySends++;
+      await new Promise<void>(resolve => { releaseSlowSend = resolve; });
+      return { messageId: "slow", status: "DELIVERED" };
+    }
+  };
+
+  // 45. Actions need a valid approval, and an approval invalidated by a material edit blocks dispatch
+  await test("Review fix: actions require a live approval; editing the control after approval blocks dispatch without sending", async () => {
+    await assert.rejects(() => proposeAction({ who: whoA, actor: actorA, input: { tool: "review_spy", target: "t", params: {}, resourceVersion: 1, approvalRef: crypto.randomUUID() } }), isCode("FORBIDDEN"));
+    await assert.rejects(() => proposeAction({ who: whoA, actor: memberA, input: { tool: "review_spy", target: "t", params: {}, resourceVersion: 1, approvalRef: GOLDEN_01.approvedControl.approvalId } }), isCode("FORBIDDEN"));
+
+    // Own approved chain so the seeded one stays intact
+    const ids = { hazard: crypto.randomUUID(), cause: crypto.randomUUID(), control: crypto.randomUUID(), approval: crypto.randomUUID() };
+    await withTenant(tenantAId, async (tx) => {
+      await tx.q("INSERT INTO hazard (id, tenant_id, title, owner_principal_id, originating_release_id, disposition, version) VALUES ($1, $2, $3, $4, $5, 'OPEN', 1)", [ids.hazard, tenantAId, "Review hazard", actorA.principalId, "00000000-0000-4000-a003-000000000001"]);
+      await tx.q("INSERT INTO cause (id, tenant_id, hazard_id, statement, status, version) VALUES ($1, $2, $3, $4, 'REVIEWED_ACCEPTED', 1)", [ids.cause, tenantAId, ids.hazard, "Rota gap"]);
+      const draft = { hazardId: ids.hazard, causeId: ids.cause, scope: "Team", objective: "Rota", ownerPrincipalId: actorA.principalId, dueDate: "2026-12-31", verificationPlan: {} };
+      await tx.q(
+        "INSERT INTO intervention (id, tenant_id, hazard_id, cause_id, state, version, scope, objective, owner_principal_id, due_date, verification_plan, material_hash) VALUES ($1, $2, $3, $4, 'APPROVED', 1, $5, $6, $7, $8, $9, $10)",
+        [ids.control, tenantAId, ids.hazard, ids.cause, draft.scope, draft.objective, actorA.principalId, draft.dueDate, draft.verificationPlan, materialHash(draft)]
+      );
+      await tx.q(
+        "INSERT INTO approval (id, tenant_id, intervention_id, approved_version, approved_material_hash, approver_principal_id, authority_ref, policy_resolution) VALUES ($1, $2, $3, $4, $5, $6, $7, $8)",
+        [ids.approval, tenantAId, ids.control, 1, materialHash(draft), actorA.principalId, "auth:playbook-b4", { gate: "APPROVAL", resolved: true }]
+      );
+    });
+
+    const proposal = await proposeAction({ who: whoA, actor: actorA, input: { tool: "review_spy", target: "team-a", params: { n: 1 }, resourceVersion: 1, approvalRef: ids.approval } });
+    await withTenant(tenantAId, tx => tx.q("UPDATE intervention SET scope = $1, material_hash = $2, version = 2, state = 'APPROVAL_REQUIRED' WHERE id = $3", ["Whole firm", "changed-hash", ids.control]));
+
+    const before = spySends;
+    const res = await dispatchAction({ who: whoA, actor: actorA, attemptId: proposal.attempt.id, input: { params: { n: 1 }, grantToken: proposal.grantToken } });
+    assert.strictEqual(res.state, "BLOCKED");
+    assert.strictEqual(spySends, before, "A blocked action must never reach the provider");
+  });
+
+  // 46. A grant authorises one attempt in one tenant; tool/target/params come from the stored attempt
+  await test("Review fix: a grant cannot dispatch a different attempt or another tenant's attempt", async () => {
+    const approvalRef = GOLDEN_01.approvedControl.approvalId;
+    const p1 = await proposeAction({ who: whoA, actor: actorA, input: { tool: "review_spy", target: "team-a", params: { n: 2 }, resourceVersion: 1, approvalRef } });
+    const p2 = await proposeAction({ who: whoA, actor: actorA, input: { tool: "review_spy", target: "team-a", params: { n: 3 }, resourceVersion: 1, approvalRef } });
+
+    await assert.rejects(() => dispatchAction({ who: whoA, actor: actorA, attemptId: p2.attempt.id, input: { params: { n: 3 }, grantToken: p1.grantToken } }), isCode("FORBIDDEN"));
+    await assert.rejects(() => dispatchAction({ who: whoB, actor: actorB, attemptId: p1.attempt.id, input: { params: { n: 2 }, grantToken: p1.grantToken } }), isCode("NOT_FOUND"));
+    await assert.rejects(() => dispatchAction({ who: whoA, actor: actorA, attemptId: p1.attempt.id, input: { params: { n: 99 }, grantToken: p1.grantToken } }), isCode("FORBIDDEN"));
+
+    const ok = await dispatchAction({ who: whoA, actor: actorA, attemptId: p1.attempt.id, input: { params: { n: 2 }, grantToken: p1.grantToken } });
+    assert.strictEqual(ok.state, "SUCCEEDED");
+  });
+
+  // 47. The provider is called outside any transaction, and a live lease cannot be stolen
+  await test("Review fix: a live lease cannot be stolen while the provider call is in flight", async () => {
+    const attempt = await withTenant(tenantAId, tx => createActionAttempt(tx, { tool: "review_slow", target: "team-a", params: { n: 4 }, resourceVersion: 1, approvalRef: GOLDEN_01.approvedControl.approvalId }));
+    const inFlight = dispatchAttempt(tenantAId, attempt.id, { n: 4 }, { workerId: "worker-1" });
+    while (spySends === 0 || !(await withTenant(tenantAId, async tx => (await tx.q("SELECT * FROM action_attempt WHERE id = $1", [attempt.id])).rows[0]?.state === "LEASED"))) {
+      await new Promise(r => setTimeout(r, 5));
+    }
+
+    // The lease was committed before the send: another worker sees it and cannot take it over
+    await assert.rejects(() => dispatchAttempt(tenantAId, attempt.id, { n: 4 }, { workerId: "worker-2" }), isCode("CONFLICT"));
+    releaseSlowSend();
+    assert.strictEqual((await inFlight).state, "SUCCEEDED");
+  });
+
+  // 48. Failed transactions roll back Phase 6 tables too
+  await test("Review fix: a failed transaction leaves no Phase 6 rows behind", async () => {
+    const before = memDb.actionAttempts.size;
+    await assert.rejects(() => withTenant(tenantAId, async (tx) => {
+      await createActionAttempt(tx, { tool: "review_spy", target: "rollback", params: { n: crypto.randomUUID() }, resourceVersion: 1 });
+      throw new Error("abort after write");
+    }));
+    assert.strictEqual(memDb.actionAttempts.size, before);
   });
 
   console.log(`\x1b[32m[SUCCESS] All ${passed} boundary, isolation, and reliability tests passed.\x1b[0m`);

@@ -21,6 +21,13 @@ export const GOLDEN_01 = {
     cohortSize: 12,
     defaultPurpose: "WORKPLACE_RISK_ASSESSMENT"
   },
+  // Seeded approved control chain (Tenant A) that external actions bind to
+  approvedControl: {
+    hazardId: "00000000-0000-4000-a007-000000000001",
+    causeId: "00000000-0000-4000-a007-000000000002",
+    interventionId: "00000000-0000-4000-a007-000000000003",
+    approvalId: "00000000-0000-4000-a007-000000000004"
+  },
   // Documented variants from Playbook Section 05 & Phase 0/1 specifications
   variants: {
     nineContributors: {

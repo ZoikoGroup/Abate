@@ -4,7 +4,8 @@ import cors from "cors";
 import { loadConfig } from "./platform/config";
 import { toErrorResponse, AppError } from "./platform/errors";
 import { openApiSpec, CreateOrganizationBody, TokenRequestBody, ZoikoTimeBatchV1, SemanticQueryV1 } from "./contracts";
-import { authenticate, resolveActor, createDevToken } from "./domains/tenant/auth";
+import { authenticate, resolveActor, createDevToken, authorize } from "./domains/tenant/auth";
+import { RightsRequestInputSchema } from "./contracts/governance";
 import { createOrganization, getOrganization, listOrganizations, getTenant } from "./domains/tenant/commands";
 import { ingestBatch, listConnections, getConnection, setConnectionState, listReceipts, listWorkFacts } from "./domains/ingest";
 import { compileRelease, getRelease } from "./domains/privacy";
@@ -23,10 +24,8 @@ import {
   setKillSwitch
 } from "./domains/ai";
 import {
-  mintGrant,
-  verifyGrant,
-  createActionAttempt,
-  dispatchAttempt
+  proposeAction,
+  dispatchAction
 } from "./domains/actions";
 import {
   canTenantFeature,
@@ -36,7 +35,7 @@ import {
   getDecisionEnvelope,
   issuePackage,
   getEvidencePackage,
-  eraseSubject,
+  requestErasure,
   onCorrection,
   acknowledgeCorrection
 } from "./domains/lifecycle";
@@ -84,7 +83,7 @@ import {
   generateDiagnosticReceipt,
   verifyDiagnosticReceipt
 } from "./domains/support";
-import { withTenant } from "./platform/db/with-tenant";
+import { withTenant, withPlatform } from "./platform/db/with-tenant";
 import { drainOnce } from "./worker/outbox-publisher";
 import { memDb } from "./platform/db/with-tenant";
 import { seedTwoTenants } from "./fixtures/seed";
@@ -1359,6 +1358,7 @@ app.post("/api/v2/support/diagnostic-receipts", async (req: Request, res: Respon
 app.get("/api/v2/entitlements", async (req: Request, res: Response) => {
   try {
     const who = await authenticate(getHeader(req, "authorization"));
+    authorize(await resolveActor(who.tenantId, who.subject, new Date()), "entitlements.read");
     const entitlements = getDefaultEntitlements(who.tenantId);
     res.status(200).json({
       tenantId: who.tenantId,
@@ -1373,6 +1373,7 @@ app.get("/api/v2/entitlements", async (req: Request, res: Response) => {
 app.get("/api/v2/policy/resolution", async (req: Request, res: Response) => {
   try {
     const who = await authenticate(getHeader(req, "authorization"));
+    authorize(await resolveActor(who.tenantId, who.subject, new Date()), "policy.read");
     const feature = String(req.query.feature || "INTERVENTION_APPROVAL");
 
     const out = await withTenant(who.tenantId, async (tx) => {
@@ -1430,6 +1431,7 @@ app.get("/api/v2/evidence-packages", async (req: Request, res: Response) => {
 app.get("/api/v2/evidence-packages/:id", async (req: Request, res: Response) => {
   try {
     const who = await authenticate(getHeader(req, "authorization"));
+    authorize(await resolveActor(who.tenantId, who.subject, new Date()), "evidence_package.read");
     const out = await withTenant(who.tenantId, async (tx) => {
       return await getEvidencePackage(tx, String(req.params.id));
     });
@@ -1446,6 +1448,7 @@ app.get("/api/v2/evidence-packages/:id", async (req: Request, res: Response) => 
 app.post("/api/v2/corrections/ingest", async (req: Request, res: Response) => {
   try {
     const who = await authenticate(getHeader(req, "authorization"));
+    authorize(await resolveActor(who.tenantId, who.subject, new Date()), "correction.ingest");
     const { sourceRecordId, affectedStart, affectedEnd, reason } = req.body;
 
     const out = await withTenant(who.tenantId, async (tx) => {
@@ -1467,6 +1470,7 @@ app.post("/api/v2/corrections/ingest", async (req: Request, res: Response) => {
 app.post("/api/v2/corrections/:id/acknowledge", async (req: Request, res: Response) => {
   try {
     const who = await authenticate(getHeader(req, "authorization"));
+    authorize(await resolveActor(who.tenantId, who.subject, new Date()), "correction.acknowledge");
     const out = await withTenant(who.tenantId, async (tx) => {
       return await acknowledgeCorrection(tx, String(req.params.id), who.subject, req.body.notes || "Acknowledged");
     });
@@ -1480,16 +1484,14 @@ app.post("/api/v2/corrections/:id/acknowledge", async (req: Request, res: Respon
 app.post("/api/v2/lifecycle/rights-requests", async (req: Request, res: Response) => {
   try {
     const who = await authenticate(getHeader(req, "authorization"));
-    const { subjectPseudonym } = req.body;
-    if (!subjectPseudonym) {
-      throw new AppError("VALIDATION", "subjectPseudonym is required for rights request.");
-    }
-
-    const out = await withTenant(who.tenantId, async (tx) => {
-      return await eraseSubject(tx, subjectPseudonym);
+    const actor = await resolveActor(who.tenantId, who.subject, new Date());
+    const result = await requestErasure({
+      who,
+      actor,
+      input: RightsRequestInputSchema.parse(req.body),
+      idempotencyKey: getHeader(req, "idempotency-key") || getHeader(req, "x-idempotency-key")
     });
-
-    res.status(200).json(out);
+    res.status(result.status).json(result.body);
   } catch (err) {
     toErrorResponse(err, res);
   }
@@ -1605,6 +1607,7 @@ app.post("/api/v2/ai/runs/:id/discard", async (req: Request, res: Response) => {
 app.get("/api/v2/ai/runs", async (req: Request, res: Response) => {
   try {
     const who = await authenticate(getHeader(req, "authorization"));
+    authorize(await resolveActor(who.tenantId, who.subject, new Date()), "ai.run.read");
     const out = await withTenant(who.tenantId, async (tx) => {
       const res = await tx.q("SELECT * FROM ai_run WHERE tenant_id = $1 ORDER BY created_at DESC", [who.tenantId]);
       return res.rows;
@@ -1618,22 +1621,30 @@ app.get("/api/v2/ai/runs", async (req: Request, res: Response) => {
 // Kill Switches: Ops/Support and Tenant Inspection
 app.get("/api/v2/ops/kill-switches", async (req: Request, res: Response) => {
   try {
-    const out = await withTenant("00000000-0000-4000-a000-00000000000a", async (tx) => {
-      return await getKillSwitches(tx);
-    });
-    res.status(200).json(out);
+    authenticateSupport(getHeader(req, "authorization"));
+    res.status(200).json(await withPlatform(tx => getKillSwitches(tx)));
   } catch (err) {
     toErrorResponse(err, res);
   }
 });
 
+// Global effect: only a support operator may flip a switch, and the operator is recorded
 app.post("/api/v2/ops/kill-switches", async (req: Request, res: Response) => {
   try {
+    const support = authenticateSupport(getHeader(req, "authorization"));
     const input = KillSwitchInput.parse(req.body);
-    const out = await withTenant("00000000-0000-4000-a000-00000000000a", async (tx) => {
-      return await setKillSwitch(tx, input.scope, input.active, "ops.admin");
-    });
-    res.status(200).json(out);
+    res.status(200).json(await withPlatform(tx => setKillSwitch(tx, input.scope, input.active, support.operator)));
+  } catch (err) {
+    toErrorResponse(err, res);
+  }
+});
+
+// Tenants may see which AI features are switched off (no tenant data involved)
+app.get("/api/v2/ai/kill-switches", async (req: Request, res: Response) => {
+  try {
+    const who = await authenticate(getHeader(req, "authorization"));
+    authorize(await resolveActor(who.tenantId, who.subject, new Date()), "ai.kill_switch.read");
+    res.status(200).json(await withPlatform(tx => getKillSwitches(tx)));
   } catch (err) {
     toErrorResponse(err, res);
   }
@@ -1643,46 +1654,24 @@ app.post("/api/v2/ops/kill-switches", async (req: Request, res: Response) => {
 app.post("/api/v2/actions/proposals", async (req: Request, res: Response) => {
   try {
     const who = await authenticate(getHeader(req, "authorization"));
-    const input = ActionProposalInput.parse(req.body);
-
-    const out = await withTenant(who.tenantId, async (tx) => {
-      const attempt = await createActionAttempt(tx, input);
-      const grantToken = mintGrant({
-        tenantId: who.tenantId,
-        actor: who.subject,
-        runId: crypto.randomUUID(),
-        tool: input.tool,
-        paramHash: attempt.paramHash,
-        target: input.target,
-        resourceVersion: input.resourceVersion,
-        approvalRef: input.approvalRef
-      });
-      return { attempt, grantToken };
-    });
-
-    res.status(201).json(out);
+    const actor = await resolveActor(who.tenantId, who.subject, new Date());
+    res.status(201).json(await proposeAction({ who, actor, input: ActionProposalInput.parse(req.body) }));
   } catch (err) {
     toErrorResponse(err, res);
   }
 });
 
-// Dispatch External Action (Domain S09)
+// Dispatch External Action (Domain S09): grant bound to tenant + attempt; tool/target/params from the stored attempt
 app.post("/api/v2/actions/:id/dispatch", async (req: Request, res: Response) => {
   try {
     const who = await authenticate(getHeader(req, "authorization"));
-    const grantToken = getHeader(req, "x-action-grant") || req.body.grantToken;
-    if (!grantToken) {
-      throw new AppError("FORBIDDEN", "Action dispatch requires a signed action grant token.");
-    }
-
-    const { tool, target, params } = req.body;
-    // Parameter-hash binding verification: catch mutations
-    verifyGrant(grantToken, { tool, target, params: params || {} });
-
-    const out = await withTenant(who.tenantId, async (tx) => {
-      return await dispatchAttempt(tx, String(req.params.id), params || {});
+    const actor = await resolveActor(who.tenantId, who.subject, new Date());
+    const out = await dispatchAction({
+      who,
+      actor,
+      attemptId: String(req.params.id),
+      input: { params: req.body?.params ?? {}, grantToken: getHeader(req, "x-action-grant") || req.body?.grantToken }
     });
-
     res.status(200).json(out);
   } catch (err) {
     toErrorResponse(err, res);
