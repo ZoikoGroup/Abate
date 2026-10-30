@@ -7,3 +7,6 @@ export * from "./release";
 export * from "./control";
 export * from "./retention";
 export * from "./support";
+export * from "./governance";
+export * from "./ai";
+export * from "./actions";

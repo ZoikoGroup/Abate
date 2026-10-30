@@ -4,12 +4,19 @@ import { z } from "zod";
 export const ReleaseClassEnum = z.enum(["CLASS_A", "CLASS_B", "CLASS_C"]);
 export type ReleaseClass = z.infer<typeof ReleaseClassEnum>;
 
+const FlexibleDateTime = z.string().transform((val) => {
+  if (/^\d{4}-\d{2}-\d{2}$/.test(val)) {
+    return `${val}T00:00:00.000Z`;
+  }
+  return val;
+}).pipe(z.string().datetime());
+
 export const SemanticQueryV1 = z.object({
   metricId: z.string().min(1),
   metricVersion: z.number().int().min(1).default(1),
   cohortRef: z.string().min(1),
-  periodStart: z.string().datetime(),
-  periodEnd: z.string().datetime(),
+  periodStart: FlexibleDateTime,
+  periodEnd: FlexibleDateTime,
   releaseClass: ReleaseClassEnum.default("CLASS_B")
 }).strict();
 
@@ -46,4 +53,3 @@ export type ReleaseView =
     code: "NOT_AVAILABLE";
     message?: string;
   };
-

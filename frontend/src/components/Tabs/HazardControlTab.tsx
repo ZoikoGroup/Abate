@@ -1,5 +1,6 @@
 // frontend/src/components/Tabs/HazardControlTab.tsx
 import { useState, useEffect } from "react";
+import { AiPanel } from "../AiPanel";
 import {
   type Hazard,
   type ControlDetailView,
@@ -627,6 +628,18 @@ export function HazardControlTab({ currentTenant, token }: HazardControlTabProps
                   <div>Owner Principal: <code className="monospace">{hazardDetail.hazard.owner_principal_id}</code></div>
                   <div>Causes: {hazardDetail.causes.length} | Controls: {hazardDetail.controls.length}</div>
                 </div>
+                {hazardDetail.hazard.originating_release_id && (
+                  <AiPanel
+                    releaseId={hazardDetail.hazard.originating_release_id}
+                    hazardId={hazardDetail.hazard.id}
+                    token={token}
+                    onDraftAccepted={() => {
+                      if (selectedHazardId && token) {
+                        fetchHazardDetail(selectedHazardId, token).then(setHazardDetail);
+                      }
+                    }}
+                  />
+                )}
               </div>
             )}
 

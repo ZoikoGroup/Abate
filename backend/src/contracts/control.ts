@@ -53,7 +53,7 @@ export type CauseStatus = z.infer<typeof CauseStatusEnum>;
 
 export const CreateHazardInput = z.object({
   title: z.string().min(3),
-  originatingReleaseId: z.string().uuid()
+  originatingReleaseId: z.string().min(1)
 }).strict();
 export type CreateHazardInput = z.infer<typeof CreateHazardInput>;
 
@@ -69,8 +69,8 @@ export const ReviewCauseInput = z.object({
 export type ReviewCauseInput = z.infer<typeof ReviewCauseInput>;
 
 export const CreateControlInput = z.object({
-  hazardId: z.string().uuid(),
-  causeId: z.string().uuid(),
+  hazardId: z.string().min(1),
+  causeId: z.string().min(1),
   scope: z.string().min(3),
   objective: z.string().min(3),
   dueDate: z.string().regex(/^\d{4}-\d{2}-\d{2}$/),
@@ -99,9 +99,9 @@ export const ImplementationReceiptInput = z.object({
 export type ImplementationReceiptInput = z.infer<typeof ImplementationReceiptInput>;
 
 export const PinVerificationPlanInput = z.object({
-  baselineReleaseId: z.string().uuid(),
-  postReleaseId: z.string().uuid().optional(),
-  adjacentReleaseIds: z.array(z.string().uuid()).default([]),
+  baselineReleaseId: z.string().min(1),
+  postReleaseId: z.string().min(1).optional(),
+  adjacentReleaseIds: z.array(z.string().min(1)).default([]),
   direction: z.enum(["DECREASE", "INCREASE"]).default("DECREASE"),
   criteria: z.number().default(20.0), // e.g. target 20% improvement
   adjacentTolerance: z.number().default(5.0), // max allowable increase in adjacent cohort
@@ -112,7 +112,7 @@ export type PinVerificationPlanInput = z.infer<typeof PinVerificationPlanInput>;
 export const ConcludeVerificationInput = z.object({
   outcome: VerificationOutcomeEnum,
   residualRisk: z.string().min(5),
-  postReleaseId: z.string().uuid()
+  postReleaseId: z.string().min(1)
 }).strict();
 export type ConcludeVerificationInput = z.infer<typeof ConcludeVerificationInput>;
 

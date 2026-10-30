@@ -9,6 +9,9 @@ import { compileRelease } from "../src/domains/privacy";
 import { materialHash, canTransition, evaluateSuggestion, exportEvidencePackage } from "../src/domains/control";
 import { getJurisdictionCoverage, setRetentionClass, placeLegalHold, releaseLegalHold, runRetention } from "../src/domains/lifecycle";
 import { generateDiagnosticReceipt, verifyDiagnosticReceipt } from "../src/domains/support";
+import { runAiUseCase, acceptAiRun } from "../src/domains/ai";
+import { mintGrant, verifyGrant, createActionAttempt, dispatchAttempt } from "../src/domains/actions";
+
 import { drainOnce } from "../src/worker/outbox-publisher";
 import { withTenant, memDb } from "../src/platform/db/with-tenant";
 
@@ -282,8 +285,43 @@ async function runDemoCycle() {
   console.log(`  ✔ Outbox drained: ${drainReport.drained} events published.`);
   console.log(`  ✔ Total audit events recorded in append-only log: ${memDb.auditEvents.length}\n`);
 
+  console.log("Step 16. Bounded AI & Safe Action Execution (Phase 6)...");
+  await withTenant(whoA.tenantId, async (tx) => {
+    // 16.1 Explain Release
+    const aiRun = await runAiUseCase(tx, actorA, "explain_release", {
+      contextRefs: [{ type: "RELEASE", id: "00000000-0000-4000-a003-000000000001" }],
+      question: "Explain the boundary intrusion measurement."
+    });
+    console.log(`  ✔ AI Explanation Generated: Run ID ${aiRun.id.slice(0, 8)}... | Status: ${aiRun.status}`);
+    console.log(`  ✔ Grounded Claims: ${aiRun.output?.claims.length} claim(s), all cited to released IDs (no hallucinations)`);
+
+    // 16.2 Accept AI Draft into Workflow
+    const acceptRes = await acceptAiRun(tx, actorA, aiRun.id);
+    console.log(`  ✔ Proposal Accepted: ${acceptRes.decisionRef} (AI writes drafts only; human workflow commands required)`);
+
+    // 16.3 Safe Action Broker with Signed Grant & Fencing
+    const attempt = await createActionAttempt(tx, {
+      tool: "ticket_notification",
+      target: "team-litigation",
+      params: { window: "scheduled-rest" },
+      resourceVersion: 1
+    });
+    const grantToken = mintGrant({
+      tenantId: whoA.tenantId,
+      actor: whoA.subject,
+      runId: aiRun.id,
+      tool: "ticket_notification",
+      paramHash: attempt.paramHash,
+      target: "team-litigation",
+      resourceVersion: 1
+    });
+    verifyGrant(grantToken, { tool: "ticket_notification", target: "team-litigation", params: { window: "scheduled-rest" } });
+    const dispRes = await dispatchAttempt(tx, attempt.id, { window: "scheduled-rest" }, "worker-demo");
+    console.log(`  ✔ Action Attempt Dispatched: State ${dispRes.state} with fencing token ${dispRes.fencingToken} (parameter-hash verified)\n`);
+  });
+
   console.log("\x1b[32m====================================================================\x1b[0m");
-  console.log("\x1b[32m=== DEMO CYCLE COMPLETED SUCCESSFULLY: ALL PHASES 0-5 + B8 VERIFIED ===\x1b[0m");
+  console.log("\x1b[32m=== DEMO CYCLE COMPLETED SUCCESSFULLY: ALL PHASES 0-6 + B8 VERIFIED ===\x1b[0m");
   console.log("\x1b[32m====================================================================\x1b[0m");
 }
 

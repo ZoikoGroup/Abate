@@ -18,12 +18,13 @@ import { IngestionTab } from "./components/Tabs/IngestionTab";
 import { CohortAnalyticsTab } from "./components/Tabs/CohortAnalyticsTab";
 import { HazardControlTab } from "./components/Tabs/HazardControlTab";
 import { RetentionTab } from "./components/Tabs/RetentionTab";
+import { BoundedAiTab } from "./components/Tabs/BoundedAiTab";
 import { OperationsTab } from "./components/Tabs/OperationsTab";
 import { OutboxTab } from "./components/Tabs/OutboxTab";
 import { AuditTab } from "./components/Tabs/AuditTab";
 import "./index.css";
 
-type TabKey = "constitutional" | "isolation" | "organizations" | "ingestion" | "analytics" | "hazards" | "retention" | "operations" | "outbox" | "audit";
+type TabKey = "constitutional" | "isolation" | "organizations" | "ingestion" | "analytics" | "hazards" | "retention" | "ai" | "operations" | "outbox" | "audit";
 
 export default function App() {
   const [activeTenantId, setActiveTenantId] = useState(PRESET_TENANTS[0].id);
@@ -243,8 +244,15 @@ export default function App() {
           />
         )}
 
-        {activeTab === "retention" && (
+                {activeTab === "retention" && (
           <RetentionTab
+            currentTenant={currentTenant}
+            token={token}
+          />
+        )}
+
+        {activeTab === "ai" && (
+          <BoundedAiTab
             currentTenant={currentTenant}
             token={token}
           />

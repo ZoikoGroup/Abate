@@ -38,14 +38,44 @@ export function CohortAnalyticsTab({ currentTenant, token }: CohortAnalyticsTabP
   useEffect(() => {
     if (!token) return;
     fetchMetricDefinitions(token)
-      .then(defs => {
-        setMetricDefs(defs);
-        if (defs.length > 0 && !selectedMetricId) {
-          setSelectedMetricId(defs[0].id);
+      .then(rawDefs => {
+        const defs = (Array.isArray(rawDefs) ? rawDefs : [])
+          .map((d: any) => ({
+            ...d,
+            id: d.id || d.metric_id || "BOUNDARY_INTRUSION_SHARE",
+            name: d.name || d.id || d.metric_id || "Boundary Intrusion Share"
+          }))
+          .filter(d => Boolean(d.id));
+
+        if (defs.length === 0) {
+          defs.push({
+            id: "BOUNDARY_INTRUSION_SHARE",
+            version: 1,
+            name: "Boundary Intrusion Share",
+            hazard_domain: "Working Time Quality & Rest Deficits",
+            formula_id: "boundaryIntrusionShare",
+            contributor_floor: 10,
+            min_window_days: 28,
+            created_at: new Date().toISOString()
+          });
         }
+        setMetricDefs(defs);
+        setSelectedMetricId(prev => (prev && defs.some(d => d.id === prev)) ? prev : defs[0].id);
       })
       .catch(err => {
         console.warn("Could not fetch metric definitions:", err);
+        const fallbackDefs = [{
+          id: "BOUNDARY_INTRUSION_SHARE",
+          version: 1,
+          name: "Boundary Intrusion Share",
+          hazard_domain: "Working Time Quality & Rest Deficits",
+          formula_id: "boundaryIntrusionShare",
+          contributor_floor: 10,
+          min_window_days: 28,
+          created_at: new Date().toISOString()
+        }];
+        setMetricDefs(fallbackDefs);
+        setSelectedMetricId("BOUNDARY_INTRUSION_SHARE");
       });
   }, [token]);
 
@@ -55,12 +85,17 @@ export function CohortAnalyticsTab({ currentTenant, token }: CohortAnalyticsTabP
     setLoading(true);
     setFeedback(null);
 
+    const finalStart = (customQueryOverride?.periodStart) || periodStart;
+    const finalEnd = (customQueryOverride?.periodEnd) || periodEnd;
+    const isoStart = finalStart.includes("T") ? finalStart : `${finalStart}T00:00:00.000Z`;
+    const isoEnd = finalEnd.includes("T") ? finalEnd : `${finalEnd}T00:00:00.000Z`;
+
     const query: SemanticQuery = {
       metricId: (customQueryOverride?.metricId) || selectedMetricId || "BOUNDARY_INTRUSION_SHARE",
       metricVersion: 1,
       cohortRef: (customQueryOverride?.cohortRef) || cohortRef || "org:00000000-0000-4000-a001-000000000001",
-      periodStart: (customQueryOverride?.periodStart) || periodStart,
-      periodEnd: (customQueryOverride?.periodEnd) || periodEnd,
+      periodStart: isoStart,
+      periodEnd: isoEnd,
       releaseClass: (customQueryOverride?.releaseClass) || releaseClass,
       ...customQueryOverride
     };
@@ -309,7 +344,7 @@ export function CohortAnalyticsTab({ currentTenant, token }: CohortAnalyticsTabP
               {metricDefs.length > 0 ? (
                 metricDefs.map(d => (
                   <option key={d.id} value={d.id}>
-                    {d.name} ({d.id})
+                    {d.name || d.id || "Boundary Intrusion Share"} ({d.id || "BOUNDARY_INTRUSION_SHARE"})
                   </option>
                 ))
               ) : (
