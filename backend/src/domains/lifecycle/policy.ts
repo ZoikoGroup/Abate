@@ -1,6 +1,6 @@
 // backend/src/domains/lifecycle/policy.ts
 import { AppError } from "../../platform/errors";
-import { DataCategory, JurisdictionPackContent } from "../../contracts/retention";
+import { DataCategory, RetentionBounds } from "../../contracts/retention";
 
 /**
  * Lowest retention a tenant may configure for work facts regardless of jurisdiction pack.
@@ -9,17 +9,20 @@ import { DataCategory, JurisdictionPackContent } from "../../contracts/retention
  */
 export const MEASUREMENT_MIN_RETENTION_DAYS = 28;
 
+// A policy_pack row (0051_governance_evidence.sql)
 export interface PackRow {
-  pack_id: string;
+  id: string;
+  pack_key: string;
   version: number;
-  jurisdiction: string;
-  sector: string;
+  kind: "JURISDICTION" | "SECTOR" | "CUSTOMER";
   effective_from: string | Date;
   effective_to: string | Date | null;
-  status: "APPROVED" | "RETIRED";
-  content: JurisdictionPackContent;
+  status: "DRAFT" | "APPROVED" | "WITHDRAWN";
+  source_refs: string[];
+  accountable_reviewer: string;
+  review_date: string | Date;
+  content: { title?: string; retention?: RetentionBounds } & Record<string, unknown>;
   content_hash: string;
-  approved_by: string;
 }
 
 export interface HoldRow {
@@ -82,6 +85,7 @@ export function planPackPublish(
 
 /**
  * Bounds a tenant-chosen duration by the pack in effect and the measurement minimum.
+ * A pack that does not address the category leaves it unconfigurable (claims must match legal coverage).
  * Returns null when allowed, or the reason it is not.
  */
 export function retentionBoundsViolation(
@@ -89,15 +93,18 @@ export function retentionBoundsViolation(
   category: DataCategory,
   pack: PackRow
 ): string | null {
+  const bounds = pack.content.retention?.[category];
+  if (!bounds) {
+    return `${pack.pack_key} v${pack.version} does not address ${category} retention; it cannot be configured.`;
+  }
   if (days < MEASUREMENT_MIN_RETENTION_DAYS) {
     return `Retention below ${MEASUREMENT_MIN_RETENTION_DAYS} days would prevent any Privacy Release (minimum observation window).`;
   }
-  const bounds = pack.content.retention?.[category];
-  if (bounds?.floor && days < bounds.floor.days) {
-    return `Retention of ${days} days is below the ${pack.pack_id} v${pack.version} floor of ${bounds.floor.days} days (${bounds.floor.citation}).`;
+  if (bounds.floor && days < bounds.floor.days) {
+    return `Retention of ${days} days is below the ${pack.pack_key} v${pack.version} floor of ${bounds.floor.days} days (${bounds.floor.citation}).`;
   }
-  if (bounds?.ceiling && days > bounds.ceiling.days) {
-    return `Retention of ${days} days exceeds the ${pack.pack_id} v${pack.version} ceiling of ${bounds.ceiling.days} days (${bounds.ceiling.citation}).`;
+  if (bounds.ceiling && days > bounds.ceiling.days) {
+    return `Retention of ${days} days exceeds the ${pack.pack_key} v${pack.version} ceiling of ${bounds.ceiling.days} days (${bounds.ceiling.citation}).`;
   }
   return null;
 }

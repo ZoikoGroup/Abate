@@ -114,7 +114,7 @@ export async function generateDiagnosticReceipt(args: {
         }, {}),
         retention: {
           coverage: coverage.status,
-          packRef: coverage.status === "COVERED" ? `${coverage.pack.packId}@v${coverage.pack.version}` : null,
+          packRef: coverage.status === "COVERED" ? `${coverage.pack.packKey}@v${coverage.pack.version}` : null,
           activeClassDays: activeClass?.retention_days ?? null,
           activeLegalHolds: holds.filter((h: any) => !h.released_at).length,
           lastRunStatus: lastRun?.status ?? null

@@ -162,8 +162,12 @@ async function runTests() {
     assert.throws(() => authenticateSupport(`Bearer ${tenantToken}`), (e: any) => e.code === "UNAUTHENTICATED");
 
     // A support-audience token that also names a tenant is refused outright
-    const bound = jwt.sign({ sub: "ops.mallory", scope: "platform-support", tenant_id: GOLDEN_01.tenantA.id }, cfg.authSecret, { issuer: cfg.authIssuer, audience: SUPPORT_AUDIENCE });
+    const bound = jwt.sign({ sub: "ops.mallory", scope: "platform-support", tenant_id: GOLDEN_01.tenantA.id }, cfg.supportAuthSecret, { issuer: cfg.authIssuer, audience: SUPPORT_AUDIENCE });
     assert.throws(() => authenticateSupport(`Bearer ${bound}`), (e: any) => e.code === "UNAUTHENTICATED");
+
+    // The tenant signing key cannot mint support access
+    const forged = jwt.sign({ sub: "ops.mallory", scope: "platform-support" }, cfg.authSecret, { issuer: cfg.authIssuer, audience: SUPPORT_AUDIENCE });
+    assert.throws(() => authenticateSupport(`Bearer ${forged}`), (e: any) => e.code === "UNAUTHENTICATED");
   });
 
   console.log(`\x1b[32m[SUCCESS] ${passed} fast unit and policy tests passed.\x1b[0m`);

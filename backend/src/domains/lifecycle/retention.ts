@@ -190,7 +190,7 @@ export async function setRetentionClass(args: {
       await tx.q(
         `INSERT INTO retention_class (id, tenant_id, data_category, retention_days, basis, version, status, pack_id, pack_version, set_by)
          VALUES ($1, $2, $3, $4, $5, $6, 'ACTIVE', $7, $8, $9)`,
-        [id, tx.tenantId, input.dataCategory, input.retentionDays, input.basis, version, pack.pack_id, pack.version, args.actor.principalId]
+        [id, tx.tenantId, input.dataCategory, input.retentionDays, input.basis, version, pack.pack_key, pack.version, args.actor.principalId]
       );
 
       const result = {
@@ -200,7 +200,7 @@ export async function setRetentionClass(args: {
         basis: input.basis,
         version,
         status: "ACTIVE",
-        packId: pack.pack_id,
+        packId: pack.pack_key,
         packVersion: pack.version,
         supersededId: prior?.id ?? null
       };
@@ -214,7 +214,7 @@ export async function setRetentionClass(args: {
           resourceId: id,
           resourceVersion: version,
           result: "SUCCESS" as const,
-          evidenceRefs: [`retention_class/${id}`, `jurisdiction_pack/${pack.pack_id}@${pack.version}`]
+          evidenceRefs: [`retention_class/${id}`, `policy_pack/${pack.pack_key}@${pack.version}`]
         },
         events: [{
           aggregate: "retention_class",

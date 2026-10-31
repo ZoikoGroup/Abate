@@ -15,28 +15,29 @@ const DurationBound = z.object({
 }).strict();
 
 /**
- * Jurisdiction pack content. Authored by the Legal & Policy Lead, never by development.
- * Floors/ceilings bound what a tenant may configure; absence of a bound means "not constrained by this pack".
+ * Retention section of a JURISDICTION policy pack's content (policy_pack.content.retention).
+ * Authored by the Legal & Policy Lead, never by development. A category the pack does not list is
+ * "not addressed" and cannot be configured (fail closed); an empty object means addressed, unconstrained.
  */
-export const JurisdictionPackContent = z.object({
-  title: z.string().min(3),
-  sourceRefs: z.array(z.string().min(3)).min(1),
-  retention: z.record(DataCategoryEnum, z.object({
-    floor: DurationBound.optional(),
-    ceiling: DurationBound.optional()
-  }).strict()).default({} as any),
-  notes: z.string().optional()
-}).strict();
-export type JurisdictionPackContent = z.infer<typeof JurisdictionPackContent>;
+export const RetentionBounds = z.record(DataCategoryEnum, z.object({
+  floor: DurationBound.optional(),
+  ceiling: DurationBound.optional()
+}).strict());
+export type RetentionBounds = z.infer<typeof RetentionBounds>;
 
+// Platform-side publication into the single policy_pack catalog (0051_governance_evidence.sql)
 export const PublishPackInput = z.object({
-  packId: z.string().regex(/^[a-z0-9-]{3,64}$/),
+  packKey: z.string().regex(/^[a-z0-9-]{3,64}$/),
   version: z.number().int().positive(),
-  jurisdiction: z.string().min(2),
-  sector: z.string().min(2),
+  kind: z.enum(["JURISDICTION", "SECTOR", "CUSTOMER"]),
   effectiveFrom: z.string().datetime(),
-  content: JurisdictionPackContent,
-  approvedBy: z.string().min(3)
+  sourceRefs: z.array(z.string().min(3)).min(1),
+  accountableReviewer: z.string().min(3),
+  reviewDate: z.string().regex(/^\d{4}-\d{2}-\d{2}$/),
+  content: z.object({
+    title: z.string().min(3),
+    retention: RetentionBounds.optional()
+  }).passthrough()
 }).strict();
 export type PublishPackInput = z.infer<typeof PublishPackInput>;
 
@@ -70,21 +71,22 @@ export type RunRetentionInput = z.infer<typeof RunRetentionInput>;
 // ==========================================
 
 export interface JurisdictionPackView {
-  packId: string;
+  packKey: string;
   version: number;
-  jurisdiction: string;
-  sector: string;
+  kind: "JURISDICTION" | "SECTOR" | "CUSTOMER";
+  title: string;
   effectiveFrom: string;
   effectiveTo: string | null;
-  status: "APPROVED" | "RETIRED";
-  content: JurisdictionPackContent;
+  status: "DRAFT" | "APPROVED" | "WITHDRAWN";
+  retention: RetentionBounds | null;
+  sourceRefs: string[];
+  accountableReviewer: string;
   contentHash: string;
-  approvedBy: string;
 }
 
 export type JurisdictionCoverage =
   | { status: "COVERED"; pack: JurisdictionPackView }
-  | { status: "NOT_COVERED"; packId: string | null; at: string };
+  | { status: "NOT_COVERED"; reason: string; boundPackKeys: string[]; at: string };
 
 export interface RetentionRunReceipt {
   runId: string;

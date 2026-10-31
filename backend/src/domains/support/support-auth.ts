@@ -22,7 +22,7 @@ export interface SupportIdentity {
 export function createSupportToken(payload: { operator: string }): string {
   return jwt.sign(
     { sub: payload.operator, scope: SUPPORT_SCOPE },
-    cfg.authSecret,
+    cfg.supportAuthSecret,
     { issuer: cfg.authIssuer, audience: SUPPORT_AUDIENCE, expiresIn: "1h" }
   );
 }
@@ -34,7 +34,7 @@ export function authenticateSupport(authHeader: string | null | undefined): Supp
 
   let decoded: any;
   try {
-    decoded = jwt.verify(authHeader.slice(7), cfg.authSecret, {
+    decoded = jwt.verify(authHeader.slice(7), cfg.supportAuthSecret, {
       issuer: cfg.authIssuer,
       audience: SUPPORT_AUDIENCE
     });

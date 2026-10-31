@@ -149,8 +149,8 @@ export function RetentionTab({ currentTenant, token }: RetentionTabProps) {
 
   const coverage = state?.coverage;
   const activeClass = state?.classes.find(c => c.status === "ACTIVE") ?? null;
-  const bounds = coverage?.status === "COVERED" ? coverage.pack.content.retention.WORK_FACT : undefined;
-  const isSynthetic = coverage?.status === "COVERED" && /SYNTHETIC/i.test(coverage.pack.content.title);
+  const bounds = coverage?.status === "COVERED" ? coverage.pack.retention?.WORK_FACT : undefined;
+  const isSynthetic = coverage?.status === "COVERED" && JSON.stringify(coverage.pack.retention ?? {}).includes("SYNTHETIC");
   const activeHolds = state?.holds.filter(h => !h.released_at) ?? [];
 
   return (
@@ -178,7 +178,7 @@ export function RetentionTab({ currentTenant, token }: RetentionTabProps) {
         {coverage?.status === "NOT_COVERED" && (
           <div className="feedback-alert alert-error" role="alert">
             <div className="feedback-title">Fails closed</div>
-            <p>No approved version of <code>{coverage.packId ?? "(no pack assigned)"}</code> is in effect. Retention configuration is refused and no data will be purged.</p>
+            <p>{coverage.reason} Bound packs: <code>{coverage.boundPackKeys.join(", ") || "none"}</code>. Retention configuration is refused and no data will be purged.</p>
           </div>
         )}
 
@@ -189,14 +189,14 @@ export function RetentionTab({ currentTenant, token }: RetentionTabProps) {
             )}
             <div className="grid-2col">
               <div className="info-block">
-                <div className="data-row"><span className="data-label">Pack</span><span className="data-value monospace">{coverage.pack.packId} v{coverage.pack.version}</span></div>
-                <div className="data-row"><span className="data-label">Title</span><span className="data-value">{coverage.pack.content.title}</span></div>
-                <div className="data-row"><span className="data-label">Jurisdiction / sector</span><span className="data-value">{coverage.pack.jurisdiction} / {coverage.pack.sector}</span></div>
+                <div className="data-row"><span className="data-label">Pack</span><span className="data-value monospace">{coverage.pack.packKey} v{coverage.pack.version}</span></div>
+                <div className="data-row"><span className="data-label">Title</span><span className="data-value">{coverage.pack.title}</span></div>
+                <div className="data-row"><span className="data-label">Kind / reviewer</span><span className="data-value">{coverage.pack.kind} / {coverage.pack.accountableReviewer}</span></div>
                 <div className="data-row"><span className="data-label">Effective</span><span className="data-value">{fmt(coverage.pack.effectiveFrom)} → {coverage.pack.effectiveTo ? fmt(coverage.pack.effectiveTo) : "open"}</span></div>
               </div>
               <div className="info-block">
-                <div className="data-row"><span className="data-label">WORK_FACT floor</span><span className="data-value">{bounds?.floor ? `${bounds.floor.days} days (${bounds.floor.citation})` : "not constrained"}</span></div>
-                <div className="data-row"><span className="data-label">WORK_FACT ceiling</span><span className="data-value">{bounds?.ceiling ? `${bounds.ceiling.days} days (${bounds.ceiling.citation})` : "not constrained"}</span></div>
+                <div className="data-row"><span className="data-label">WORK_FACT floor</span><span className="data-value">{!bounds ? "not addressed by this pack (cannot configure)" : bounds.floor ? `${bounds.floor.days} days (${bounds.floor.citation})` : "not constrained"}</span></div>
+                <div className="data-row"><span className="data-label">WORK_FACT ceiling</span><span className="data-value">{!bounds ? "not addressed by this pack (cannot configure)" : bounds.ceiling ? `${bounds.ceiling.days} days (${bounds.ceiling.citation})` : "not constrained"}</span></div>
                 <div className="data-row"><span className="data-label">Content hash</span><span className="data-value monospace text-sm">{coverage.pack.contentHash.slice(0, 24)}…</span></div>
               </div>
             </div>
@@ -206,15 +206,15 @@ export function RetentionTab({ currentTenant, token }: RetentionTabProps) {
         {versions.length > 0 && (
           <div className="table-responsive">
             <table className="data-table">
-              <thead><tr><th>Version</th><th>Status</th><th>Effective from</th><th>Effective to</th><th>Approved by</th></tr></thead>
+              <thead><tr><th>Pack</th><th>Status</th><th>Effective from</th><th>Effective to</th><th>Reviewer</th></tr></thead>
               <tbody>
                 {versions.map(v => (
-                  <tr key={v.version}>
-                    <td className="monospace">v{v.version}</td>
+                  <tr key={`${v.packKey}:${v.version}`}>
+                    <td className="monospace">{v.packKey} v{v.version}</td>
                     <td>{v.status}</td>
                     <td>{fmt(v.effectiveFrom)}</td>
                     <td>{v.effectiveTo ? fmt(v.effectiveTo) : "open"}</td>
-                    <td>{v.approvedBy}</td>
+                    <td>{v.accountableReviewer}</td>
                   </tr>
                 ))}
               </tbody>

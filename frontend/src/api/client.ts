@@ -670,27 +670,24 @@ export interface DurationBound {
   citation: string;
 }
 
+// A JURISDICTION pack from the single policy_pack catalog, reached through the tenant's binding
 export interface JurisdictionPack {
-  packId: string;
+  packKey: string;
   version: number;
-  jurisdiction: string;
-  sector: string;
+  kind: "JURISDICTION" | "SECTOR" | "CUSTOMER";
+  title: string;
   effectiveFrom: string;
   effectiveTo: string | null;
-  status: "APPROVED" | "RETIRED";
-  content: {
-    title: string;
-    sourceRefs: string[];
-    retention: Partial<Record<DataCategory, { floor?: DurationBound; ceiling?: DurationBound }>>;
-    notes?: string;
-  };
+  status: "DRAFT" | "APPROVED" | "WITHDRAWN";
+  retention: Partial<Record<DataCategory, { floor?: DurationBound; ceiling?: DurationBound }>> | null;
+  sourceRefs: string[];
+  accountableReviewer: string;
   contentHash: string;
-  approvedBy: string;
 }
 
 export type JurisdictionCoverage =
   | { status: "COVERED"; pack: JurisdictionPack }
-  | { status: "NOT_COVERED"; packId: string | null; at: string };
+  | { status: "NOT_COVERED"; reason: string; boundPackKeys: string[]; at: string };
 
 export interface RetentionClass {
   id: string;
@@ -771,8 +768,8 @@ export async function fetchRetentionState(token: string): Promise<RetentionState
   return api<RetentionState>("/api/v2/retention", { token });
 }
 
-export async function fetchPackVersions(token: string): Promise<{ packId: string | null; versions: JurisdictionPack[] }> {
-  return api<{ packId: string | null; versions: JurisdictionPack[] }>("/api/v2/jurisdiction/pack-versions", { token });
+export async function fetchPackVersions(token: string): Promise<{ packKeys: string[]; versions: JurisdictionPack[] }> {
+  return api<{ packKeys: string[]; versions: JurisdictionPack[] }>("/api/v2/jurisdiction/pack-versions", { token });
 }
 
 export async function previewRetention(token: string): Promise<RetentionPreview> {
