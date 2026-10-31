@@ -5,7 +5,7 @@ import { loadConfig } from "./platform/config";
 import { toErrorResponse, AppError } from "./platform/errors";
 import { openApiSpec, CreateOrganizationBody, TokenRequestBody, ZoikoTimeBatchV1, SemanticQueryV1 } from "./contracts";
 import { authenticate, resolveActor, createDevToken, authorize } from "./domains/tenant/auth";
-import { RightsRequestInputSchema } from "./contracts/governance";
+import { RightsRequestInputSchema, CorrectionInputSchema, AcknowledgeCorrectionInputSchema } from "./contracts/governance";
 import { createOrganization, getOrganization, listOrganizations, getTenant } from "./domains/tenant/commands";
 import { ingestBatch, listConnections, getConnection, setConnectionState, listReceipts, listWorkFacts } from "./domains/ingest";
 import { compileRelease, getRelease } from "./domains/privacy";
@@ -36,7 +36,7 @@ import {
   issuePackage,
   getEvidencePackage,
   requestErasure,
-  onCorrection,
+  recordCorrection,
   acknowledgeCorrection
 } from "./domains/lifecycle";
 import {
@@ -83,9 +83,8 @@ import {
   generateDiagnosticReceipt,
   verifyDiagnosticReceipt
 } from "./domains/support";
-import { withTenant, withPlatform } from "./platform/db/with-tenant";
+import { withTenant, withPlatform, QueryFn } from "./platform/db/with-tenant";
 import { drainOnce } from "./worker/outbox-publisher";
-import { memDb } from "./platform/db/with-tenant";
 import { seedTwoTenants } from "./fixtures/seed";
 
 const cfg = loadConfig();
@@ -259,8 +258,10 @@ app.get("/api/v2/audit-events", async (req: Request, res: Response) => {
     const who = await authenticate(getHeader(req, "authorization"));
     await resolveActor(who.tenantId, who.subject, new Date());
 
-    // Filter audit trail strictly by authenticated tenant
-    const events = memDb.auditEvents.filter(e => e.tenant_id === who.tenantId);
+    // RLS scopes the audit trail to the authenticated tenant
+    const events = await withTenant(who.tenantId, async (tx) =>
+      (await tx.q("SELECT * FROM audit_event ORDER BY occurred_at DESC")).rows
+    );
     res.status(200).json(events);
   } catch (err) {
     toErrorResponse(err, res);
@@ -416,9 +417,11 @@ app.get("/api/v2/work-facts", async (req: Request, res: Response) => {
 // -------------------------------------------------------------
 
 // Metric definitions list
-app.get("/api/v2/metrics/definitions", async (_req: Request, res: Response) => {
+app.get("/api/v2/metrics/definitions", async (req: Request, res: Response) => {
   try {
-    let rawDefs = Array.from(memDb.metricDefinitions.values());
+    const who = await authenticate(getHeader(req, "authorization"));
+    await resolveActor(who.tenantId, who.subject, new Date());
+    let rawDefs: any[] = await withTenant(who.tenantId, async (tx) => (await tx.q("SELECT * FROM metric_definition")).rows);
     if (rawDefs.length === 0) {
       rawDefs = [{
         id: "BOUNDARY_INTRUSION_SHARE",
@@ -534,13 +537,15 @@ app.post("/api/v2/metrics/:id/recalculate", async (req: Request, res: Response) 
 
     const jobId = crypto.randomUUID();
     let recalculatedCount = 0;
-    // In production, enqueued to worker; here marks active releases as SUPERSEDED
-    for (const r of memDb.privacyReleases.values()) {
-      if (r.tenant_id === who.tenantId && r.metric_id === req.params.id && r.status === "RELEASED") {
-        r.status = "SUPERSEDED";
+    // In production, enqueued to worker; here marks the tenant's active releases of this metric SUPERSEDED
+    await withTenant(who.tenantId, async (tx) => {
+      const releases = (await tx.q("SELECT * FROM privacy_release")).rows
+        .filter((r: any) => r.metric_id === req.params.id && r.status === "RELEASED");
+      for (const r of releases) {
+        await tx.q("UPDATE privacy_release SET status = $1 WHERE id = $2", ["SUPERSEDED", r.id]);
         recalculatedCount++;
       }
-    }
+    });
 
     res.status(200).json({
       jobId,
@@ -556,6 +561,12 @@ app.post("/api/v2/metrics/:id/recalculate", async (req: Request, res: Response) 
 // -------------------------------------------------------------
 // Domain S05 / S07: Phase 4 Hazard, Control & Verification Endpoints
 // -------------------------------------------------------------
+
+async function loadControl(tx: { q: QueryFn }, controlId: string): Promise<any> {
+  const row = (await tx.q("SELECT * FROM intervention WHERE id = $1", [controlId])).rows.find((r: any) => r.id === controlId);
+  if (!row) throw new AppError("NOT_FOUND", "Control not found.");
+  return row;
+}
 
 // Helper to assemble full ControlDetailView
 async function buildControlDetailView(tx: any, control: any, role: string, isOwner: boolean): Promise<ControlDetailView> {
@@ -821,7 +832,7 @@ app.post("/api/v2/controls", async (req: Request, res: Response) => {
         [controlId, who.tenantId, input.hazardId, input.causeId, input.scope, input.objective, actor.principalId, input.dueDate, input.verificationPlan, mHash]
       );
 
-      const control = memDb.interventions.get(controlId);
+      const control = await loadControl(tx, controlId);
       return await buildControlDetailView(tx, control, role, true);
     });
 
@@ -899,7 +910,7 @@ app.patch("/api/v2/controls/:id", async (req: Request, res: Response) => {
         [scope, objective, dueDate, verificationPlan, newHash, targetState, current.id]
       );
 
-      const updated = memDb.interventions.get(current.id);
+      const updated = await loadControl(tx, current.id);
       return await buildControlDetailView(tx, updated, role, updated.owner_principal_id === actor.principalId);
     });
 
@@ -958,9 +969,9 @@ app.post("/api/v2/controls/:id/approve", async (req: Request, res: Response) => 
         [approvalId, who.tenantId, control.id, control.version, control.material_hash, actor.principalId, env.id, { gate: "APPROVAL", resolved: true, envelopeId: env.id }]
       );
 
-      await tx.q("UPDATE intervention SET state = 'APPROVED' WHERE id = $1", ["APPROVED", control.id]);
+      await tx.q("UPDATE intervention SET state = $1 WHERE id = $2", ["APPROVED", control.id]);
 
-      const updated = memDb.interventions.get(control.id);
+      const updated = await loadControl(tx, control.id);
       return await buildControlDetailView(tx, updated, role, updated.owner_principal_id === actor.principalId);
     });
 
@@ -1004,9 +1015,9 @@ app.post("/api/v2/controls/:id/implementation", async (req: Request, res: Respon
         [receiptId, who.tenantId, control.id, control.version, input.kind, actor.principalId, input.completedOn, input.evidenceRefs]
       );
 
-      await tx.q("UPDATE intervention SET state = 'IMPLEMENTED' WHERE id = $1", ["IMPLEMENTED", control.id]);
+      await tx.q("UPDATE intervention SET state = $1 WHERE id = $2", ["IMPLEMENTED", control.id]);
 
-      const updated = memDb.interventions.get(control.id);
+      const updated = await loadControl(tx, control.id);
       return await buildControlDetailView(tx, updated, role, updated.owner_principal_id === actor.principalId);
     });
 
@@ -1042,9 +1053,9 @@ app.post("/api/v2/controls/:id/verification/pin", async (req: Request, res: Resp
         [evalId, who.tenantId, control.id, input, input.baselineReleaseId, input.postReleaseId || null, input.adjacentReleaseIds, input.seriesBreak]
       );
 
-      await tx.q("UPDATE intervention SET state = 'VERIFYING' WHERE id = $1", ["VERIFYING", control.id]);
+      await tx.q("UPDATE intervention SET state = $1 WHERE id = $2", ["VERIFYING", control.id]);
 
-      const updated = memDb.interventions.get(control.id);
+      const updated = await loadControl(tx, control.id);
       return await buildControlDetailView(tx, updated, role, updated.owner_principal_id === actor.principalId);
     });
 
@@ -1086,9 +1097,9 @@ app.post("/api/v2/controls/:id/verification/conclude", async (req: Request, res:
         [input.outcome, actor.principalId, input.residualRisk, now, evaluation.id]
       );
 
-      await tx.q("UPDATE intervention SET state = 'CLOSED' WHERE id = $1", ["CLOSED", control.id]);
+      await tx.q("UPDATE intervention SET state = $1 WHERE id = $2", ["CLOSED", control.id]);
 
-      const updated = memDb.interventions.get(control.id);
+      const updated = await loadControl(tx, control.id);
       return await buildControlDetailView(tx, updated, role, updated.owner_principal_id === actor.principalId);
     });
 
@@ -1117,7 +1128,7 @@ app.post("/api/v2/hazards/:id/disposition", async (req: Request, res: Response) 
         [input.disposition, hazardId]
       );
 
-      const updated = memDb.hazards.get(hazardId);
+      const updated = (await tx.q("SELECT * FROM hazard WHERE id = $1 AND tenant_id = $2", [hazardId, who.tenantId])).rows[0];
       return {
         ...updated,
         dispositionRationale: input.rationale,
@@ -1448,19 +1459,14 @@ app.get("/api/v2/evidence-packages/:id", async (req: Request, res: Response) => 
 app.post("/api/v2/corrections/ingest", async (req: Request, res: Response) => {
   try {
     const who = await authenticate(getHeader(req, "authorization"));
-    authorize(await resolveActor(who.tenantId, who.subject, new Date()), "correction.ingest");
-    const { sourceRecordId, affectedStart, affectedEnd, reason } = req.body;
-
-    const out = await withTenant(who.tenantId, async (tx) => {
-      return await onCorrection(tx, {
-        tenantId: who.tenantId,
-        sourceRecordId: sourceRecordId || "rec-default-correction",
-        revision: Number(req.body.revision) || 2,
-        correctedAt: new Date().toISOString()
-      });
+    const actor = await resolveActor(who.tenantId, who.subject, new Date());
+    const result = await recordCorrection({
+      who,
+      actor,
+      input: CorrectionInputSchema.parse(req.body),
+      idempotencyKey: getHeader(req, "idempotency-key") || getHeader(req, "x-idempotency-key")
     });
-
-    res.status(200).json(out);
+    res.status(result.status).json(result.body);
   } catch (err) {
     toErrorResponse(err, res);
   }
@@ -1470,11 +1476,15 @@ app.post("/api/v2/corrections/ingest", async (req: Request, res: Response) => {
 app.post("/api/v2/corrections/:id/acknowledge", async (req: Request, res: Response) => {
   try {
     const who = await authenticate(getHeader(req, "authorization"));
-    authorize(await resolveActor(who.tenantId, who.subject, new Date()), "correction.acknowledge");
-    const out = await withTenant(who.tenantId, async (tx) => {
-      return await acknowledgeCorrection(tx, String(req.params.id), who.subject, req.body.notes || "Acknowledged");
+    const actor = await resolveActor(who.tenantId, who.subject, new Date());
+    const result = await acknowledgeCorrection({
+      who,
+      actor,
+      correctionId: String(req.params.id),
+      input: AcknowledgeCorrectionInputSchema.parse(req.body),
+      idempotencyKey: getHeader(req, "idempotency-key") || getHeader(req, "x-idempotency-key")
     });
-    res.status(200).json(out);
+    res.status(result.status).json(result.body);
   } catch (err) {
     toErrorResponse(err, res);
   }

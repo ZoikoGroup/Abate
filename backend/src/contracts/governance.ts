@@ -97,3 +97,11 @@ export const AcknowledgeCorrectionInputSchema = z.object({
   reviewerNotes: z.string().min(1)
 }).strict();
 export type AcknowledgeCorrectionInput = z.infer<typeof AcknowledgeCorrectionInputSchema>;
+
+// Late correction of a ledger record (Playbook B5 §3 Step 8). The revision must already be in the ledger.
+export const CorrectionInputSchema = z.object({
+  connectionId: z.string().uuid(),
+  sourceRecordId: z.string().min(1),
+  revision: z.number().int().min(2)
+}).strict();
+export type CorrectionInput = z.infer<typeof CorrectionInputSchema>;

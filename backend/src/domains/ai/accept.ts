@@ -36,12 +36,11 @@ export async function acceptAiRun(
     const rawOutput = typeof run.output === "string" ? JSON.parse(run.output) : run.output;
     const statement = options.causeStatement || (rawOutput?.claims?.[0]?.text) || "AI-drafted organizational risk hypothesis";
     const causeId = crypto.randomUUID();
-    const now = new Date().toISOString();
 
+    // cause has no proposer columns; who accepted the AI draft is recorded on the ai_run and audit trail
     await tx.q(
-      `INSERT INTO cause (id, tenant_id, hazard_id, statement, status, proposed_by, proposed_at)
-       VALUES ($1, $2, $3, $4, 'PROPOSED', $5, $6)`,
-      [causeId, tx.tenantId, options.hazardId, statement, actor.principalId, now]
+      "INSERT INTO cause (id, tenant_id, hazard_id, statement, status, version) VALUES ($1, $2, $3, $4, 'PROPOSED', 1)",
+      [causeId, tx.tenantId, options.hazardId, statement]
     );
     createdResourceId = causeId;
   }

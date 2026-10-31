@@ -5,6 +5,8 @@
 **Date:** 29 October 2026
 **Status:** Implemented and verified. Still needs to be checked against the official Phase 5 spec (see §6).
 
+> **Update (31 Oct 2026):** the separate `jurisdiction_pack` catalog was replaced by the spec's `policy_pack` (migration `0064`). Retention now validates against the tenant's bound JURISDICTION pack, and a pack must explicitly address a category's retention before it can be configured. See §7 of the Phase 6 report.
+
 ---
 
 ## 1. What the register required

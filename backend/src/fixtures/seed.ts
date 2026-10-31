@@ -227,34 +227,6 @@ export async function seedTwoTenants(opts: { clock?: Date } = {}) {
   };
   memDb.connections.set(connB.id, connB);
 
-  // Seed Phase 5 jurisdiction pack for Tenant A only. SYNTHETIC: the durations and citations below are
-  // test values, not legal content; real packs come from the Legal & Policy Lead. Tenant B's pack
-  // ("legal-uk-bar") is deliberately unpublished so its retention configuration fails closed.
-  const packContent = {
-    title: "SYNTHETIC TEST PACK - UK legal sector (not legal advice)",
-    sourceRefs: ["SYNTHETIC-FIXTURE: replace with Legal & Policy Lead citations"],
-    retention: {
-      WORK_FACT: {
-        floor: { days: 90, citation: "SYNTHETIC-FIXTURE floor" },
-        ceiling: { days: 730, citation: "SYNTHETIC-FIXTURE ceiling" }
-      }
-    }
-  };
-  const packA = {
-    pack_id: tA.jurisdiction_config_ref,
-    version: 1,
-    jurisdiction: "UK",
-    sector: "LEGAL",
-    effective_from: validFrom,
-    effective_to: null,
-    status: "APPROVED",
-    content: packContent,
-    content_hash: packContentHash(packContent),
-    approved_by: "SYNTHETIC-FIXTURE",
-    approved_at: validFrom
-  };
-  memDb.jurisdictionPacks.set(`${packA.pack_id}:${packA.version}`, packA);
-
   // Seed Phase 5 Multi-Kind Policy Packs & Bindings (Playbook B5 §4).
   // Rows use the 0051_governance_evidence.sql columns so the resolver reads the same shape as PostgreSQL.
   const policyPack = (
@@ -286,7 +258,14 @@ export async function seedTwoTenants(opts: { clock?: Date } = {}) {
       permittedFeatures: ["*"],
       gates: { APPROVAL: ["RISK_OWNER"], REVIEW: ["WORKS_COUNCIL"] },
       privacyFloor: 10,
-      aiAuthority: "ADVISORY"
+      aiAuthority: "ADVISORY",
+      // SYNTHETIC: test durations and citations, not legal content (real values come from the Legal & Policy Lead)
+      retention: {
+        WORK_FACT: {
+          floor: { days: 90, citation: "SYNTHETIC-FIXTURE floor" },
+          ceiling: { days: 730, citation: "SYNTHETIC-FIXTURE ceiling" }
+        }
+      }
     }),
     policyPack("sector-legal", "SECTOR", validFrom, null, {
       title: "Legal Professional Services Sector Standard",

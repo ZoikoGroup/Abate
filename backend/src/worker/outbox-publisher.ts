@@ -1,5 +1,5 @@
 // backend/src/worker/outbox-publisher.ts
-import { appPool, memDb } from "../platform/db/with-tenant";
+import { withWorker } from "../platform/db/with-tenant";
 import { EventEnvelopeType } from "../contracts/common";
 
 export type EventHandler = (envelope: EventEnvelopeType) => Promise<void>;
@@ -14,29 +14,28 @@ export class EventBus {
     this.handlers.set(key, list);
   }
 
+  /**
+   * Consumer side: recording the event in inbox_event and running the handlers commit together,
+   * so a redelivered event is skipped and a handler failure leaves it to be delivered again.
+   */
   async publish(consumer: string, envelope: EventEnvelopeType): Promise<boolean> {
-    // Consumer deduplication via inbox_event table
-    const inboxKey = `${consumer}:${envelope.eventId}`;
-    if (memDb.inboxEvents.has(inboxKey)) {
-      // Duplicate delivery -> skipped safely
-      return false;
-    }
+    return withWorker(async (tx) => {
+      const claimed = await tx.q(
+        `INSERT INTO inbox_event (consumer, event_id, tenant_id) VALUES ($1, $2, $3) ON CONFLICT DO NOTHING`,
+        [consumer, envelope.eventId, envelope.tenantId]
+      );
+      if (!claimed.rowCount) {
+        return false; // duplicate delivery -> skipped safely
+      }
 
-    memDb.inboxEvents.set(inboxKey, {
-      consumer,
-      event_id: envelope.eventId,
-      tenant_id: envelope.tenantId,
-      received_at: new Date().toISOString()
+      const specificKey = `${consumer}:${envelope.aggregate}.${envelope.schemaVersion}`;
+      const allKey = `${consumer}:*`;
+      const handlers = [...(this.handlers.get(specificKey) || []), ...(this.handlers.get(allKey) || [])];
+      for (const h of handlers) {
+        await h(envelope);
+      }
+      return true;
     });
-
-    const specificKey = `${consumer}:${envelope.aggregate}.${envelope.schemaVersion}`;
-    const allKey = `${consumer}:*`;
-    const handlers = [...(this.handlers.get(specificKey) || []), ...(this.handlers.get(allKey) || [])];
-
-    for (const h of handlers) {
-      await h(envelope);
-    }
-    return true;
   }
 }
 
@@ -57,7 +56,12 @@ export async function drainOnce(opts: DrainOptions = {}): Promise<{ drained: num
   const bus = opts.bus || defaultBus;
   const consumer = opts.consumerName || "default-worker";
 
-  let unpublished = memDb.outboxEvents.filter(e => !e.published_at).slice(0, batch);
+  const unpublished = await withWorker(async (tx) =>
+    (await tx.q(
+      `SELECT * FROM outbox_event WHERE published_at IS NULL ORDER BY created_at LIMIT $1`,
+      [batch]
+    )).rows
+  );
 
   let publishedCount = 0;
   for (const event of unpublished) {
@@ -66,7 +70,7 @@ export async function drainOnce(opts: DrainOptions = {}): Promise<{ drained: num
       tenantId: event.tenant_id,
       aggregate: event.aggregate,
       aggregateVersion: event.aggregate_version,
-      eventTime: event.created_at,
+      eventTime: new Date(event.created_at).toISOString(),
       schemaVersion: event.schema_version,
       purpose: event.purpose,
       refs: event.refs || []
@@ -80,7 +84,8 @@ export async function drainOnce(opts: DrainOptions = {}): Promise<{ drained: num
       throw new Error("Simulated worker crash after publish");
     }
 
-    event.published_at = new Date().toISOString();
+    // Marked after delivery: a crash before this line means redelivery, which the consumer inbox absorbs
+    await withWorker(tx => tx.q(`UPDATE outbox_event SET published_at = now() WHERE id = $1`, [event.id]));
     publishedCount++;
   }
 
@@ -89,4 +94,3 @@ export async function drainOnce(opts: DrainOptions = {}): Promise<{ drained: num
     published: publishedCount
   };
 }
-

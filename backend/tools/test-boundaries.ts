@@ -25,8 +25,8 @@ import {
   getRetentionState
 } from "../src/domains/lifecycle";
 import { generateDiagnosticReceipt, verifyDiagnosticReceipt } from "../src/domains/support";
-import { requestErasure, resolvePolicy } from "../src/domains/lifecycle";
-import { runAiUseCase, setKillSwitch, seedApprovedKnowledge } from "../src/domains/ai";
+import { requestErasure, resolvePolicy, resolveTenantCoverage, issuePackage, getEvidencePackage, recordCorrection, acknowledgeCorrection } from "../src/domains/lifecycle";
+import { runAiUseCase, acceptAiRun, setKillSwitch, seedApprovedKnowledge } from "../src/domains/ai";
 import { mintGrant, verifyGrant, paramHashOf, createActionAttempt, dispatchAttempt, proposeAction, dispatchAction, toolProviders } from "../src/domains/actions";
 
 
@@ -743,23 +743,23 @@ async function run() {
 
   const packContent = (floorDays: number) => ({
     title: "SYNTHETIC boundary-test pack",
-    sourceRefs: ["SYNTHETIC-TEST"],
     retention: { WORK_FACT: { floor: { days: floorDays, citation: "SYNTHETIC-TEST floor" } } }
   });
+  const packMeta = { kind: "JURISDICTION" as const, sourceRefs: ["SYNTHETIC-TEST"], accountableReviewer: "SYNTHETIC-TEST", reviewDate: "2027-01-01" };
 
   // 22. Effective-dated jurisdiction pack resolution
   await test("Phase 5 Jurisdiction: Pack resolution is effective-dated and fails closed outside coverage", async () => {
     await withTenant(tenantAId, async (tx) => {
       await publishPackVersion(tx, {
-        packId: "test-dating-pack", version: 1, jurisdiction: "UK", sector: "LEGAL",
-        effectiveFrom: "2026-01-01T00:00:00.000Z", content: packContent(90), approvedBy: "SYNTHETIC-TEST"
+        ...packMeta, packKey: "test-dating-pack", version: 1,
+        effectiveFrom: "2026-01-01T00:00:00.000Z", content: packContent(90)
       });
       await publishPackVersion(tx, {
-        packId: "test-dating-pack", version: 2, jurisdiction: "UK", sector: "LEGAL",
-        effectiveFrom: "2026-06-01T00:00:00.000Z", content: packContent(120), approvedBy: "SYNTHETIC-TEST"
+        ...packMeta, packKey: "test-dating-pack", version: 2,
+        effectiveFrom: "2026-06-01T00:00:00.000Z", content: packContent(120)
       });
 
-      const rows = (await tx.q("SELECT * FROM jurisdiction_pack WHERE pack_id = $1", ["test-dating-pack"])).rows;
+      const rows = (await tx.q("SELECT * FROM policy_pack WHERE pack_key = $1", ["test-dating-pack"])).rows;
       assert.strictEqual(rows.find(r => r.version === 1)?.effective_to, "2026-06-01T00:00:00.000Z", "v1 must be closed where v2 starts");
       assert.strictEqual(resolveEffectivePack(rows, new Date("2026-03-01T00:00:00Z"))?.version, 1);
       assert.strictEqual(resolveEffectivePack(rows, new Date("2026-06-01T00:00:00Z"))?.version, 2, "Boundary instant belongs to the new version");
@@ -770,15 +770,15 @@ async function run() {
   // 23. Published pack versions are immutable and sequential
   await test("Phase 5 Jurisdiction: Published versions are immutable; out-of-sequence or overlapping versions are refused", async () => {
     await withTenant(tenantAId, async (tx) => {
-      const v1Before = (await tx.q("SELECT * FROM jurisdiction_pack WHERE pack_id = $1", ["test-dating-pack"])).rows
+      const v1Before = (await tx.q("SELECT * FROM policy_pack WHERE pack_key = $1", ["test-dating-pack"])).rows
         .find(r => r.version === 1)?.content_hash;
-      const base = { packId: "test-dating-pack", jurisdiction: "UK", sector: "LEGAL", content: packContent(1), approvedBy: "SYNTHETIC-TEST" };
+      const base = { ...packMeta, packKey: "test-dating-pack", content: packContent(1) };
 
       await assert.rejects(() => publishPackVersion(tx, { ...base, version: 2, effectiveFrom: "2026-09-01T00:00:00.000Z" }), isCode("CONFLICT"));
       await assert.rejects(() => publishPackVersion(tx, { ...base, version: 5, effectiveFrom: "2026-09-01T00:00:00.000Z" }), isCode("CONFLICT"));
       await assert.rejects(() => publishPackVersion(tx, { ...base, version: 3, effectiveFrom: "2026-05-01T00:00:00.000Z" }), isCode("CONFLICT"));
 
-      const v1After = (await tx.q("SELECT * FROM jurisdiction_pack WHERE pack_id = $1", ["test-dating-pack"])).rows
+      const v1After = (await tx.q("SELECT * FROM policy_pack WHERE pack_key = $1", ["test-dating-pack"])).rows
         .find(r => r.version === 1)?.content_hash;
       assert.strictEqual(v1After, v1Before, "Approved content must never change");
     });
@@ -813,7 +813,7 @@ async function run() {
     await assert.rejects(() => setA(60), isCode("VALIDATION"));   // below synthetic pack floor (90)
     await assert.rejects(() => setA(1000), isCode("VALIDATION")); // above synthetic pack ceiling (730)
 
-    // Tenant B's pack (legal-uk-bar) is not published: configuration fails closed
+    // Tenant B's pack (legal-uk-bar) does not address WORK_FACT retention: configuration fails closed
     await assert.rejects(() => setRetentionClass({
       who: whoB, actor: actorB, idempotencyKey: crypto.randomUUID(),
       input: { dataCategory: "WORK_FACT", retentionDays: 365, basis: "Boundary test duration" }
@@ -929,7 +929,7 @@ async function run() {
     assert.strictEqual(stateB.holds.length, 0);
     assert.strictEqual(stateB.runs.length, 0);
     assert.strictEqual(stateB.tombstones.total, 0);
-    assert.strictEqual(stateB.coverage.status, "NOT_COVERED");
+    assert.ok(stateB.coverage.status === "COVERED" && stateB.coverage.pack.packKey === "legal-uk-bar", "Tenant B resolves only its own bound pack");
 
     await assert.rejects(() => releaseLegalHold({
       who: whoB, actor: actorB, holdId: scopedHoldId, idempotencyKey: crypto.randomUUID(),
@@ -953,8 +953,8 @@ async function run() {
   await test("Phase 5 Fail Closed: A class outside a newer pack version's floor blocks the run instead of deleting", async () => {
     await withTenant(tenantAId, async (tx) => {
       await publishPackVersion(tx, {
-        packId: "legal-uk-sra", version: 2, jurisdiction: "UK", sector: "LEGAL",
-        effectiveFrom: daysAgo(1, 0), content: packContent(400), approvedBy: "SYNTHETIC-TEST"
+        ...packMeta, packKey: "legal-uk-sra", version: 2,
+        effectiveFrom: daysAgo(1, 0), content: packContent(400)
       });
     });
     const before = memDb.workFactRevisions.size;
@@ -1292,6 +1292,86 @@ async function run() {
       throw new Error("abort after write");
     }));
     assert.strictEqual(memDb.actionAttempts.size, before);
+  });
+
+  // -------------------------------------------------------------
+  // Postgres-parity and catalog fixes
+  // -------------------------------------------------------------
+
+  // 49. Single catalog: coverage comes from tenant bindings; ambiguity fails closed
+  await test("Catalog: retention coverage resolves the tenant's bound JURISDICTION pack and refuses ambiguity", async () => {
+    const coverageA = await withTenant(tenantAId, tx => resolveTenantCoverage(tx, new Date()));
+    assert.ok(coverageA.coverage.status === "COVERED" && coverageA.coverage.pack.packKey === "legal-uk-sra");
+    const before = await withTenant(tenantAId, tx => resolveTenantCoverage(tx, new Date("2024-01-01T00:00:00Z")));
+    assert.strictEqual(before.coverage.status, "NOT_COVERED", "No binding in effect yet: not covered");
+
+    await withTenant(tenantBId, async (tx) => {
+      await publishPackVersion(tx, { ...packMeta, packKey: "test-second-jurisdiction", version: 1, effectiveFrom: "2025-01-01T00:00:00.000Z", content: packContent(90) });
+      await tx.q(
+        "INSERT INTO tenant_policy_binding (tenant_id, pack_key, pack_version, applies_to, bound_from, bound_to) VALUES ($1, $2, $3, $4, $5, $6)",
+        [tenantBId, "test-second-jurisdiction", 1, {}, "2025-01-01T00:00:00.000Z", null]
+      );
+    });
+    const ambiguous = await withTenant(tenantBId, tx => resolveTenantCoverage(tx, new Date()));
+    assert.ok(ambiguous.coverage.status === "NOT_COVERED" && /More than one jurisdiction pack/.test(ambiguous.coverage.reason));
+  });
+
+  // 51. Accepting an AI cause draft stores a valid PROPOSED cause
+  await test("AI accept: an accepted cause draft is stored as PROPOSED (not with a user id as its status)", async () => {
+    const run = await withTenant(tenantAId, tx => runAiUseCase(tx, actorA, "explain_release", {
+      contextRefs: [{ type: "RELEASE", id: "00000000-0000-4000-a003-000000000001" }],
+      question: "Explain"
+    }));
+    const accepted = await withTenant(tenantAId, tx => acceptAiRun(tx, actorA, run.id, { hazardId: GOLDEN_01.approvedControl.hazardId }));
+    const cause = memDb.causes.get(accepted.createdResourceId!);
+    assert.strictEqual(cause?.status, "PROPOSED");
+  });
+
+  // 50. Evidence packages issue, read back and are superseded only by corrections that touch them
+  await test("Evidence & corrections: a correction marks only overlapping releases STALE and supersedes only packages containing them", async () => {
+    const pkg = await withTenant(tenantAId, tx => issuePackage(tx, { hazardId: GOLDEN_01.approvedControl.hazardId, issuerPrincipalId: actorA.principalId }));
+    const back = await withTenant(tenantAId, tx => getEvidencePackage(tx, pkg.id));
+    assert.ok(back && back.state === "ISSUED" && back.manifestHash === pkg.manifestHash);
+    assert.ok(back.items.some(i => i.itemType === "released_artifact" && i.itemId === "00000000-0000-4000-a003-000000000001"));
+
+    // A record far outside the baseline release period (2026-03-02..2026-03-30) affects nothing
+    const outside = (n: number) => ({ recordId: "corr-outside", revision: n, subjectRef: "emp-corr", startUtc: "2025-06-01T09:00:00.000Z", endUtc: "2025-06-01T12:00:00.000Z", workTz: "Europe/London", kind: "WORK" as const });
+    await ingestBatch({ who: whoA, actor: actorA, batch: { connectionId: connAId, batchId: `b-corr-1-${crypto.randomUUID()}`, items: [outside(1)] } });
+    await ingestBatch({ who: whoA, actor: actorA, batch: { connectionId: connAId, batchId: `b-corr-2-${crypto.randomUUID()}`, items: [outside(2)] } });
+    const quiet = await recordCorrection({ who: whoA, actor: actorA, idempotencyKey: crypto.randomUUID(), input: { connectionId: connAId, sourceRecordId: "corr-outside", revision: 2 } });
+    assert.deepStrictEqual([quiet.body.impactedReleases, quiet.body.impactedPackages], [[], []], "A correction outside every release period touches nothing");
+
+    // A record inside the baseline period makes it STALE and supersedes the package that contains it
+    const inside = (n: number) => ({ recordId: "corr-inside", revision: n, subjectRef: "emp-corr", startUtc: "2026-03-10T09:00:00.000Z", endUtc: "2026-03-10" + (n === 1 ? "T12:00:00.000Z" : "T13:00:00.000Z"), workTz: "Europe/London", kind: "WORK" as const });
+    await ingestBatch({ who: whoA, actor: actorA, batch: { connectionId: connAId, batchId: `b-corr-3-${crypto.randomUUID()}`, items: [inside(1)] } });
+    await ingestBatch({ who: whoA, actor: actorA, batch: { connectionId: connAId, batchId: `b-corr-4-${crypto.randomUUID()}`, items: [inside(2)] } });
+    const hit = await recordCorrection({ who: whoA, actor: actorA, idempotencyKey: crypto.randomUUID(), input: { connectionId: connAId, sourceRecordId: "corr-inside", revision: 2 } });
+    assert.ok(hit.body.impactedReleases.includes("00000000-0000-4000-a003-000000000001"));
+    assert.ok(hit.body.impactedPackages.includes(pkg.id));
+    assert.strictEqual((await withTenant(tenantAId, tx => getEvidencePackage(tx, pkg.id)))?.state, "SUPERSEDED");
+
+    await assert.rejects(() => recordCorrection({ who: whoA, actor: actorA, idempotencyKey: crypto.randomUUID(), input: { connectionId: connAId, sourceRecordId: "no-such-record", revision: 2 } }), isCode("NOT_FOUND"));
+    await assert.rejects(() => acknowledgeCorrection({ who: whoA, actor: actorA, correctionId: crypto.randomUUID(), input: { reviewerNotes: "n/a" }, idempotencyKey: crypto.randomUUID() }), isCode("NOT_FOUND"));
+    const ack = await acknowledgeCorrection({ who: whoA, actor: actorA, correctionId: hit.body.id, input: { reviewerNotes: "Re-run release after correction" }, idempotencyKey: crypto.randomUUID() });
+    assert.strictEqual(ack.body.status, "ACKNOWLEDGED");
+    await assert.rejects(() => acknowledgeCorrection({ who: whoA, actor: actorA, correctionId: hit.body.id, input: { reviewerNotes: "again" }, idempotencyKey: crypto.randomUUID() }), isCode("CONFLICT"));
+  });
+
+  // 52. Outbox worker: a crash after delivery redelivers, and the consumer inbox absorbs the duplicate
+  await test("Outbox worker: crash after delivery leaves the event unpublished; redelivery is deduplicated", async () => {
+    await drainOnce({ consumerName: "settle" }); // clear backlog from earlier tests
+    await createOrganization({ who: whoA, actor: actorA, body: { name: `Outbox crash ${crypto.randomUUID().slice(0, 6)}` }, idempotencyKey: crypto.randomUUID() });
+    const bus = new EventBus();
+    let handled = 0;
+    bus.subscribe("crash-consumer", "organization.v1.0", async () => { handled++; });
+
+    await assert.rejects(() => drainOnce({ bus, consumerName: "crash-consumer", simulateCrashBeforeMarkingPublished: true }));
+    assert.strictEqual(handled, 1);
+    assert.ok(memDb.outboxEvents.some(e => !e.published_at), "Crash before marking leaves the event unpublished");
+
+    const second = await drainOnce({ bus, consumerName: "crash-consumer" });
+    assert.ok(second.published >= 1);
+    assert.strictEqual(handled, 1, "Redelivery must not run the handler twice");
   });
 
   console.log(`\x1b[32m[SUCCESS] All ${passed} boundary, isolation, and reliability tests passed.\x1b[0m`);

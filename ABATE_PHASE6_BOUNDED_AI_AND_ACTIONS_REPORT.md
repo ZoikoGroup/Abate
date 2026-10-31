@@ -110,6 +110,21 @@ A code review found defects the original suites did not cover. Each fix has a re
 | 6 | `evidence_item` had RLS forced with no policy; AI catalogs writable by `abate_app`; Phase 6 memory tables missing from the rollback snapshot; hazard/control/release ids accepted any string. | Migration `0061_phase6_hardening.sql` (verified on PostgreSQL 16.2); rollback covers all tables; UUID validation restored (non-UUID `rel-baseline-1` alias removed). |
 | 7 | The Bounded AI tab had no navigation button. | Added "Bounded AI & Actions (Phase 6)". |
 
-**Open:** `policy_pack` (0051) and `jurisdiction_pack` (0050) are two catalogs for the same concept, so the team needs to agree on one. `corrections.ts` passes SQL parameters out of order (`SET status = 'STALE' WHERE id = $1` with `["STALE", id]`), which only works on the memory engine.
-
 Suites after fixes: `test-fast` 9/9, `test-boundaries` 48/48 (6 new), `test-slo` 8/8 (2 new), demo cycle complete, frontend build clean.
+
+## 7. Postgres Parity & Remaining Fixes (31 October 2026)
+
+The memory engine matches SQL by text, so it hid several defects that only appear on PostgreSQL. All 140 SQL statements in the codebase are now checked with `PREPARE` against the migrated schema (0 errors), and no statement passes a different number of values than it has placeholders.
+
+| # | Defect | Fix |
+|---|---|---|
+| 1 | 11 statements passed two values for one placeholder (`SET state = 'APPROVED' WHERE id = $1` with `["APPROVED", id]`): the whole Phase 4 approve → close path and corrections failed on PostgreSQL. | `SET state = $1 WHERE id = $2`. |
+| 2 | Request code read the memory store directly (control/hazard reads, audit list, metric definitions, metric recalculation, outbox worker), so it returned nothing on PostgreSQL. | All go through SQL in a transaction. |
+| 3 | The outbox worker could not see any events on PostgreSQL (`outbox_event` is tenant-isolated). | New least-privilege `abate_worker` role (`0062`): reads outbox rows of all tenants, stamps `published_at`, records `inbox_event`; nothing else. Consumer receipt + handlers commit together; a crash before marking redelivers and the inbox absorbs it. |
+| 4 | Accepting an AI cause draft wrote non-existent columns; in memory the cause's `status` became the user's id. | Valid `INSERT INTO cause`; acceptance stays recorded on the AI run. |
+| 5 | Issuing an evidence package crashed (memory insert used a different column list); supersession never applied. | Memory branches use the `0051` columns. |
+| 6 | Corrections stored nothing, accepted any id on acknowledge, defaulted missing input, and marked every release STALE. | `correction` table (`0063`); validated input; the affected window comes from the record's revisions in the ledger; only overlapping releases go STALE and only packages containing them are superseded; idempotent and audited. |
+| 7 | Two pack catalogs (`jurisdiction_pack`, `policy_pack`). | `policy_pack` is the single catalog (`0064`). Retention uses the tenant's bound JURISDICTION pack; a pack must address a category's retention before it can be configured; two packs in effect is refused as ambiguous. |
+| 8 | Support tokens were signed with the tenant key. | Separate `SUPPORT_AUTH_SECRET`. |
+
+Suites: `test-fast` 9/9, `test-boundaries` 52/52, `test-slo` 8/8, demo cycle complete, frontend build clean.

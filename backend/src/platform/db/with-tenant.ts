@@ -11,6 +11,7 @@ export type Tx = { q: QueryFn; tenantId: string };
 // Production PostgreSQL Pools
 export let appPool: Pool | null = null;
 export let migratorPool: Pool | null = null;
+export let workerPool: Pool | null = null;
 
 try {
   appPool = new Pool({
@@ -20,6 +21,13 @@ try {
   });
   // Prevent unhandled errors on idle clients
   appPool.on("error", () => {});
+
+  workerPool = new Pool({
+    connectionString: cfg.databaseUrlWorker,
+    max: 2,
+    connectionTimeoutMillis: 1000
+  });
+  workerPool.on("error", () => {});
 
   migratorPool = new Pool({
     connectionString: cfg.databaseUrlMigrator,
@@ -85,7 +93,6 @@ class MemoryDatabase {
   public evaluations: Map<string, any> = new Map();
 
   // Phase 5 Jurisdiction Packs & Retention
-  public jurisdictionPacks: Map<string, any> = new Map(); // global catalog, key pack_id:version
   public retentionClasses: Map<string, any> = new Map();
   public legalHolds: Map<string, any> = new Map();
   public retentionRuns: Map<string, any> = new Map();
@@ -105,6 +112,9 @@ class MemoryDatabase {
   public aiKillSwitches: Map<string, any> = new Map();
   public toolCatalog: Map<string, any> = new Map();
   public actionAttempts: Map<string, any> = new Map();
+
+  // Late corrections (0063_corrections.sql)
+  public corrections: Map<string, any> = new Map();
 
   constructor() {
     this.seedDefaults();
@@ -166,11 +176,11 @@ class MemoryDatabase {
     this.approvals.clear();
     this.implementationReceipts.clear();
     this.evaluations.clear();
-    this.jurisdictionPacks.clear();
     this.retentionClasses.clear();
     this.legalHolds.clear();
     this.retentionRuns.clear();
     this.deletionTombstones.clear();
+    this.corrections.clear();
     this.policyPacks.clear();
     this.tenantPolicyBindings = [];
     this.decisionEnvelopes.clear();
@@ -190,6 +200,8 @@ export const memDb = new MemoryDatabase();
 
 // In-Memory Transaction Client simulating Postgres RLS and transaction-local set_config
 class MemoryClient {
+  // Worker mode mirrors the abate_worker role: cross-tenant access to outbox_event/inbox_event only
+  constructor(private readonly workerMode = false) {}
   private inTransaction = false;
   private tenantContext: string | null = null;
   private snapshotState: string | null = null;
@@ -236,11 +248,11 @@ class MemoryClient {
         approvals: Array.from(memDb.approvals.entries()),
         implementationReceipts: Array.from(memDb.implementationReceipts.entries()),
         evaluations: Array.from(memDb.evaluations.entries()),
-        jurisdictionPacks: Array.from(memDb.jurisdictionPacks.entries()),
         retentionClasses: Array.from(memDb.retentionClasses.entries()),
         legalHolds: Array.from(memDb.legalHolds.entries()),
         retentionRuns: Array.from(memDb.retentionRuns.entries()),
         deletionTombstones: Array.from(memDb.deletionTombstones.entries()),
+        corrections: Array.from(memDb.corrections.entries()),
         policyPacks: Array.from(memDb.policyPacks.entries()),
         decisionEnvelopes: Array.from(memDb.decisionEnvelopes.entries()),
         evidencePackages: Array.from(memDb.evidencePackages.entries()),
@@ -292,11 +304,11 @@ class MemoryClient {
         if (snap.approvals) memDb.approvals = new Map(snap.approvals);
         if (snap.implementationReceipts) memDb.implementationReceipts = new Map(snap.implementationReceipts);
         if (snap.evaluations) memDb.evaluations = new Map(snap.evaluations);
-        if (snap.jurisdictionPacks) memDb.jurisdictionPacks = new Map(snap.jurisdictionPacks);
         if (snap.retentionClasses) memDb.retentionClasses = new Map(snap.retentionClasses);
         if (snap.legalHolds) memDb.legalHolds = new Map(snap.legalHolds);
         if (snap.retentionRuns) memDb.retentionRuns = new Map(snap.retentionRuns);
         if (snap.deletionTombstones) memDb.deletionTombstones = new Map(snap.deletionTombstones);
+        if (snap.corrections) memDb.corrections = new Map(snap.corrections);
         if (snap.policyPacks) memDb.policyPacks = new Map(snap.policyPacks);
         if (snap.decisionEnvelopes) memDb.decisionEnvelopes = new Map(snap.decisionEnvelopes);
         if (snap.evidencePackages) memDb.evidencePackages = new Map(snap.evidencePackages);
@@ -332,7 +344,8 @@ class MemoryClient {
 
     // Fail-Closed RLS Enforcement: If querying tenant-isolated tables without tenant context, return 0 rows
     const isTenantTable = /FROM\s+(principal|organization|effective_membership|idempotency_record|audit_event|outbox_event|source_contract|connection|watermark|ingest_receipt|work_fact_revision|metric_snapshot|privacy_decision|privacy_release|released_artifact|disclosure_ledger|hazard|cause|intervention|approval|implementation_receipt|evaluation|retention_class|legal_hold|retention_run|deletion_tombstone|tenant_policy_binding|decision_envelope|evidence_package|evidence_item|rights_request|ai_run|action_attempt)/i.test(trimmed);
-    if (isTenantTable && !this.tenantContext) {
+    const workerTable = this.workerMode && /FROM\s+(outbox_event|inbox_event)\b/i.test(trimmed);
+    if (isTenantTable && !this.tenantContext && !workerTable) {
       return { rows: [], rowCount: 0, command: "SELECT", oid: 0, fields: [] };
     }
 
@@ -403,6 +416,12 @@ class MemoryClient {
       };
       memDb.auditEvents.push(event);
       return { rows: [event], rowCount: 1, command: "INSERT", oid: 0, fields: [] };
+    }
+
+    // Audit Event Select (tenant-isolated, newest first)
+    if (upper.includes("FROM AUDIT_EVENT")) {
+      const rows = memDb.auditEvents.filter(e => e.tenant_id === this.tenantContext).slice().reverse();
+      return { rows, rowCount: rows.length, command: "SELECT", oid: 0, fields: [] };
     }
 
     // Outbox Event Insert
@@ -493,7 +512,8 @@ class MemoryClient {
 
     // Outbox Drain: SELECT * FROM outbox_event WHERE published_at IS NULL
     if (upper.includes("FROM OUTBOX_EVENT WHERE PUBLISHED_AT IS NULL")) {
-      const unpublished = memDb.outboxEvents.filter(e => !e.published_at);
+      let unpublished = memDb.outboxEvents.filter(e => !e.published_at && (this.workerMode || e.tenant_id === this.tenantContext));
+      if (upper.includes("LIMIT $1")) unpublished = unpublished.slice(0, Number(params[0]));
       return { rows: unpublished, rowCount: unpublished.length, command: "SELECT", oid: 0, fields: [] };
     }
 
@@ -521,44 +541,6 @@ class MemoryClient {
     // Phase 5 Jurisdiction Packs & Retention Handlers
     // Kept ahead of Phase 2 so the purge DELETE is not matched as a work fact SELECT.
     // -------------------------------------------------------------
-
-    // Jurisdiction Pack Insert (global catalog, not tenant-scoped)
-    if (upper.includes("INSERT INTO JURISDICTION_PACK")) {
-      const [packId, version, jurisdiction, sector, effectiveFrom, effectiveTo, status, content, contentHash, approvedBy] = params;
-      const key = `${packId}:${version}`;
-      if (memDb.jurisdictionPacks.has(key)) {
-        throw new Error("duplicate key value violates unique constraint jurisdiction_pack_pkey");
-      }
-      const rec = {
-        pack_id: packId,
-        version,
-        jurisdiction,
-        sector,
-        effective_from: effectiveFrom,
-        effective_to: effectiveTo,
-        status,
-        content,
-        content_hash: contentHash,
-        approved_by: approvedBy,
-        approved_at: new Date().toISOString()
-      };
-      memDb.jurisdictionPacks.set(key, rec);
-      return { rows: [rec], rowCount: 1, command: "INSERT", oid: 0, fields: [] };
-    }
-
-    // Jurisdiction Pack close-out of an open-ended predecessor
-    if (upper.includes("UPDATE JURISDICTION_PACK SET EFFECTIVE_TO")) {
-      const [effectiveTo, packId, version] = params;
-      const rec = memDb.jurisdictionPacks.get(`${packId}:${version}`);
-      if (rec) rec.effective_to = effectiveTo;
-      return { rows: rec ? [rec] : [], rowCount: rec ? 1 : 0, command: "UPDATE", oid: 0, fields: [] };
-    }
-
-    // Jurisdiction Pack Select
-    if (upper.includes("FROM JURISDICTION_PACK")) {
-      const rows = Array.from(memDb.jurisdictionPacks.values()).filter(p => params.length === 0 || p.pack_id === params[0]);
-      return { rows, rowCount: rows.length, command: "SELECT", oid: 0, fields: [] };
-    }
 
     // Retention Class Insert (append-only versions)
     if (upper.includes("INSERT INTO RETENTION_CLASS")) {
@@ -1015,6 +997,10 @@ class MemoryClient {
 
     // Released Artifact Select (single read path: joins with privacy_release)
     if (upper.includes("FROM RELEASED_ARTIFACT")) {
+      if (params.length === 0) {
+        const rows = Array.from(memDb.releasedArtifacts.values()).filter(a => a.tenant_id === this.tenantContext);
+        return { rows, rowCount: rows.length, command: "SELECT", oid: 0, fields: [] };
+      }
       const releaseId = params[0];
       const a = memDb.releasedArtifacts.get(releaseId);
       if (a && a.tenant_id === this.tenantContext) {
@@ -1324,27 +1310,37 @@ class MemoryClient {
     // Phase 5 Governance, Policy Packs, Evidence & Rights Handlers
     // -------------------------------------------------------------
 
-    // Policy Pack Insert
+    // Policy Pack Insert (global catalog; columns as in 0051_governance_evidence.sql)
     if (upper.includes("INSERT INTO POLICY_PACK")) {
-      const [packId, version, kind, title, desc, publisher, effFrom, effTo, def, hash, status, approvedBy, approvedAt] = params;
-      const key = `${packId}:${version}`;
+      const [id, packKey, version, kind, effFrom, effTo, status, sourceRefs, reviewer, reviewDate, content, contentHash] = params;
+      const key = `${packKey}:${version}`;
+      if (memDb.policyPacks.has(key)) {
+        throw new Error("duplicate key value violates unique constraint policy_pack_pack_key_version_key");
+      }
       const rec = {
-        pack_id: packId,
+        id,
+        pack_key: packKey,
         version: Number(version),
         kind,
-        title,
-        description: desc,
-        publisher,
         effective_from: effFrom,
-        effective_to: effTo || null,
-        definition: typeof def === "string" ? JSON.parse(def) : def,
-        pack_hash: hash,
-        status: status || "APPROVED",
-        approved_by: approvedBy || null,
-        approved_at: approvedAt || new Date().toISOString()
+        effective_to: effTo ?? null,
+        status,
+        source_refs: typeof sourceRefs === "string" ? JSON.parse(sourceRefs) : sourceRefs,
+        accountable_reviewer: reviewer,
+        review_date: reviewDate,
+        content: typeof content === "string" ? JSON.parse(content) : content,
+        content_hash: contentHash
       };
       memDb.policyPacks.set(key, rec);
       return { rows: [rec], rowCount: 1, command: "INSERT", oid: 0, fields: [] };
+    }
+
+    // Policy Pack close-out of an open-ended predecessor
+    if (upper.includes("UPDATE POLICY_PACK SET EFFECTIVE_TO")) {
+      const [effectiveTo, packKey, version] = params;
+      const rec = memDb.policyPacks.get(`${packKey}:${version}`);
+      if (rec) rec.effective_to = effectiveTo;
+      return { rows: rec ? [rec] : [], rowCount: rec ? 1 : 0, command: "UPDATE", oid: 0, fields: [] };
     }
 
     // Policy Pack Select (global catalog; columns as in 0051_governance_evidence.sql)
@@ -1410,47 +1406,46 @@ class MemoryClient {
       return { rows, rowCount: rows.length, command: "SELECT", oid: 0, fields: [] };
     }
 
-    // Evidence Package Insert
+    // Evidence Package Insert (columns as in 0051_governance_evidence.sql)
     if (upper.includes("INSERT INTO EVIDENCE_PACKAGE")) {
-      const [id, tId, pStart, pEnd, manifestSha, storageKey, count, bytes, status, metadata] = params;
+      const [id, tId, scope, cutoff, issuer, classification, manifestHash, supersedesId, supersededById, issuedAt] = params;
       if (this.tenantContext && tId !== this.tenantContext) {
         throw new Error("RLS WITH CHECK violation: cross-tenant evidence_package write rejected");
       }
       const rec = {
         id,
         tenant_id: tId,
-        period_start: pStart,
-        period_end: pEnd,
-        manifest_sha256: manifestSha,
-        storage_key: storageKey,
-        item_count: count,
-        total_bytes: bytes,
-        status: status || "VALID",
-        superseded_by: null,
-        metadata: typeof metadata === "string" ? JSON.parse(metadata) : metadata,
-        created_at: new Date().toISOString()
+        scope: typeof scope === "string" ? JSON.parse(scope) : scope,
+        cutoff,
+        issuer_principal_id: issuer,
+        classification,
+        manifest_hash: manifestHash,
+        supersedes_id: supersedesId ?? null,
+        superseded_by_id: supersededById ?? null,
+        state: "ISSUED",
+        issued_at: issuedAt || new Date().toISOString()
       };
       memDb.evidencePackages.set(id, rec);
       return { rows: [rec], rowCount: 1, command: "INSERT", oid: 0, fields: [] };
     }
 
-    // Evidence Package Update
+    // Evidence Package Update: supersession (issue) and correction impact
     if (upper.includes("UPDATE EVIDENCE_PACKAGE")) {
-      if (upper.includes("SET STATUS = $1, SUPERSEDED_BY = $2")) {
-        const [status, supersededBy, id, tId] = params;
-        const rec = memDb.evidencePackages.get(id);
-        if (rec && rec.tenant_id === (this.tenantContext || tId)) {
-          rec.status = status;
-          rec.superseded_by = supersededBy;
-          return { rows: [rec], rowCount: 1, command: "UPDATE", oid: 0, fields: [] };
-        }
-      } else if (upper.includes("SET STATUS = 'SUPERSEDED'")) {
-        const [id, tId] = params;
-        const rec = memDb.evidencePackages.get(id);
-        if (rec && rec.tenant_id === (this.tenantContext || tId)) {
-          rec.status = "SUPERSEDED";
-          return { rows: [rec], rowCount: 1, command: "UPDATE", oid: 0, fields: [] };
-        }
+      let id: string;
+      let apply: (rec: any) => void;
+      if (upper.includes("SUPERSEDED_BY_ID = $1")) {
+        // SET state = 'SUPERSEDED', superseded_by_id = $1 WHERE id = $2
+        id = params[1];
+        apply = rec => { rec.state = "SUPERSEDED"; rec.superseded_by_id = params[0]; };
+      } else {
+        // SET state = $1 WHERE id = $2
+        id = params[1];
+        apply = rec => { rec.state = params[0]; };
+      }
+      const rec = memDb.evidencePackages.get(id);
+      if (rec && rec.tenant_id === this.tenantContext) {
+        apply(rec);
+        return { rows: [rec], rowCount: 1, command: "UPDATE", oid: 0, fields: [] };
       }
       return { rows: [], rowCount: 0, command: "UPDATE", oid: 0, fields: [] };
     }
@@ -1458,38 +1453,76 @@ class MemoryClient {
     // Evidence Package Select
     if (upper.includes("FROM EVIDENCE_PACKAGE")) {
       let rows = Array.from(memDb.evidencePackages.values()).filter(p => p.tenant_id === this.tenantContext);
-      if (params.length > 0) {
+      if (/WHERE ID = \$1/.test(upper)) {
         rows = rows.filter(p => p.id === params[0]);
       }
       return { rows, rowCount: rows.length, command: "SELECT", oid: 0, fields: [] };
     }
 
-    // Evidence Item Insert
+    // Evidence Item Insert: no tenant_id column; visible only through a package of the current tenant
+    // (mirrors policy evidence_item_via_package in 0061_phase6_hardening.sql)
     if (upper.includes("INSERT INTO EVIDENCE_ITEM")) {
-      const [id, tId, pkgId, kind, sha, storageKey, bytes] = params;
-      if (this.tenantContext && tId !== this.tenantContext) {
-        throw new Error("RLS WITH CHECK violation: cross-tenant evidence_item write rejected");
+      const [packageId, itemType, itemId, itemVersion, sha256, objectKey] = params;
+      const pkg = memDb.evidencePackages.get(packageId);
+      if (!pkg || pkg.tenant_id !== this.tenantContext) {
+        throw new Error("RLS WITH CHECK violation: evidence_item must belong to a package of the current tenant");
       }
-      const rec = {
-        id,
-        tenant_id: tId,
-        package_id: pkgId,
-        kind,
-        item_sha256: sha,
-        storage_key: storageKey,
-        bytes: Number(bytes),
-        created_at: new Date().toISOString()
-      };
+      const rec = { package_id: packageId, item_type: itemType, item_id: itemId, item_version: Number(itemVersion), sha256, object_key: objectKey };
       memDb.evidenceItems.push(rec);
       return { rows: [rec], rowCount: 1, command: "INSERT", oid: 0, fields: [] };
     }
 
     // Evidence Item Select
     if (upper.includes("FROM EVIDENCE_ITEM")) {
-      let rows = memDb.evidenceItems.filter(i => i.tenant_id === this.tenantContext);
+      let rows = memDb.evidenceItems.filter(i => memDb.evidencePackages.get(i.package_id)?.tenant_id === this.tenantContext);
       if (params.length > 0) {
         rows = rows.filter(i => i.package_id === params[0]);
       }
+      return { rows, rowCount: rows.length, command: "SELECT", oid: 0, fields: [] };
+    }
+
+    // Correction Insert
+    if (upper.includes("INSERT INTO CORRECTION")) {
+      const [id, tId, connId, sourceRecordId, revision, affStart, affEnd, releases, packages, recordedBy, recordedAt] = params;
+      if (this.tenantContext && tId !== this.tenantContext) {
+        throw new Error("RLS WITH CHECK violation: cross-tenant correction write rejected");
+      }
+      const rec = {
+        id,
+        tenant_id: tId,
+        connection_id: connId,
+        source_record_id: sourceRecordId,
+        revision,
+        affected_start: affStart,
+        affected_end: affEnd,
+        impacted_releases: typeof releases === "string" ? JSON.parse(releases) : releases,
+        impacted_packages: typeof packages === "string" ? JSON.parse(packages) : packages,
+        status: "STALE_MARKED",
+        recorded_by: recordedBy,
+        recorded_at: recordedAt,
+        acknowledged_by: null,
+        acknowledged_at: null,
+        reviewer_notes: null
+      };
+      memDb.corrections.set(id, rec);
+      return { rows: [rec], rowCount: 1, command: "INSERT", oid: 0, fields: [] };
+    }
+
+    // Correction acknowledgement
+    if (upper.includes("UPDATE CORRECTION")) {
+      const [status, by, at, notes, id] = params;
+      const rec = memDb.corrections.get(id);
+      if (rec && rec.tenant_id === this.tenantContext) {
+        Object.assign(rec, { status, acknowledged_by: by, acknowledged_at: at, reviewer_notes: notes });
+        return { rows: [rec], rowCount: 1, command: "UPDATE", oid: 0, fields: [] };
+      }
+      return { rows: [], rowCount: 0, command: "UPDATE", oid: 0, fields: [] };
+    }
+
+    // Correction Select
+    if (/\bFROM\s+CORRECTION\b/.test(upper)) {
+      let rows = Array.from(memDb.corrections.values()).filter(c => c.tenant_id === this.tenantContext);
+      if (params.length > 0) rows = rows.filter(c => c.id === params[0]);
       return { rows, rowCount: rows.length, command: "SELECT", oid: 0, fields: [] };
     }
 
@@ -1828,6 +1861,42 @@ export async function withPlatform<T>(fn: (tx: Tx) => Promise<T>): Promise<T> {
   }
 
   const memClient = new MemoryClient();
+  try {
+    await memClient.query("BEGIN");
+    const out = await fn({ q: memClient.query.bind(memClient), tenantId: "" });
+    await memClient.query("COMMIT");
+    return out;
+  } catch (e) {
+    await memClient.query("ROLLBACK");
+    throw e;
+  } finally {
+    memClient.release();
+  }
+}
+
+/**
+ * withWorker: Transaction as the outbox worker (abate_worker role): no tenant context, but RLS policies let it
+ * read outbox_event and record inbox_event across tenants. Every other tenant table stays invisible.
+ */
+export async function withWorker<T>(fn: (tx: Tx) => Promise<T>): Promise<T> {
+  const usePg = await checkPgHealth();
+
+  if (usePg && workerPool) {
+    const client: PoolClient = await workerPool.connect();
+    try {
+      await client.query("BEGIN");
+      const out = await fn({ q: client.query.bind(client) as QueryFn, tenantId: "" });
+      await client.query("COMMIT");
+      return out;
+    } catch (e) {
+      await client.query("ROLLBACK").catch(() => {});
+      throw e;
+    } finally {
+      client.release();
+    }
+  }
+
+  const memClient = new MemoryClient(true);
   try {
     await memClient.query("BEGIN");
     const out = await fn({ q: memClient.query.bind(memClient), tenantId: "" });

@@ -10,11 +10,13 @@ export interface AppConfig {
   clientUrl: string;
   databaseUrlMigrator: string;
   databaseUrlApp: string;
+  databaseUrlWorker: string;
   objectStoreEndpoint: string;
   authIssuer: string;
   authAudience: string;
   authSecret: string;
   actionGrantSecret: string;
+  supportAuthSecret: string;
   fixedClock: string;
 }
 
@@ -28,11 +30,13 @@ export function loadConfig(): AppConfig {
     clientUrl: process.env.CLIENT_URL || "http://localhost:5173",
     databaseUrlMigrator: process.env.DATABASE_URL_MIGRATOR || "postgres://abate_migrator:migrator_pw@localhost:5432/abate",
     databaseUrlApp: process.env.DATABASE_URL_APP || "postgres://abate_app:app_pw@localhost:5432/abate",
+    databaseUrlWorker: process.env.DATABASE_URL_WORKER || "postgres://abate_worker:worker_pw@localhost:5432/abate",
     objectStoreEndpoint: process.env.OBJECT_STORE_ENDPOINT || "http://localhost:9000",
     authIssuer: process.env.AUTH_ISSUER || "http://localhost:5000/auth",
     authAudience: process.env.AUTH_AUDIENCE || "abate-api",
     authSecret: process.env.AUTH_SECRET || "dev_secret_key_abate_foundation_do_not_use_in_prod_min_32_chars!",
     actionGrantSecret: process.env.ACTION_GRANT_SECRET || "dev_action_grant_key_abate_do_not_use_in_prod_min_32_chars!",
+    supportAuthSecret: process.env.SUPPORT_AUTH_SECRET || "dev_support_auth_key_abate_do_not_use_in_prod_min_32_chars!",
     fixedClock: process.env.FIXED_CLOCK || "2026-03-02T09:00:00Z"
   };
 }

@@ -185,7 +185,7 @@ async function runDemoCycle() {
       "INSERT INTO approval (id, tenant_id, intervention_id, approved_version, approved_material_hash, approver_principal_id, authority_ref, policy_resolution) VALUES ($1, $2, $3, $4, $5, $6, $7, $8)",
       [approvalId, whoA.tenantId, controlId, 1, v1Hash, actorA.principalId, "auth:playbook-b4", { gate: "APPROVAL", resolved: true }]
     );
-    await tx.q("UPDATE intervention SET state = 'APPROVED' WHERE id = $1", ["APPROVED", controlId]);
+    await tx.q("UPDATE intervention SET state = $1 WHERE id = $2", ["APPROVED", controlId]);
   });
   console.log("  ✔ Control drafted in state PROPOSED and approved by authorized Risk Owner (v1, state: APPROVED)");
 
@@ -197,7 +197,7 @@ async function runDemoCycle() {
       "INSERT INTO implementation_receipt (id, tenant_id, intervention_id, intervention_version, kind, recorded_by, completed_on, evidence_refs) VALUES ($1, $2, $3, $4, $5, $6, $7, $8)",
       [receiptId, whoA.tenantId, controlId, 1, "ORGANIZATIONAL_POLICY", actorA.principalId, "2026-04-10", ["doc:intranet-policy-v1", "sys:m365-delayed-delivery-rules"]]
     );
-    await tx.q("UPDATE intervention SET state = 'IMPLEMENTED' WHERE id = $1", ["IMPLEMENTED", controlId]);
+    await tx.q("UPDATE intervention SET state = $1 WHERE id = $2", ["IMPLEMENTED", controlId]);
 
     // Pin verification plan
     const evalId = crypto.randomUUID();
@@ -205,7 +205,7 @@ async function runDemoCycle() {
       "INSERT INTO evaluation (id, tenant_id, intervention_id, plan, baseline_release_id, post_release_id, adjacent_release_ids, series_break) VALUES ($1, $2, $3, $4, $5, $6, $7, $8)",
       [evalId, whoA.tenantId, controlId, v1Plan, originatingReleaseId, null, [], false]
     );
-    await tx.q("UPDATE intervention SET state = 'VERIFYING' WHERE id = $1", ["VERIFYING", controlId]);
+    await tx.q("UPDATE intervention SET state = $1 WHERE id = $2", ["VERIFYING", controlId]);
   });
   console.log("  ✔ Implementation receipt recorded with audit trail (state: IMPLEMENTED)");
   console.log("  ✔ Verification plan pinned before results exist (state: VERIFYING)");
@@ -225,10 +225,10 @@ async function runDemoCycle() {
       "UPDATE evaluation SET outcome = $1, reviewer_id = $2, residual_risk = $3, concluded_at = $4 WHERE intervention_id = $5",
       ["EFFECTIVE", actorA.principalId, "Residual boundary intrusion within acceptable threshold", new Date().toISOString(), controlId]
     );
-    await tx.q("UPDATE intervention SET state = 'CLOSED' WHERE id = $1", ["CLOSED", controlId]);
+    await tx.q("UPDATE intervention SET state = $1 WHERE id = $2", ["CLOSED", controlId]);
 
     // Update Hazard disposition to CONTROLLED
-    await tx.q("UPDATE hazard SET disposition = 'CONTROLLED' WHERE id = $1", ["CONTROLLED", hazardId]);
+    await tx.q("UPDATE hazard SET disposition = $1 WHERE id = $2", ["CONTROLLED", hazardId]);
   });
   console.log("  ✔ Named reviewer concluded verification: EFFECTIVE, intervention state: CLOSED");
   console.log("  ✔ Hazard disposition updated: CONTROLLED");
@@ -244,10 +244,11 @@ async function runDemoCycle() {
   console.log("Step 13. Jurisdiction Pack, Retention Schedule & Legal Hold (Phase 5)...");
   const coverage = await getJurisdictionCoverage({ who: whoA, actor: actorA });
   if (coverage.status !== "COVERED") throw new Error("Tenant A must be covered by a jurisdiction pack");
-  console.log(`  ✔ Jurisdiction pack in effect: ${coverage.pack.packId} v${coverage.pack.version} (${coverage.pack.content.title})`);
+  console.log(`  ✔ Jurisdiction pack in effect: ${coverage.pack.packKey} v${coverage.pack.version} (${coverage.pack.title})`);
 
   const coverageB = await getJurisdictionCoverage({ who: whoB, actor: actorB });
-  console.log(`  ✔ Tenant B coverage: ${coverageB.status} -> retention configuration fails closed`);
+  const bPack = coverageB.status === "COVERED" ? `${coverageB.pack.packKey} v${coverageB.pack.version}` : coverageB.reason;
+  console.log(`  ✔ Tenant B pack ${bPack} does not address WORK_FACT retention -> retention configuration fails closed`);
 
   const retentionClass = await setRetentionClass({
     who: whoA, actor: actorA, idempotencyKey: `idem-${crypto.randomUUID()}`,
