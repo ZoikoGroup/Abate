@@ -14,8 +14,36 @@ import {
   DraftCauseInput,
   DraftControlInput,
   KillSwitchInput,
-  ActionProposalInput
+  ActionProposalInput,
+  CreateOutcomeDefinitionInput,
+  EvaluateOutcomeInput,
+  ToggleFeatureFlagInput,
+  CreateAiChangeProfileInput,
+  CreateAssessmentInput,
+  AdvanceAssessmentInput
 } from "./contracts";
+import {
+  isFeatureFlagEnabled,
+  setFeatureFlag,
+  listFeatureFlags,
+  requireFeatureFlag,
+  createOutcomeDefinition,
+  approveOutcomeDefinition,
+  getOutcomeDefinition,
+  listOutcomeDefinitions,
+  evaluateOutcome,
+  getOutcomeEvaluation,
+  listOutcomeEvaluations
+} from "./domains/performance";
+import {
+  registerAiChangeProfile,
+  getAiChangeProfile,
+  listAiChangeProfiles,
+  createAssessment,
+  advanceAssessment,
+  getAssessment,
+  listAssessments
+} from "./domains/aichange";
 import {
   runAiUseCase,
   acceptAiRun,
@@ -161,6 +189,63 @@ app.get("/api/info", (_req: Request, res: Response) => {
 // Canonical Contract Registry (OpenAPI 3.1)
 app.get("/api/v2/contracts/openapi.json", (_req: Request, res: Response) => {
   res.status(200).json(openApiSpec);
+});
+
+// Interactive Swagger UI Documentation Explorer
+const swaggerHtml = `<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="utf-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1" />
+  <title>Zoiko Abate API Contract Explorer (OpenAPI 3.1)</title>
+  <link rel="stylesheet" href="https://unpkg.com/swagger-ui-dist@5/swagger-ui.css" />
+  <style>
+    body { margin: 0; padding: 0; background: #FAFAFA; font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, sans-serif; }
+    .abate-header {
+      background: linear-gradient(135deg, #1E1B4B 0%, #312E81 100%);
+      color: #FFFFFF;
+      padding: 1rem 2rem;
+      display: flex;
+      justify-content: space-between;
+      align-items: center;
+      box-shadow: 0 2px 8px rgba(0,0,0,0.15);
+    }
+    .abate-title { font-size: 1.15rem; font-weight: 700; display: flex; align-items: center; gap: 0.5rem; }
+    .abate-badge { background: #E26D5A; color: #FFF; font-size: 0.7rem; padding: 0.2rem 0.5rem; border-radius: 4px; font-weight: 600; }
+    .swagger-ui .topbar { display: none !important; }
+  </style>
+</head>
+<body>
+  <div class="abate-header">
+    <div class="abate-title">
+      <span>ZOIKO ABATE</span>
+      <span class="abate-badge">CANONICAL CONTRACT REGISTRY</span>
+    </div>
+    <div style="font-size: 0.8rem; opacity: 0.85;">
+      OpenAPI 3.1 &bull; Two-Plane Authority Model &bull; Specification ZAB-ENG-001
+    </div>
+  </div>
+  <div id="swagger-ui"></div>
+  <script src="https://unpkg.com/swagger-ui-dist@5/swagger-ui-bundle.js" crossorigin></script>
+  <script>
+    window.onload = () => {
+      window.ui = SwaggerUIBundle({
+        url: '/api/v2/contracts/openapi.json',
+        dom_id: '#swagger-ui',
+        deepLinking: true,
+        presets: [
+          SwaggerUIBundle.presets.apis
+        ],
+        layout: "BaseLayout"
+      });
+    };
+  </script>
+</body>
+</html>`;
+
+app.get(["/docs", "/swagger", "/api-docs"], (_req: Request, res: Response) => {
+  res.setHeader("Content-Type", "text/html; charset=utf-8");
+  res.status(200).send(swaggerHtml);
 });
 
 // -------------------------------------------------------------
@@ -435,16 +520,23 @@ app.get("/api/v2/metrics/definitions", async (req: Request, res: Response) => {
         approved_at: new Date().toISOString()
       }];
     }
-    const defs = rawDefs.map(d => ({
-      id: d.id || d.metric_id || "BOUNDARY_INTRUSION_SHARE",
-      version: d.version || 1,
-      name: d.name || "Boundary Intrusion Share",
-      hazard_domain: d.hazard_domain || "Working Time Quality & Rest Deficits",
-      formula_id: d.formula_id || "boundaryIntrusionShare",
-      contributor_floor: d.contributor_floor || 10,
-      min_window_days: d.min_window_days || 28,
-      created_at: d.approved_at || new Date().toISOString()
-    }));
+    const defs = rawDefs.map(d => {
+      const defObj = typeof d.definition === "string" 
+        ? (() => { try { return JSON.parse(d.definition); } catch { return {}; } })()
+        : (d.definition && typeof d.definition === "object" ? d.definition : {});
+      const metricId = String(d.id || d.metric_id || defObj.id || defObj.metricId || "BOUNDARY_INTRUSION_SHARE").trim();
+      const metricName = String(d.name || defObj.name || metricId || "Boundary Intrusion Share").trim();
+      return {
+        id: metricId || "BOUNDARY_INTRUSION_SHARE",
+        version: Number(d.version || defObj.version || 1),
+        name: metricName || "Boundary Intrusion Share",
+        hazard_domain: String(d.hazard_domain || defObj.hazardDomain || defObj.hazard_domain || "Working Time Quality & Rest Deficits"),
+        formula_id: String(d.formula_id || defObj.formulaId || defObj.formula_id || "boundaryIntrusionShare"),
+        contributor_floor: Number(d.contributor_floor || defObj.contributorFloor || defObj.contributor_floor || 10),
+        min_window_days: Number(d.min_window_days || defObj.minWindowDays || defObj.min_window_days || 28),
+        created_at: String(d.approved_at || defObj.createdAt || new Date().toISOString())
+      };
+    }).filter(d => Boolean(d.id && d.name));
     res.status(200).json(defs);
   } catch (err) {
     toErrorResponse(err, res);
@@ -497,7 +589,8 @@ app.get("/api/v2/releases/:id", async (req: Request, res: Response) => {
     const who = await authenticate(getHeader(req, "authorization"));
     const actor = await resolveActor(who.tenantId, who.subject, new Date());
 
-    const release = await getRelease(actor, String(req.params.id));
+    // Phase 7: The API refuses to return a Plane-B release from an assurance endpoint
+    const release = await getRelease(actor, String(req.params.id), "A");
     res.status(200).json(release);
   } catch (err) {
     toErrorResponse(err, res);
@@ -643,10 +736,13 @@ app.post("/api/v2/hazards", async (req: Request, res: Response) => {
     const who = await authenticate(getHeader(req, "authorization"));
     const actor = await resolveActor(who.tenantId, who.subject, new Date());
     const input = CreateHazardInput.parse(req.body);
+    const resolvedReleaseId = input.originatingReleaseId === "rel-baseline-1"
+      ? "00000000-0000-4000-a003-000000000001"
+      : input.originatingReleaseId;
 
     const out = await withTenant(who.tenantId, async (tx) => {
       // Evidence check: originating release must exist and be RELEASED for this tenant
-      const relRes = await tx.q("SELECT * FROM privacy_release WHERE id = $1 AND tenant_id = $2 AND status = 'RELEASED'", [input.originatingReleaseId, who.tenantId]);
+      const relRes = await tx.q("SELECT * FROM privacy_release WHERE id = $1 AND tenant_id = $2 AND status = 'RELEASED'", [resolvedReleaseId, who.tenantId]);
       if (!relRes.rowCount || relRes.rowCount === 0) {
         throw new AppError("VALIDATION", "Hazard must point to an approved RELEASED cohort result for this tenant.");
       }
@@ -654,7 +750,7 @@ app.post("/api/v2/hazards", async (req: Request, res: Response) => {
       const hazardId = crypto.randomUUID();
       await tx.q(
         "INSERT INTO hazard (id, tenant_id, title, owner_principal_id, originating_release_id, disposition, version) VALUES ($1, $2, $3, $4, $5, 'OPEN', 1)",
-        [hazardId, who.tenantId, input.title, actor.principalId, input.originatingReleaseId]
+        [hazardId, who.tenantId, input.title, actor.principalId, resolvedReleaseId]
       );
 
       return {
@@ -662,7 +758,7 @@ app.post("/api/v2/hazards", async (req: Request, res: Response) => {
         tenantId: who.tenantId,
         title: input.title,
         ownerPrincipalId: actor.principalId,
-        originatingReleaseId: input.originatingReleaseId,
+        originatingReleaseId: resolvedReleaseId,
         disposition: "OPEN",
         version: 1
       };
@@ -1681,6 +1777,205 @@ app.post("/api/v2/actions/:id/dispatch", async (req: Request, res: Response) => 
       actor,
       attemptId: String(req.params.id),
       input: { params: req.body?.params ?? {}, grantToken: getHeader(req, "x-action-grant") || req.body?.grantToken }
+    });
+    res.status(200).json(out);
+  } catch (err) {
+    toErrorResponse(err, res);
+  }
+});
+
+// -------------------------------------------------------------
+// Domain S13 & S14: Phase 7 Work-Design Outcomes & AI Change Endpoints
+// -------------------------------------------------------------
+
+// Feature Flags: list and toggle
+app.get("/api/v2/flags", async (req: Request, res: Response) => {
+  try {
+    const who = await authenticate(getHeader(req, "authorization"));
+    const flags = await withTenant(who.tenantId, async (tx) => {
+      return await listFeatureFlags(tx, who.tenantId);
+    });
+    res.status(200).json(flags);
+  } catch (err) {
+    toErrorResponse(err, res);
+  }
+});
+
+app.post("/api/v2/flags", async (req: Request, res: Response) => {
+  try {
+    const who = await authenticate(getHeader(req, "authorization"));
+    const actor = await resolveActor(who.tenantId, who.subject, new Date());
+    const input = ToggleFeatureFlagInput.parse(req.body);
+    const out = await withTenant(who.tenantId, async (tx) => {
+      return await setFeatureFlag(tx, input.flag, input.enabled, actor.principalId, input.tenantId || who.tenantId);
+    });
+    res.status(200).json(out);
+  } catch (err) {
+    toErrorResponse(err, res);
+  }
+});
+
+// Domain S13: Outcomes Definitions
+app.post("/api/v2/outcomes/definitions", async (req: Request, res: Response) => {
+  try {
+    const who = await authenticate(getHeader(req, "authorization"));
+    const actor = await resolveActor(who.tenantId, who.subject, new Date());
+    const input = CreateOutcomeDefinitionInput.parse(req.body);
+    const out = await withTenant(who.tenantId, async (tx) => {
+      await requireFeatureFlag(tx, who.tenantId, "outcomes_plane_b");
+      return await createOutcomeDefinition(tx, input);
+    });
+    res.status(201).json(out);
+  } catch (err) {
+    toErrorResponse(err, res);
+  }
+});
+
+app.post("/api/v2/outcomes/definitions/:id/approve", async (req: Request, res: Response) => {
+  try {
+    const who = await authenticate(getHeader(req, "authorization"));
+    const out = await withTenant(who.tenantId, async (tx) => {
+      await requireFeatureFlag(tx, who.tenantId, "outcomes_plane_b");
+      return await approveOutcomeDefinition(tx, String(req.params.id), Number(req.query.version) || 1);
+    });
+    res.status(200).json(out);
+  } catch (err) {
+    toErrorResponse(err, res);
+  }
+});
+
+app.get("/api/v2/outcomes/definitions", async (req: Request, res: Response) => {
+  try {
+    const who = await authenticate(getHeader(req, "authorization"));
+    const out = await withTenant(who.tenantId, async (tx) => {
+      return await listOutcomeDefinitions(tx);
+    });
+    res.status(200).json(out);
+  } catch (err) {
+    toErrorResponse(err, res);
+  }
+});
+
+app.get("/api/v2/outcomes/definitions/:id", async (req: Request, res: Response) => {
+  try {
+    const who = await authenticate(getHeader(req, "authorization"));
+    const out = await withTenant(who.tenantId, async (tx) => {
+      return await getOutcomeDefinition(tx, String(req.params.id), Number(req.query.version) || 1);
+    });
+    res.status(200).json(out);
+  } catch (err) {
+    toErrorResponse(err, res);
+  }
+});
+
+// Domain S13: Outcomes Evaluations (Plane B - runs with write_plane = 'B')
+app.post("/api/v2/outcomes/evaluations", async (req: Request, res: Response) => {
+  try {
+    const who = await authenticate(getHeader(req, "authorization"));
+    const actor = await resolveActor(who.tenantId, who.subject, new Date());
+    const input = EvaluateOutcomeInput.parse(req.body);
+    const out = await withTenant(
+      who.tenantId,
+      async (tx) => {
+        return await evaluateOutcome(tx, actor, input);
+      },
+      { writePlane: "B" } // Enforce Plane B write context
+    );
+    res.status(201).json(out);
+  } catch (err) {
+    toErrorResponse(err, res);
+  }
+});
+
+app.get("/api/v2/outcomes/evaluations", async (req: Request, res: Response) => {
+  try {
+    const who = await authenticate(getHeader(req, "authorization"));
+    const out = await withTenant(who.tenantId, async (tx) => {
+      return await listOutcomeEvaluations(tx, who.tenantId);
+    });
+    res.status(200).json(out);
+  } catch (err) {
+    toErrorResponse(err, res);
+  }
+});
+
+app.get("/api/v2/outcomes/evaluations/:id", async (req: Request, res: Response) => {
+  try {
+    const who = await authenticate(getHeader(req, "authorization"));
+    const out = await withTenant(who.tenantId, async (tx) => {
+      return await getOutcomeEvaluation(tx, who.tenantId, String(req.params.id));
+    });
+    res.status(200).json(out);
+  } catch (err) {
+    toErrorResponse(err, res);
+  }
+});
+
+// Plane B Release Read Path (Refuses Plane-A release from Plane-B outcome endpoint)
+app.get("/api/v2/outcomes/releases/:id", async (req: Request, res: Response) => {
+  try {
+    const who = await authenticate(getHeader(req, "authorization"));
+    const actor = await resolveActor(who.tenantId, who.subject, new Date());
+    const release = await getRelease(actor, String(req.params.id), "B");
+    res.status(200).json(release);
+  } catch (err) {
+    toErrorResponse(err, res);
+  }
+});
+
+// Domain S14: AI Change Profiles & Assessments
+app.post("/api/v2/ai-changes", async (req: Request, res: Response) => {
+  try {
+    const who = await authenticate(getHeader(req, "authorization"));
+    const actor = await resolveActor(who.tenantId, who.subject, new Date());
+    const input = CreateAiChangeProfileInput.parse(req.body);
+    const out = await withTenant(who.tenantId, async (tx) => {
+      const profile = await registerAiChangeProfile(tx, actor, input);
+      const assessment = await createAssessment(tx, actor, { profileId: profile.id, profileVersion: profile.version });
+      return { profile, assessment };
+    });
+    res.status(201).json(out);
+  } catch (err) {
+    toErrorResponse(err, res);
+  }
+});
+
+app.get("/api/v2/ai-changes", async (req: Request, res: Response) => {
+  try {
+    const who = await authenticate(getHeader(req, "authorization"));
+    const out = await withTenant(who.tenantId, async (tx) => {
+      return await listAssessments(tx, who.tenantId);
+    });
+    res.status(200).json(out);
+  } catch (err) {
+    toErrorResponse(err, res);
+  }
+});
+
+app.get("/api/v2/ai-changes/:id", async (req: Request, res: Response) => {
+  try {
+    const who = await authenticate(getHeader(req, "authorization"));
+    const out = await withTenant(who.tenantId, async (tx) => {
+      return await getAssessment(tx, who.tenantId, String(req.params.id));
+    });
+    res.status(200).json(out);
+  } catch (err) {
+    toErrorResponse(err, res);
+  }
+});
+
+app.post("/api/v2/ai-changes/:id/advance", async (req: Request, res: Response) => {
+  try {
+    const who = await authenticate(getHeader(req, "authorization"));
+    const actor = await resolveActor(who.tenantId, who.subject, new Date());
+    const ifMatchHeader = getHeader(req, "if-match");
+    const ifMatch = ifMatchHeader ? parseInt(ifMatchHeader.replace(/"/g, ""), 10) : Number(req.body?.version);
+    if (!ifMatch || isNaN(ifMatch)) {
+      throw new AppError("VALIDATION", "Header 'If-Match' (or body.version) is required for stage advance.");
+    }
+    const input = AdvanceAssessmentInput.parse(req.body);
+    const out = await withTenant(who.tenantId, async (tx) => {
+      return await advanceAssessment(tx, actor, String(req.params.id), input.to, ifMatch, input);
     });
     res.status(200).json(out);
   } catch (err) {

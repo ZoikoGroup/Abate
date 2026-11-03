@@ -10,3 +10,5 @@ export * from "./support";
 export * from "./governance";
 export * from "./ai";
 export * from "./actions";
+export * from "./outcomes";
+export * from "./aichange";

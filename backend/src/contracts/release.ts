@@ -26,6 +26,7 @@ export type ReleaseView =
   | {
     status: "RELEASED";
     releaseId: string;
+    plane: "A" | "B";
     metricId: string;
     metricName: string;
     version: number;
@@ -44,6 +45,7 @@ export type ReleaseView =
   | {
     status: "STALE";
     releaseId: string;
+    plane?: "A" | "B";
     reason: string;
     supersededAt?: string;
     asOf?: string;
@@ -51,5 +53,6 @@ export type ReleaseView =
   | {
     status: "UNAVAILABLE";
     code: "NOT_AVAILABLE";
+    plane?: "A" | "B";
     message?: string;
   };

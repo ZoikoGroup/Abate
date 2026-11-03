@@ -11,6 +11,8 @@ import { getJurisdictionCoverage, setRetentionClass, placeLegalHold, releaseLega
 import { generateDiagnosticReceipt, verifyDiagnosticReceipt } from "../src/domains/support";
 import { runAiUseCase, acceptAiRun } from "../src/domains/ai";
 import { proposeAction, dispatchAction } from "../src/domains/actions";
+import { setFeatureFlag, evaluateOutcome } from "../src/domains/performance";
+import { registerAiChangeProfile, createAssessment, advanceAssessment } from "../src/domains/aichange";
 
 import { drainOnce } from "../src/worker/outbox-publisher";
 import { withTenant, memDb } from "../src/platform/db/with-tenant";
@@ -322,8 +324,81 @@ async function runDemoCycle() {
   });
   console.log(`  ✔ Action Attempt Dispatched: State ${dispRes.state} with fencing token ${dispRes.fencingToken} (approval-bound grant verified)\n`);
 
+  console.log("Step 17. Work-Design Outcomes (Plane B) & AI Work-Design Assessment (Phase 7)...");
+  // 17.1 Enable outcomes_plane_b feature flag
+  await withTenant(whoA.tenantId, async (tx) => {
+    await setFeatureFlag(tx, "outcomes_plane_b", true, actorA.principalId, whoA.tenantId);
+  });
+  console.log("  ✔ Feature flag 'outcomes_plane_b' enabled for Tenant A");
+
+  // 17.2 Performance Outcome Evaluation (Plane B)
+  const evalOutcome = await withTenant(whoA.tenantId, async (tx) => {
+    return await evaluateOutcome(tx, actorA, {
+      outcomeId: "WORKLOAD_SUSTAINABILITY",
+      outcomeVersion: 1,
+      releaseId: originatingReleaseId,
+      interventionId: controlId,
+      comparisonBasis: {
+        method: "PRE_POST_INTERVENTION",
+        windowDays: 28,
+        description: "4-week cohort observation interval following scheduled rest implementation"
+      },
+      confounders: {},
+      seriesBreak: false,
+      outcomeConfidence: "HIGH",
+      permittedClaims: ["Observed 18% improvement in rest window compliance over 4-week window."],
+      evidenceRefs: []
+    });
+  }, { writePlane: "B" });
+  console.log(`  ✔ Plane B Outcome Evaluated: ID ${evalOutcome.id.slice(0, 8)}... | Plane: ${evalOutcome.plane} (Strictly isolated from Plane A assurance)`);
+
+  // 17.3 AI Change Profile Registration & Assessment
+  const aiProfile = await withTenant(whoA.tenantId, async (tx) => {
+    return await registerAiChangeProfile(tx, actorA, {
+      title: "Litigation Research & Synthesis Agent",
+      affectedRoles: ["Associate", "Paralegal"],
+      affectedTasks: ["Precedent synthesis", "Initial brief citation verification"],
+      automationMode: "ASSIST",
+      decisionRights: "Supervising Senior Partner retains sole filing authority",
+      humanOverride: "Associates can dismiss or rewrite any model draft",
+      monitoringChanges: "Weekly review of edit distance and time-budget changes",
+      throughputAssumptions: "Target 20% reduction in document drafting turnaround",
+      rolloutDate: "2026-06-01",
+      trainingSupport: "Mandatory 4-hour prompt calibration and ethical boundaries workshop"
+    });
+  });
+  console.log(`  ✔ AI Change Profile Registered: '${aiProfile.title}' v${aiProfile.version} (Mode: ${aiProfile.automationMode})`);
+
+  // 17.4 Staged Assessment Workflow
+  const aiAssessment = await withTenant(whoA.tenantId, async (tx) => {
+    const assm = await createAssessment(tx, actorA, {
+      profileId: aiProfile.id,
+      profileVersion: 1
+    });
+    const atBase = await advanceAssessment(tx, actorA, assm.id, "BASELINE", 1);
+    const atDetect = await advanceAssessment(tx, actorA, assm.id, "DETECT", atBase.version, {
+      to: "DETECT",
+      baselineReleaseIds: [originatingReleaseId]
+    });
+    const atAttr = await advanceAssessment(tx, actorA, assm.id, "ATTRIBUTE", atDetect.version, {
+      to: "ATTRIBUTE",
+      hazardIds: [hazardId]
+    });
+    const atCtrl = await advanceAssessment(tx, actorA, assm.id, "CONTROL", atAttr.version, {
+      to: "CONTROL",
+      controlIds: [controlId]
+    });
+    const atVer = await advanceAssessment(tx, actorA, assm.id, "VERIFY", atCtrl.version, {
+      to: "VERIFY",
+      verificationRefs: ["evidence:post-rollout-audit"]
+    });
+    const atRev = await advanceAssessment(tx, actorA, assm.id, "PERFORMANCE_REVIEW", atVer.version);
+    return await advanceAssessment(tx, actorA, assm.id, "CLOSED", atRev.version);
+  });
+  console.log(`  ✔ AI Change Assessment Completed: 8 Stages Verified -> Final Stage: ${aiAssessment.stage}\n`);
+
   console.log("\x1b[32m====================================================================\x1b[0m");
-  console.log("\x1b[32m=== DEMO CYCLE COMPLETED SUCCESSFULLY: ALL PHASES 0-6 + B8 VERIFIED ===\x1b[0m");
+  console.log("\x1b[32m=== DEMO CYCLE COMPLETED SUCCESSFULLY: ALL PHASES 0-7 + B8 VERIFIED ===\x1b[0m");
   console.log("\x1b[32m====================================================================\x1b[0m");
 }
 

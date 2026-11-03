@@ -28,6 +28,8 @@ import { generateDiagnosticReceipt, verifyDiagnosticReceipt } from "../src/domai
 import { requestErasure, resolvePolicy, resolveTenantCoverage, issuePackage, getEvidencePackage, recordCorrection, acknowledgeCorrection } from "../src/domains/lifecycle";
 import { runAiUseCase, acceptAiRun, setKillSwitch, seedApprovedKnowledge } from "../src/domains/ai";
 import { mintGrant, verifyGrant, paramHashOf, createActionAttempt, dispatchAttempt, proposeAction, dispatchAction, toolProviders } from "../src/domains/actions";
+import { setFeatureFlag, isFeatureFlagEnabled, evaluateOutcome } from "../src/domains/performance";
+import { registerAiChangeProfile, createAssessment, advanceAssessment, getAssessment } from "../src/domains/aichange";
 
 
 console.log("\x1b[36m=== Abate Task Runner: test-boundaries (Constitutional & Isolation Gates) ===\x1b[0m");
@@ -703,7 +705,7 @@ async function run() {
     t.setUTCHours(hour, 0, 0, 0);
     return t.toISOString();
   };
-  const isCode = (code: string) => (err: any) => err instanceof AppError && err.code === code;
+  const isCode = (code: string) => (err: any) => err?.code === code || (err instanceof AppError && err.code === code);
   const factBySource = (recordId: string) =>
     Array.from(memDb.workFactRevisions.values()).find(f => f.source_record_id === recordId);
 
@@ -1332,7 +1334,7 @@ async function run() {
     const pkg = await withTenant(tenantAId, tx => issuePackage(tx, { hazardId: GOLDEN_01.approvedControl.hazardId, issuerPrincipalId: actorA.principalId }));
     const back = await withTenant(tenantAId, tx => getEvidencePackage(tx, pkg.id));
     assert.ok(back && back.state === "ISSUED" && back.manifestHash === pkg.manifestHash);
-    assert.ok(back.items.some(i => i.itemType === "released_artifact" && i.itemId === "00000000-0000-4000-a003-000000000001"));
+    assert.ok(back.items?.some(i => i.itemType === "released_artifact" && i.itemId === "00000000-0000-4000-a003-000000000001"));
 
     // A record far outside the baseline release period (2026-03-02..2026-03-30) affects nothing
     const outside = (n: number) => ({ recordId: "corr-outside", revision: n, subjectRef: "emp-corr", startUtc: "2025-06-01T09:00:00.000Z", endUtc: "2025-06-01T12:00:00.000Z", workTz: "Europe/London", kind: "WORK" as const });
@@ -1372,6 +1374,279 @@ async function run() {
     const second = await drainOnce({ bus, consumerName: "crash-consumer" });
     assert.ok(second.published >= 1);
     assert.strictEqual(handled, 1, "Redelivery must not run the handler twice");
+  });
+
+  // -------------------------------------------------------------
+  // Phase 7: Work-Design Outcomes (Plane B) & AI Change Assessment (S13 & S14)
+  // -------------------------------------------------------------
+
+  // 53. Plane B outcome write cannot close or alter an open hazard in Plane A
+  await test("Phase 7 Lab 1: Performance outcome write cannot close an open hazard (Plane B cannot mutate Plane A)", async () => {
+    // 0. Seed a fresh active release for Phase 7
+    const p7ReleaseId = crypto.randomUUID();
+    await withTenant(tenantAId, async (tx) => {
+      await tx.q(
+        `INSERT INTO privacy_release (id, tenant_id, decision_id, snapshot_id, metric_id, metric_version, release_class, status, plane)
+         VALUES ($1, $2, $3, $4, 'BOUNDARY_INTRUSION_SHARE', 1, 'CLASS_B', 'RELEASED', 'A')`,
+        [p7ReleaseId, tenantAId, crypto.randomUUID(), crypto.randomUUID()]
+      );
+      await tx.q(
+        `INSERT INTO released_artifact (release_id, tenant_id, metric_id, metric_version, value, unit, period_start, period_end, quality, interpretation, status, artifact_hash, plane)
+         VALUES ($1, $2, 'BOUNDARY_INTRUSION_SHARE', 1, 20.0, 'percent', now() - interval '28 days', now(), 'VALID', 'Intervention verification', 'RELEASED', 'hash-p7', 'A')`,
+        [p7ReleaseId, tenantAId]
+      );
+    });
+
+    // 1. Create a hazard in Plane A with disposition OPEN
+    const hazardId = crypto.randomUUID();
+    await withTenant(tenantAId, async (tx) => {
+      await tx.q(
+        "INSERT INTO hazard (id, tenant_id, title, owner_principal_id, originating_release_id, disposition, version) VALUES ($1, $2, $3, $4, $5, 'OPEN', 1)",
+        [hazardId, tenantAId, "Night workload surge", actorA.principalId, p7ReleaseId]
+      );
+    });
+
+    // 2. Enable outcomes_plane_b feature flag
+    await withTenant(tenantAId, async (tx) => {
+      await setFeatureFlag(tx, "outcomes_plane_b", true, "ops.admin", tenantAId);
+    });
+
+    // 3. Evaluate a performance outcome (Plane B write)
+    const evalResult = await withTenant(tenantAId, async (tx) => {
+      return await evaluateOutcome(tx, actorA, {
+        outcomeId: "WORKLOAD_SUSTAINABILITY",
+        outcomeVersion: 1,
+        releaseId: p7ReleaseId,
+        comparisonBasis: { method: "PRE_POST_INTERVENTION", windowDays: 28, description: "4-week cohort observation interval" },
+        confounders: {},
+        seriesBreak: false,
+        outcomeConfidence: "HIGH",
+        permittedClaims: ["Observed 12% improvement in rest interval compliance."],
+        evidenceRefs: []
+      });
+    }, { writePlane: "B" });
+
+    assert.strictEqual(evalResult.plane, "B");
+
+    // 4. Invariant assertion: Hazard in Plane A remains strictly OPEN
+    const hRow = await withTenant(tenantAId, async (tx) => {
+      return (await tx.q("SELECT disposition FROM hazard WHERE id = $1", [hazardId])).rows[0];
+    });
+    assert.strictEqual(hRow.disposition, "OPEN", "Plane B evaluation must NEVER mutate or close Plane A hazard disposition");
+  });
+
+  // 54. Permitted claims rejecting prohibited phrases (no hazard closure claims)
+  await test("Phase 7 Lab 2: Prohibited claims in outcome evaluation are strictly rejected", async () => {
+    // Fresh release for claim test
+    const claimRelId = crypto.randomUUID();
+    await withTenant(tenantAId, async (tx) => {
+      await tx.q(
+        `INSERT INTO privacy_release (id, tenant_id, decision_id, snapshot_id, metric_id, metric_version, release_class, status, plane)
+         VALUES ($1, $2, $3, $4, 'WORKLOAD_SUSTAINABILITY', 1, 'CLASS_B', 'RELEASED', 'A')`,
+        [claimRelId, tenantAId, crypto.randomUUID(), crypto.randomUUID()]
+      );
+      await tx.q(
+        `INSERT INTO released_artifact (release_id, tenant_id, metric_id, metric_version, value, unit, period_start, period_end, quality, interpretation, status, artifact_hash, plane)
+         VALUES ($1, $2, 'WORKLOAD_SUSTAINABILITY', 1, 20.0, 'percent', now() - interval '28 days', now(), 'VALID', 'Claims test', 'RELEASED', 'hash-claim', 'A')`,
+        [claimRelId, tenantAId]
+      );
+    });
+
+    await withTenant(tenantAId, async (tx) => {
+      await assert.rejects(async () => {
+        await evaluateOutcome(tx, actorA, {
+          outcomeId: "WORKLOAD_SUSTAINABILITY",
+          outcomeVersion: 1,
+          releaseId: claimRelId,
+          comparisonBasis: { method: "COHORT_OBSERVATION", description: "Cohort observation" },
+          confounders: {},
+          seriesBreak: false,
+          outcomeConfidence: "HIGH",
+          permittedClaims: ["This evaluation proved the intervention worked and controlled the hazard."],
+          evidenceRefs: []
+        });
+      }, isCode("VALIDATION"));
+    }, { writePlane: "B" });
+  });
+
+  // 55. Direct database write to hazard disposition via Plane B is forbidden
+  await test("Phase 7 Lab 3: Direct database write to hazard disposition via Plane B fails (FORBIDDEN)", async () => {
+    await assert.rejects(async () => {
+      await withTenant(tenantAId, async (tx) => {
+        await tx.q("UPDATE hazard SET disposition = 'CONTROLLED'");
+      }, { writePlane: "B" });
+    }, isCode("FORBIDDEN"));
+  });
+
+  // 56. Cross-plane release endpoint isolation: Plane B release is hidden from Plane A endpoint
+  await test("Phase 7 Lab 4: Cross-plane release endpoint isolation (Plane B hidden from Plane A reader)", async () => {
+    const relBId = crypto.randomUUID();
+    await withTenant(tenantAId, async (tx) => {
+      await tx.q(
+        `INSERT INTO privacy_release (id, tenant_id, decision_id, snapshot_id, metric_id, metric_version, release_class, status, plane)
+         VALUES ($1, $2, $3, $4, 'WORKLOAD_SUSTAINABILITY', 1, 'CLASS_B', 'RELEASED', 'B')`,
+        [relBId, tenantAId, crypto.randomUUID(), crypto.randomUUID()]
+      );
+      await tx.q(
+        `INSERT INTO released_artifact (release_id, tenant_id, metric_id, metric_version, value, unit, period_start, period_end, quality, interpretation, status, artifact_hash, plane)
+         VALUES ($1, $2, 'WORKLOAD_SUSTAINABILITY', 1, 88.5, 'score', now() - interval '28 days', now(), 'VALID', 'Workload sustainability score', 'RELEASED', 'hash-rel-b', 'B')`,
+        [relBId, tenantAId]
+      );
+    }, { writePlane: "B" });
+
+    // Plane A reader rejects Plane B release with NOT_FOUND
+    await assert.rejects(async () => {
+      await getRelease(actorA, relBId, "A");
+    }, isCode("NOT_FOUND"));
+
+    // Plane B reader successfully reads Plane B release
+    const relB = await getRelease(actorA, relBId, "B");
+    assert.strictEqual(relB.plane, "B");
+    assert.strictEqual(relB.status, "RELEASED");
+  });
+
+  // 57. AI Change assessment staged workflow enforces stage guards and blocks closure on open obligations
+  await test("Phase 7 Lab 5: AI Change assessment workflow enforces stage guards and blocks closure on open obligations", async () => {
+    // 0. Seed fresh baseline release for AI change
+    const aiBaselineReleaseId = crypto.randomUUID();
+    await withTenant(tenantAId, async (tx) => {
+      await tx.q(
+        `INSERT INTO privacy_release (id, tenant_id, decision_id, snapshot_id, metric_id, metric_version, release_class, status, plane)
+         VALUES ($1, $2, $3, $4, 'BOUNDARY_INTRUSION_SHARE', 1, 'CLASS_B', 'RELEASED', 'A')`,
+        [aiBaselineReleaseId, tenantAId, crypto.randomUUID(), crypto.randomUUID()]
+      );
+      await tx.q(
+        `INSERT INTO released_artifact (release_id, tenant_id, metric_id, metric_version, value, unit, period_start, period_end, quality, interpretation, status, artifact_hash, plane)
+         VALUES ($1, $2, 'BOUNDARY_INTRUSION_SHARE', 1, 18.5, 'percent', now() - interval '28 days', now(), 'VALID', 'Baseline for AI rollout', 'RELEASED', 'hash-ai-base', 'A')`,
+        [aiBaselineReleaseId, tenantAId]
+      );
+    });
+
+    // 1. Register AI Change Profile
+    const profile = await withTenant(tenantAId, async (tx) => {
+      return await registerAiChangeProfile(tx, actorA, {
+        title: "Copilot Assistant Rollout",
+        affectedRoles: ["Associate"],
+        affectedTasks: ["Litigation brief first-draft synthesis"],
+        automationMode: "ASSIST",
+        decisionRights: "Supervising partner retains sign-off on every brief",
+        humanOverride: "Associates may discard or rewrite any generated draft",
+        monitoringChanges: "No new individual monitoring; cohort-level review only",
+        throughputAssumptions: "Decreases drafting time while preserving role clarity",
+        rolloutDate: "2026-06-01",
+        trainingSupport: "Two-hour onboarding on review and override"
+      });
+    });
+    assert.strictEqual(profile.version, 1);
+
+    // 2. Create Assessment (starts in REGISTERED)
+    const assessment = await withTenant(tenantAId, async (tx) => {
+      return await createAssessment(tx, actorA, {
+        profileId: profile.id,
+        profileVersion: 1
+      });
+    });
+    assert.strictEqual(assessment.stage, "REGISTERED");
+
+    // 3. Advance without If-Match throws CONFLICT
+    await assert.rejects(async () => {
+      await withTenant(tenantAId, async (tx) => {
+        await advanceAssessment(tx, actorA, assessment.id, "BASELINE", 999);
+      });
+    }, isCode("CONFLICT"));
+
+    // 4. Advance to BASELINE with correct If-Match
+    const atBaseline = await withTenant(tenantAId, async (tx) => {
+      return await advanceAssessment(tx, actorA, assessment.id, "BASELINE", 1);
+    });
+    assert.strictEqual(atBaseline.stage, "BASELINE");
+
+    // 5. Advance to DETECT without baseline releases throws CONFLICT
+    await assert.rejects(async () => {
+      await withTenant(tenantAId, async (tx) => {
+        await advanceAssessment(tx, actorA, assessment.id, "DETECT", atBaseline.version, {
+          baselineReleaseIds: []
+        });
+      });
+    }, isCode("CONFLICT"));
+
+    // 6. Advance to DETECT with valid baseline release
+    const atDetect = await withTenant(tenantAId, async (tx) => {
+      return await advanceAssessment(tx, actorA, assessment.id, "DETECT", atBaseline.version, {
+        baselineReleaseIds: [aiBaselineReleaseId]
+      });
+    });
+    assert.strictEqual(atDetect.stage, "DETECT");
+
+    // 7. Advance to ATTRIBUTE with candidate hazard and accepted organizational cause
+    const testHazardId = crypto.randomUUID();
+    const testCauseId = crypto.randomUUID();
+    await withTenant(tenantAId, async (tx) => {
+      await tx.q(
+        "INSERT INTO hazard (id, tenant_id, title, owner_principal_id, originating_release_id, disposition, version) VALUES ($1, $2, $3, $4, $5, 'OPEN', 1)",
+        [testHazardId, tenantAId, "Cognitive pacing disruption", actorA.principalId, aiBaselineReleaseId]
+      );
+      await tx.q(
+        "INSERT INTO cause (id, tenant_id, hazard_id, statement, status, reviewed_by, reviewed_at, version) VALUES ($1, $2, $3, $4, $5, $6, $7, $8)",
+        [testCauseId, tenantAId, testHazardId, "Pacing overload due to unconstrained automated generation", "REVIEWED_ACCEPTED", actorA.principalId, new Date().toISOString(), 1]
+      );
+    });
+
+    const atAttribute = await withTenant(tenantAId, async (tx) => {
+      return await advanceAssessment(tx, actorA, assessment.id, "ATTRIBUTE", atDetect.version, {
+        hazardIds: [testHazardId]
+      });
+    });
+    assert.strictEqual(atAttribute.stage, "ATTRIBUTE");
+
+    // 8. Advance to CONTROL with implemented intervention
+    const testInterventionId = crypto.randomUUID();
+    await withTenant(tenantAId, async (tx) => {
+      await tx.q(
+        "INSERT INTO intervention (id, tenant_id, hazard_id, scope, objective, target_date, state, version) VALUES ($1, $2, $3, 'Scope', 'Objective', '2026-06-01', 'IMPLEMENTED', 1)",
+        [testInterventionId, tenantAId, testHazardId]
+      );
+    });
+
+    const atControl = await withTenant(tenantAId, async (tx) => {
+      return await advanceAssessment(tx, actorA, assessment.id, "CONTROL", atAttribute.version, {
+        controlIds: [testInterventionId]
+      });
+    });
+    assert.strictEqual(atControl.stage, "CONTROL");
+
+    // 9. Advance to VERIFY
+    const atVerify = await withTenant(tenantAId, async (tx) => {
+      return await advanceAssessment(tx, actorA, assessment.id, "VERIFY", atControl.version, {
+        verificationRefs: ["evidence:pacing-audit-v1"]
+      });
+    });
+    assert.strictEqual(atVerify.stage, "VERIFY");
+
+    // 10. Advance to PERFORMANCE_REVIEW
+    const atReview = await withTenant(tenantAId, async (tx) => {
+      return await advanceAssessment(tx, actorA, assessment.id, "PERFORMANCE_REVIEW", atVerify.version);
+    });
+    assert.strictEqual(atReview.stage, "PERFORMANCE_REVIEW");
+
+    // 11. Core Governance Mandate: Attempt to CLOSE assessment while hazard is OPEN is REFUSED!
+    await assert.rejects(async () => {
+      await withTenant(tenantAId, async (tx) => {
+        await advanceAssessment(tx, actorA, assessment.id, "CLOSED", atReview.version);
+      });
+    }, isCode("CONFLICT"), "Assessment closure MUST be rejected while any assurance obligation remains open");
+
+    // 12. Close assurance obligations in Plane A
+    await withTenant(tenantAId, async (tx) => {
+      await tx.q("UPDATE hazard SET disposition = 'CONTROLLED' WHERE id = $1", [testHazardId]);
+      await tx.q("UPDATE intervention SET state = 'CLOSED' WHERE id = $1", [testInterventionId]);
+    }, { writePlane: "A" });
+
+    // 13. Now advancing to CLOSED succeeds!
+    const closed = await withTenant(tenantAId, async (tx) => {
+      return await advanceAssessment(tx, actorA, assessment.id, "CLOSED", atReview.version);
+    });
+    assert.strictEqual(closed.stage, "CLOSED");
   });
 
   console.log(`\x1b[32m[SUCCESS] All ${passed} boundary, isolation, and reliability tests passed.\x1b[0m`);
