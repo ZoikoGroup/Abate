@@ -24,6 +24,11 @@ async function check(name: string, fn: () => Promise<void>) {
   }
 }
 
+// Response.json() is typed Promise<unknown> in current Node typings; these gates inspect loose JSON shapes.
+async function readJson(res: Response | Promise<Response>): Promise<any> {
+  return (await res).json();
+}
+
 async function pool<T>(tasks: Array<() => Promise<T>>, width: number): Promise<T[]> {
   const out: T[] = [];
   let next = 0;
@@ -52,11 +57,11 @@ async function run() {
     method: "POST",
     body: JSON.stringify({ tenantId: GOLDEN_01.tenantA.id, subject: "auth0|user-tenant-a-risk-owner", role: "RISK_OWNER" })
   });
-  const tenantToken = (await tokenRes.json()).token as string;
-  const supportToken = (await (await call("/api/v2/auth/support-token", {
+  const tenantToken = (await readJson(tokenRes)).token as string;
+  const supportToken = (await readJson(call("/api/v2/auth/support-token", {
     method: "POST",
     body: JSON.stringify({ operator: "ops.slo-gate" })
-  })).json()).token as string;
+  }))).token as string;
 
   // Fixtures seed asynchronously on import; wait until the tenant resolves
   for (let i = 0; i < 50; i++) {
@@ -80,7 +85,7 @@ async function run() {
   const serverErrors = statuses.filter(s => s >= 500).length;
 
   const sloRes = await call("/api/v2/ops/slo", { token: supportToken });
-  const report = await sloRes.json();
+  const report = await readJson(sloRes);
 
   console.log(`  Load: ${tasks.length} requests, ${serverErrors} server errors`);
   for (const l of report.latency) {
@@ -113,12 +118,12 @@ async function run() {
   await check("Support correlation: a reported requestId resolves to a content-free record (route template, no ids)", async () => {
     const missingId = crypto.randomUUID();
     const failed = await call(`/api/v2/organizations/${missingId}`, { token: tenantToken });
-    const body = await failed.json();
+    const body = await readJson(failed);
     assert.strictEqual(failed.status, 404);
     assert.strictEqual(body.requestId, failed.headers.get("x-request-id"), "Error body and header must carry the same id");
 
     const lookup = await call(`/api/v2/ops/requests/${body.requestId}`, { token: supportToken });
-    const record = await lookup.json();
+    const record = await readJson(lookup);
     assert.strictEqual(lookup.status, 200);
     assert.strictEqual(record.route, "/api/v2/organizations/:id");
     assert.strictEqual(record.errorCode, "NOT_FOUND");
@@ -141,9 +146,9 @@ async function run() {
   });
 
   await check("Signed diagnostics: tenant-issued receipt verifies for support; an edited copy does not", async () => {
-    const issued = await (await call("/api/v2/support/diagnostic-receipts", { method: "POST", token: tenantToken, key: crypto.randomUUID() })).json();
+    const issued = await readJson(call("/api/v2/support/diagnostic-receipts", { method: "POST", token: tenantToken, key: crypto.randomUUID() }));
     const verify = async (receipt: unknown) =>
-      (await (await call("/api/v2/ops/diagnostic-receipts/verify", { method: "POST", token: supportToken, body: JSON.stringify(receipt) })).json()).valid;
+      (await readJson(call("/api/v2/ops/diagnostic-receipts/verify", { method: "POST", token: supportToken, body: JSON.stringify(receipt) }))).valid;
     assert.strictEqual(await verify(issued), true);
     assert.strictEqual(await verify({ ...issued, generatedAt: new Date(0).toISOString() }), false);
   });
@@ -154,16 +159,16 @@ async function run() {
     assert.strictEqual((await flip(tenantToken)).status, 401, "Tenant tokens must not change global AI state");
     const bySupport = await flip(supportToken);
     assert.strictEqual(bySupport.status, 200);
-    assert.strictEqual((await bySupport.json()).changed_by, "ops.slo-gate", "The operator is recorded");
+    assert.strictEqual((await readJson(bySupport)).changed_by, "ops.slo-gate", "The operator is recorded");
     assert.strictEqual((await call("/api/v2/ops/kill-switches")).status, 401);
     assert.strictEqual((await call("/api/v2/ai/kill-switches", { token: tenantToken })).status, 200);
   });
 
   await check("Membership: a valid token for a subject with no membership is refused on every Phase 6 route", async () => {
-    const strangerToken = (await (await call("/api/v2/auth/token", {
+    const strangerToken = (await readJson(call("/api/v2/auth/token", {
       method: "POST",
       body: JSON.stringify({ tenantId: GOLDEN_01.tenantA.id, subject: "auth0|not-a-member", role: "RISK_OWNER" })
-    })).json()).token as string;
+    }))).token as string;
     const probes: Array<[string, RequestInit]> = [
       ["/api/v2/entitlements", {}],
       ["/api/v2/policy/resolution", {}],

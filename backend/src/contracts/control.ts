@@ -53,7 +53,7 @@ export type CauseStatus = z.infer<typeof CauseStatusEnum>;
 
 export const CreateHazardInput = z.object({
   title: z.string().min(3),
-  originatingReleaseId: z.string().uuid()
+  originatingReleaseId: z.string().min(1)
 }).strict();
 export type CreateHazardInput = z.infer<typeof CreateHazardInput>;
 

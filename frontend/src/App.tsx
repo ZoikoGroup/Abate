@@ -19,12 +19,13 @@ import { CohortAnalyticsTab } from "./components/Tabs/CohortAnalyticsTab";
 import { HazardControlTab } from "./components/Tabs/HazardControlTab";
 import { RetentionTab } from "./components/Tabs/RetentionTab";
 import { BoundedAiTab } from "./components/Tabs/BoundedAiTab";
+import { OutcomesAiChangeTab } from "./components/Tabs/OutcomesAiChangeTab";
 import { OperationsTab } from "./components/Tabs/OperationsTab";
 import { OutboxTab } from "./components/Tabs/OutboxTab";
 import { AuditTab } from "./components/Tabs/AuditTab";
 import "./index.css";
 
-type TabKey = "constitutional" | "isolation" | "organizations" | "ingestion" | "analytics" | "hazards" | "retention" | "ai" | "operations" | "outbox" | "audit";
+type TabKey = "constitutional" | "isolation" | "organizations" | "ingestion" | "analytics" | "hazards" | "retention" | "ai" | "outcomes" | "operations" | "outbox" | "audit";
 
 export default function App() {
   const [activeTenantId, setActiveTenantId] = useState(PRESET_TENANTS[0].id);
@@ -164,6 +165,13 @@ export default function App() {
         </button>
         <button
           type="button"
+          className={`tab-button ${activeTab === "outcomes" ? "active" : ""}`}
+          onClick={() => setActiveTab("outcomes")}
+        >
+          Outcomes &amp; AI Change (Phase 7)
+        </button>
+        <button
+          type="button"
           className={`tab-button ${activeTab === "operations" ? "active" : ""}`}
           onClick={() => setActiveTab("operations")}
         >
@@ -260,6 +268,13 @@ export default function App() {
 
         {activeTab === "ai" && (
           <BoundedAiTab
+            currentTenant={currentTenant}
+            token={token}
+          />
+        )}
+
+        {activeTab === "outcomes" && (
+          <OutcomesAiChangeTab
             currentTenant={currentTenant}
             token={token}
           />

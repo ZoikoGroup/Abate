@@ -1076,3 +1076,183 @@ export async function dispatchAction(
 // Seeded ABATE-GOLDEN-01 fixtures used by the lab screens (Tenant A)
 export const BASELINE_RELEASE_ID = "00000000-0000-4000-a003-000000000001";
 export const SEEDED_APPROVAL_ID = "00000000-0000-4000-a007-000000000004";
+
+// ==========================================
+// Phase 7: Outcomes & AI Change (Package B7)
+// ==========================================
+
+export type AutomationMode = "ASSIST" | "AUTOMATE_WITH_REVIEW" | "AUTONOMOUS_BOUNDED";
+export type AiChangeStage =
+  | "REGISTERED"
+  | "BASELINE"
+  | "DETECT"
+  | "ATTRIBUTE"
+  | "CONTROL"
+  | "VERIFY"
+  | "PERFORMANCE_REVIEW"
+  | "CLOSED";
+
+export interface OutcomeDefinitionView {
+  outcomeId: string;
+  version: number;
+  outcomeClass: "COMPLIANCE_EVIDENCE" | "PERFORMANCE_OUTCOME";
+  family: "WORKLOAD_SUSTAINABILITY" | "ROLE_CLARITY" | "FRAGMENTATION" | "HUMAN_AI_WORK_QUALITY";
+  purpose: string;
+  prohibitedInterpretation: string;
+  unit: string;
+  definition: Record<string, any>;
+  qualityRules: Record<string, any>;
+  privacyClass: string;
+  status: "DRAFT" | "APPROVED" | "RETIRED";
+  definitionHash: string;
+}
+
+export interface OutcomeEvaluationView {
+  id: string;
+  tenantId: string;
+  outcomeId: string;
+  outcomeVersion: number;
+  interventionId?: string;
+  comparisonBasis: Record<string, any>;
+  confounders: Record<string, any>;
+  seriesBreak: boolean;
+  outcomeConfidence: "HIGH" | "MEDIUM" | "LOW" | "INSUFFICIENT_DATA";
+  permittedClaims: string[];
+  evidenceRefs: string[];
+  releaseId: string;
+  plane: "B";
+  createdAt: string;
+}
+
+export interface FeatureFlagView {
+  flag: string;
+  enabled: boolean;
+  tenantId: string | null;
+  changedBy?: string;
+  changedAt?: string;
+}
+
+export interface AiChangeProfileView {
+  id: string;
+  tenantId: string;
+  title: string;
+  version: number;
+  affectedRoles: string[];
+  affectedTasks: string[];
+  automationMode: AutomationMode;
+  decisionRights: string;
+  humanOverride: string;
+  monitoringChanges: string;
+  throughputAssumptions: string;
+  rolloutDate: string;
+  trainingSupport: string;
+}
+
+export interface AiWorkDesignAssessmentView {
+  id: string;
+  tenantId: string;
+  profileId: string;
+  profileVersion: number;
+  stage: AiChangeStage;
+  hazardIds: string[];
+  controlIds: string[];
+  baselineReleaseIds: string[];
+  verificationRefs: string[];
+  version: number;
+  profile?: AiChangeProfileView;
+  assuranceSummary?: {
+    openHazardsCount: number;
+    pendingControlsCount: number;
+    verifiedControlsCount: number;
+  };
+  performanceSummary?: {
+    evaluationsCount: number;
+    permittedClaims: string[];
+  };
+}
+
+export async function fetchFeatureFlags(token?: string): Promise<Record<string, boolean>> {
+  return api<Record<string, boolean>>("/api/v2/flags", { token });
+}
+
+export async function setFeatureFlag(flag: string, enabled: boolean, token?: string): Promise<FeatureFlagView> {
+  return api<FeatureFlagView>("/api/v2/flags", {
+    method: "POST",
+    body: JSON.stringify({ flag, enabled }),
+    token
+  });
+}
+
+export async function fetchOutcomeDefinitions(token?: string): Promise<OutcomeDefinitionView[]> {
+  return api<OutcomeDefinitionView[]>("/api/v2/outcomes/definitions", { token });
+}
+
+export async function createOutcomeDefinition(data: any, token?: string): Promise<OutcomeDefinitionView> {
+  return api<OutcomeDefinitionView>("/api/v2/outcomes/definitions", {
+    method: "POST",
+    body: JSON.stringify(data),
+    token
+  });
+}
+
+export async function approveOutcomeDefinition(id: string, token?: string): Promise<OutcomeDefinitionView> {
+  return api<OutcomeDefinitionView>(`/api/v2/outcomes/definitions/${id}/approve`, {
+    method: "POST",
+    body: JSON.stringify({}),
+    token
+  });
+}
+
+export async function evaluateOutcome(data: any, token?: string): Promise<OutcomeEvaluationView> {
+  return api<OutcomeEvaluationView>("/api/v2/outcomes/evaluations", {
+    method: "POST",
+    body: JSON.stringify(data),
+    token
+  });
+}
+
+export async function fetchOutcomeEvaluations(token?: string): Promise<OutcomeEvaluationView[]> {
+  return api<OutcomeEvaluationView[]>("/api/v2/outcomes/evaluations", { token });
+}
+
+export async function fetchOutcomeEvaluation(id: string, token?: string): Promise<OutcomeEvaluationView> {
+  return api<OutcomeEvaluationView>(`/api/v2/outcomes/evaluations/${id}`, { token });
+}
+
+export async function fetchPlaneBRelease(id: string, token?: string): Promise<any> {
+  return api<any>(`/api/v2/outcomes/releases/${id}`, { token });
+}
+
+export async function createAiChange(
+  profile: any,
+  token?: string
+): Promise<{ profile: AiChangeProfileView; assessment: AiWorkDesignAssessmentView }> {
+  return api<{ profile: AiChangeProfileView; assessment: AiWorkDesignAssessmentView }>("/api/v2/ai-changes", {
+    method: "POST",
+    body: JSON.stringify(profile),
+    token
+  });
+}
+
+export async function fetchAiAssessments(token?: string): Promise<AiWorkDesignAssessmentView[]> {
+  return api<AiWorkDesignAssessmentView[]>("/api/v2/ai-changes", { token });
+}
+
+export async function fetchAiAssessment(id: string, token?: string): Promise<AiWorkDesignAssessmentView> {
+  return api<AiWorkDesignAssessmentView>(`/api/v2/ai-changes/${id}`, { token });
+}
+
+export async function advanceAiAssessment(
+  id: string,
+  toStage: AiChangeStage,
+  version: number,
+  data?: { hazardIds?: string[]; controlIds?: string[]; baselineReleaseIds?: string[]; verificationRefs?: string[] },
+  token?: string
+): Promise<AiWorkDesignAssessmentView> {
+  return api<AiWorkDesignAssessmentView>(`/api/v2/ai-changes/${id}/advance`, {
+    method: "POST",
+    headers: { "if-match": `"${version}"` },
+    body: JSON.stringify({ to: toStage, version, ...data }),
+    token
+  });
+}

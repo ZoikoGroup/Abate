@@ -61,9 +61,14 @@ export function toErrorResponse(error: unknown, res: Response) {
   // Map Zod schema validation errors to safe 400 VALIDATION response (Phase 0 / Phase 1 standard)
   if (error instanceof ZodError || (error && (error as any).name === "ZodError")) {
     locals.errorCode = "VALIDATION";
+    const issues = (error as any).issues as Array<{ path: (string | number)[]; message: string }> | undefined;
+    const detailStr = issues && issues.length > 0
+      ? issues.map(i => `${i.path.join('.') || 'body'}: ${i.message}`).join('; ')
+      : undefined;
     return res.status(400).json({
       code: "VALIDATION",
-      message: "The request was not valid.",
+      message: detailStr ? `The request was not valid: ${detailStr}` : "The request was not valid.",
+      details: detailStr,
       requestId
     });
   }

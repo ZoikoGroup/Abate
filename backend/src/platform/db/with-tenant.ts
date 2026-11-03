@@ -116,6 +116,13 @@ class MemoryDatabase {
   // Late corrections (0063_corrections.sql)
   public corrections: Map<string, any> = new Map();
 
+  // Phase 7 Work-Design Outcomes & AI Change (0070_outcomes_ai_change.sql)
+  public featureFlags: Map<string, any> = new Map();
+  public outcomeDefinitions: Map<string, any> = new Map();
+  public outcomeEvaluations: Map<string, any> = new Map();
+  public aiChangeProfiles: Map<string, any> = new Map();
+  public aiWorkDesignAssessments: Map<string, any> = new Map();
+
   constructor() {
     this.seedDefaults();
   }
@@ -147,6 +154,79 @@ class MemoryDatabase {
       };
       this.metricDefinitions.set("BOUNDARY_INTRUSION_SHARE:1", metricDef);
       this.metricDefinitions.set("BOUNDARY_INTRUSION_SHARE", metricDef);
+    }
+
+    // Seed Phase 7 Prototype Outcome Definitions
+    const prototypes = [
+      {
+        outcome_id: "WORKLOAD_SUSTAINABILITY",
+        version: 1,
+        outcome_class: "PERFORMANCE_OUTCOME",
+        family: "WORKLOAD_SUSTAINABILITY",
+        purpose: "Is demand within sustainable limits over time across approved intervals and deadlines?",
+        prohibited_interpretation: "Cohort work condition, NOT an individual capacity score or productivity quota.",
+        unit: "ratio",
+        definition: { formula: "sustainable_interval_hours / total_demand_hours" },
+        quality_rules: { minCoverage: 0.8, missing: "INSUFFICIENT_DATA" },
+        privacy_class: "B",
+        status: "APPROVED",
+        definition_hash: "sha256-outcome-workload-sustainability-v1"
+      },
+      {
+        outcome_id: "ROLE_CLARITY",
+        version: 1,
+        outcome_class: "PERFORMANCE_OUTCOME",
+        family: "ROLE_CLARITY",
+        purpose: "Do people have clear decision rights and expectations within the work system?",
+        prohibited_interpretation: "Perception at cohort level; NOT sentiment mining of communications.",
+        unit: "score_5pt",
+        definition: { formula: "cohort_avg(structured_consultation_clarity)" },
+        quality_rules: { minResponses: 10, missing: "INSUFFICIENT_DATA" },
+        privacy_class: "B",
+        status: "APPROVED",
+        definition_hash: "sha256-outcome-role-clarity-v1"
+      },
+      {
+        outcome_id: "FRAGMENTATION_INDEX",
+        version: 1,
+        outcome_class: "PERFORMANCE_OUTCOME",
+        family: "FRAGMENTATION",
+        purpose: "How split is work across tasks and handoffs?",
+        prohibited_interpretation: "Describes process structure, NOT personal productivity or multi-tasking skill.",
+        unit: "handoffs_per_task",
+        definition: { formula: "total_handoffs / completed_work_items" },
+        quality_rules: { minItems: 20, missing: "INSUFFICIENT_DATA" },
+        privacy_class: "B",
+        status: "APPROVED",
+        definition_hash: "sha256-outcome-fragmentation-index-v1"
+      },
+      {
+        outcome_id: "AI_REWORK_RATE",
+        version: 1,
+        outcome_class: "PERFORMANCE_OUTCOME",
+        family: "HUMAN_AI_WORK_QUALITY",
+        purpose: "Cohort-level rate of AI-assisted tasks that required rework or exception handling.",
+        prohibited_interpretation: "Not a measure of any individual's performance, skill or employability. Never copied prompt or response content.",
+        unit: "percent",
+        definition: {
+          numerator: "count(ai_assisted_tasks WHERE rework_flag = true)",
+          denominator: "count(ai_assisted_tasks)",
+          allowedDimensions: ["team", "practiceArea"],
+          releaseClass: "B"
+        },
+        quality_rules: { minCoverage: "per definition owner", missing: "INSUFFICIENT_DATA" },
+        privacy_class: "B",
+        status: "APPROVED",
+        definition_hash: "sha256-outcome-ai-rework-rate-v1"
+      }
+    ];
+
+    for (const p of prototypes) {
+      const key = `${p.outcome_id}:${p.version}`;
+      if (!this.outcomeDefinitions.has(key)) {
+        this.outcomeDefinitions.set(key, p);
+        this.outcomeDefinitions.set(p.outcome_id, p);
+      }
     }
   }
 
@@ -192,6 +272,11 @@ class MemoryDatabase {
     this.aiKillSwitches.clear();
     this.toolCatalog.clear();
     this.actionAttempts.clear();
+    this.featureFlags.clear();
+    this.outcomeDefinitions.clear();
+    this.outcomeEvaluations.clear();
+    this.aiChangeProfiles.clear();
+    this.aiWorkDesignAssessments.clear();
     this.seedDefaults();
   }
 }
@@ -204,6 +289,7 @@ class MemoryClient {
   constructor(private readonly workerMode = false) {}
   private inTransaction = false;
   private tenantContext: string | null = null;
+  private writePlane: "A" | "B" = "A";
   private snapshotState: string | null = null;
   private heldLocks: (() => void)[] = [];
 
@@ -262,6 +348,11 @@ class MemoryClient {
         aiKillSwitches: Array.from(memDb.aiKillSwitches.entries()),
         toolCatalog: Array.from(memDb.toolCatalog.entries()),
         actionAttempts: Array.from(memDb.actionAttempts.entries()),
+        featureFlags: Array.from(memDb.featureFlags.entries()),
+        outcomeDefinitions: Array.from(memDb.outcomeDefinitions.entries()),
+        outcomeEvaluations: Array.from(memDb.outcomeEvaluations.entries()),
+        aiChangeProfiles: Array.from(memDb.aiChangeProfiles.entries()),
+        aiWorkDesignAssessments: Array.from(memDb.aiWorkDesignAssessments.entries()),
         tenantPolicyBindings: memDb.tenantPolicyBindings,
         evidenceItems: memDb.evidenceItems
       });
@@ -318,6 +409,11 @@ class MemoryClient {
         if (snap.aiKillSwitches) memDb.aiKillSwitches = new Map(snap.aiKillSwitches);
         if (snap.toolCatalog) memDb.toolCatalog = new Map(snap.toolCatalog);
         if (snap.actionAttempts) memDb.actionAttempts = new Map(snap.actionAttempts);
+        if (snap.featureFlags) memDb.featureFlags = new Map(snap.featureFlags);
+        if (snap.outcomeDefinitions) memDb.outcomeDefinitions = new Map(snap.outcomeDefinitions);
+        if (snap.outcomeEvaluations) memDb.outcomeEvaluations = new Map(snap.outcomeEvaluations);
+        if (snap.aiChangeProfiles) memDb.aiChangeProfiles = new Map(snap.aiChangeProfiles);
+        if (snap.aiWorkDesignAssessments) memDb.aiWorkDesignAssessments = new Map(snap.aiWorkDesignAssessments);
         if (snap.tenantPolicyBindings) memDb.tenantPolicyBindings = snap.tenantPolicyBindings;
         if (snap.evidenceItems) memDb.evidenceItems = snap.evidenceItems;
       }
@@ -342,8 +438,14 @@ class MemoryClient {
       return { rows: [{ set_config: this.tenantContext }], rowCount: 1, command: "SELECT", oid: 0, fields: [] };
     }
 
+    // SELECT set_config('app.write_plane', $1, true)
+    if (upper.includes("SET_CONFIG('APP.WRITE_PLANE'")) {
+      this.writePlane = (params[0] as "A" | "B") || "A";
+      return { rows: [{ set_config: this.writePlane }], rowCount: 1, command: "SELECT", oid: 0, fields: [] };
+    }
+
     // Fail-Closed RLS Enforcement: If querying tenant-isolated tables without tenant context, return 0 rows
-    const isTenantTable = /FROM\s+(principal|organization|effective_membership|idempotency_record|audit_event|outbox_event|source_contract|connection|watermark|ingest_receipt|work_fact_revision|metric_snapshot|privacy_decision|privacy_release|released_artifact|disclosure_ledger|hazard|cause|intervention|approval|implementation_receipt|evaluation|retention_class|legal_hold|retention_run|deletion_tombstone|tenant_policy_binding|decision_envelope|evidence_package|evidence_item|rights_request|ai_run|action_attempt)/i.test(trimmed);
+    const isTenantTable = /FROM\s+(principal|organization|effective_membership|idempotency_record|audit_event|outbox_event|source_contract|connection|watermark|ingest_receipt|work_fact_revision|metric_snapshot|privacy_decision|privacy_release|released_artifact|disclosure_ledger|hazard|cause|intervention|approval|implementation_receipt|evaluation|retention_class|legal_hold|retention_run|deletion_tombstone|tenant_policy_binding|decision_envelope|evidence_package|evidence_item|rights_request|ai_run|action_attempt|outcome_evaluation|ai_change_profile|ai_workdesign_assessment)/i.test(trimmed);
     const workerTable = this.workerMode && /FROM\s+(outbox_event|inbox_event)\b/i.test(trimmed);
     if (isTenantTable && !this.tenantContext && !workerTable) {
       return { rows: [], rowCount: 0, command: "SELECT", oid: 0, fields: [] };
@@ -973,7 +1075,15 @@ class MemoryClient {
 
     // Released Artifact Insert
     if (upper.includes("INSERT INTO RELEASED_ARTIFACT")) {
-      const [releaseId, tId, metricId, version, val, unit, pStart, pEnd, quality, interpretation, status, artifactHash] = params;
+      let releaseId: any, tId: any, metricId: any, version: any, val: any, unit: any, pStart: any, pEnd: any, quality: any, interpretation: any, status: any, artifactHash: any, plane: any;
+      if (params.length === 10) {
+        [releaseId, tId, metricId, version, val, pStart, pEnd, quality, interpretation, artifactHash] = params;
+        unit = "percent";
+        status = "RELEASED";
+        plane = "A";
+      } else {
+        [releaseId, tId, metricId, version, val, unit, pStart, pEnd, quality, interpretation, status, artifactHash, plane] = params;
+      }
       if (this.tenantContext && tId !== this.tenantContext) {
         throw new Error("RLS WITH CHECK violation: cross-tenant released_artifact write rejected");
       }
@@ -983,13 +1093,14 @@ class MemoryClient {
         metric_id: metricId,
         metric_version: version,
         value: val,
-        unit,
+        unit: unit || "percent",
         period_start: pStart,
         period_end: pEnd,
         quality,
         interpretation,
-        status,
-        artifact_hash: artifactHash
+        status: status || "RELEASED",
+        artifact_hash: artifactHash,
+        plane: plane || (upper.includes("'B'") ? "B" : "A")
       };
       memDb.releasedArtifacts.set(releaseId, artifact);
       return { rows: [artifact], rowCount: 1, command: "INSERT", oid: 0, fields: [] };
@@ -1068,11 +1179,21 @@ class MemoryClient {
 
     // Hazard Update
     if (upper.includes("UPDATE HAZARD")) {
-      if (upper.includes("DISPOSITION =")) {
-        const [disposition, hId] = params;
+      if (upper.includes("DISPOSITION")) {
+        if (this.writePlane !== "A") {
+          throw new AppError("FORBIDDEN", "assurance state may only be written by plane A commands");
+        }
+        let disposition: string, hId: string;
+        if (params.length === 2) {
+          [disposition, hId] = params;
+        } else {
+          hId = params[0];
+          disposition = upper.includes("'CONTROLLED'") ? "CONTROLLED" : upper.includes("'VERIFIED_CLOSURE'") ? "VERIFIED_CLOSURE" : "OPEN";
+        }
         const rec = memDb.hazards.get(hId);
         if (rec && rec.tenant_id === this.tenantContext) {
           rec.disposition = disposition;
+          rec.last_write_plane = this.writePlane;
           rec.version += 1;
           return { rows: [rec], rowCount: 1, command: "UPDATE", oid: 0, fields: [] };
         }
@@ -1131,9 +1252,9 @@ class MemoryClient {
     // Intervention Insert
     if (upper.includes("INSERT INTO INTERVENTION")) {
       let id: string, tId: string, hId: string, cId: string, state: string, version: any, scope: string, objective: string, ownerId: string, dueDate: string, vPlan: any, mHash: string;
-      if (params.length === 10) {
+      if (params.length <= 10) {
         [id, tId, hId, cId, scope, objective, ownerId, dueDate, vPlan, mHash] = params;
-        state = upper.includes("'APPROVED'") ? "APPROVED" : "PROPOSED";
+        state = upper.includes("'IMPLEMENTED'") ? "IMPLEMENTED" : upper.includes("'CLOSED'") ? "CLOSED" : upper.includes("'APPROVED'") ? "APPROVED" : "PROPOSED";
         version = 1;
       } else {
         [id, tId, hId, cId, state, version, scope, objective, ownerId, dueDate, vPlan, mHash] = params;
@@ -1143,7 +1264,7 @@ class MemoryClient {
         tenant_id: tId,
         hazard_id: hId,
         cause_id: cId,
-        state: state || "DRAFT",
+        state: state || (upper.includes("'IMPLEMENTED'") ? "IMPLEMENTED" : upper.includes("'CLOSED'") ? "CLOSED" : "PROPOSED"),
         version: Number(version) || 1,
         scope,
         objective,
@@ -1160,8 +1281,17 @@ class MemoryClient {
     // Intervention Update
     if (upper.includes("UPDATE INTERVENTION")) {
       if (upper.includes("STATE =") && !upper.includes("SCOPE =")) {
-        // e.g. UPDATE intervention SET state = $1 WHERE id = $2
-        const [newState, iId] = params;
+        // e.g. UPDATE intervention SET state = $1 WHERE id = $2 or UPDATE intervention SET state = 'CLOSED' WHERE id = $1
+        if (this.writePlane !== "A") {
+          throw new AppError("FORBIDDEN", "assurance state may only be written by plane A commands");
+        }
+        let newState: string, iId: string;
+        if (params.length === 2) {
+          [newState, iId] = params;
+        } else {
+          iId = params[0];
+          newState = upper.includes("'CLOSED'") ? "CLOSED" : upper.includes("'IMPLEMENTED'") ? "IMPLEMENTED" : "PROPOSED";
+        }
         const rec = memDb.interventions.get(iId);
         if (rec && rec.tenant_id === this.tenantContext) {
           rec.state = newState;
@@ -1286,6 +1416,9 @@ class MemoryClient {
 
     // Evaluation Update
     if (upper.includes("UPDATE EVALUATION")) {
+      if (this.writePlane !== "A") {
+        throw new AppError("FORBIDDEN", "assurance state may only be written by plane A commands");
+      }
       const [outcome, reviewerId, residualRisk, concludedAt, eId] = params;
       const rec = memDb.evaluations.get(eId);
       if (rec && rec.tenant_id === this.tenantContext) {
@@ -1766,6 +1899,246 @@ class MemoryClient {
       return { rows, rowCount: rows.length, command: "SELECT", oid: 0, fields: [] };
     }
 
+    // ==========================================
+    // Phase 7: Work-Design Outcomes & AI Change
+    // ==========================================
+
+    // Feature Flag Insert/Upsert
+    if (upper.includes("INTO FEATURE_FLAG")) {
+      const [tId, flag, enabled, changedBy, changedAt] = params;
+      const key = `${tId || "platform"}:${flag}`;
+      const rec = {
+        tenant_id: tId || null,
+        flag,
+        enabled: Boolean(enabled),
+        changed_by: changedBy || null,
+        changed_at: changedAt || new Date().toISOString()
+      };
+      memDb.featureFlags.set(key, rec);
+      return { rows: [rec], rowCount: 1, command: "INSERT", oid: 0, fields: [] };
+    }
+
+    // Feature Flag Select
+    if (upper.includes("FROM FEATURE_FLAG")) {
+      let rows = Array.from(memDb.featureFlags.values());
+      if (upper.includes("FLAG = $2") && params.length >= 2) {
+        const [targetTenant, targetFlag] = params;
+        rows = rows.filter(f => (f.tenant_id === targetTenant || f.tenant_id === null) && f.flag === targetFlag);
+        // Order by tenant_id nulls last (tenant-specific takes priority)
+        rows.sort((a, b) => (a.tenant_id ? -1 : 1));
+      } else if (params.length > 0) {
+        rows = rows.filter(f => f.tenant_id === params[0] || f.tenant_id === null);
+      } else if (this.tenantContext) {
+        rows = rows.filter(f => f.tenant_id === this.tenantContext || f.tenant_id === null);
+      }
+      return { rows, rowCount: rows.length, command: "SELECT", oid: 0, fields: [] };
+    }
+
+    // Outcome Definition Insert
+    if (upper.includes("INSERT INTO OUTCOME_DEFINITION")) {
+      const [outcomeId, version, outcomeClass, family, purpose, prohibitedInterpretation, unit, definition, qualityRules, privacyClass, status, hash] = params;
+      const key = `${outcomeId}:${version}`;
+      const rec = {
+        outcome_id: outcomeId,
+        version: Number(version),
+        outcome_class: outcomeClass,
+        family,
+        purpose,
+        prohibited_interpretation: prohibitedInterpretation,
+        unit,
+        definition: typeof definition === "string" ? JSON.parse(definition) : definition,
+        quality_rules: typeof qualityRules === "string" ? JSON.parse(qualityRules) : qualityRules,
+        privacy_class: privacyClass,
+        status: status || "DRAFT",
+        definition_hash: hash
+      };
+      memDb.outcomeDefinitions.set(key, rec);
+      memDb.outcomeDefinitions.set(outcomeId, rec);
+      return { rows: [rec], rowCount: 1, command: "INSERT", oid: 0, fields: [] };
+    }
+
+    // Outcome Definition Update
+    if (upper.includes("UPDATE OUTCOME_DEFINITION")) {
+      if (upper.includes("SET STATUS = 'APPROVED'")) {
+        const outcomeId = params[0];
+        const version = params[1] || 1;
+        const key = `${outcomeId}:${version}`;
+        const rec = memDb.outcomeDefinitions.get(key) || memDb.outcomeDefinitions.get(outcomeId);
+        if (rec) {
+          rec.status = "APPROVED";
+          return { rows: [rec], rowCount: 1, command: "UPDATE", oid: 0, fields: [] };
+        }
+      }
+      if (upper.includes("OUTCOME_CLASS")) {
+        // Trigger simulation: assert_outcome_class_immutable
+        const outcomeId = params[params.length - 2] || params[0];
+        const rec = memDb.outcomeDefinitions.get(outcomeId);
+        if (rec && rec.status === "APPROVED") {
+          throw new AppError("FORBIDDEN", "outcome_class is immutable after approval");
+        }
+      }
+      return { rows: [], rowCount: 0, command: "UPDATE", oid: 0, fields: [] };
+    }
+
+    // Outcome Definition Select
+    if (upper.includes("FROM OUTCOME_DEFINITION")) {
+      let rows = Array.from(memDb.outcomeDefinitions.values());
+      // Unique rows by outcome_id:version
+      const seen = new Set<string>();
+      rows = rows.filter(r => {
+        const k = `${r.outcome_id}:${r.version}`;
+        if (seen.has(k)) return false;
+        seen.add(k);
+        return true;
+      });
+      if (upper.includes("OUTCOME_ID = $1 AND VERSION = $2") && params.length >= 2) {
+        rows = rows.filter(d => d.outcome_id === params[0] && d.version === Number(params[1]));
+      } else if (params.length > 0) {
+        rows = rows.filter(d => d.outcome_id === params[0]);
+      }
+      return { rows, rowCount: rows.length, command: "SELECT", oid: 0, fields: [] };
+    }
+
+    // Outcome Evaluation Insert (Plane B)
+    if (upper.includes("INSERT INTO OUTCOME_EVALUATION")) {
+      const [id, tId, outcomeId, outcomeVersion, interventionId, comparisonBasis, confounders, seriesBreak, outcomeConfidence, permittedClaims, evidenceRefs, releaseId, plane, createdAt] = params;
+      if (plane !== "B") {
+        throw new AppError("VALIDATION", "outcome_evaluation plane must be 'B'");
+      }
+      const safeParseJson = (val: any) => {
+        if (!val) return null;
+        if (typeof val !== "string") return val;
+        try { return JSON.parse(val); } catch { return val; }
+      };
+      const rec = {
+        id,
+        tenant_id: tId,
+        outcome_id: outcomeId,
+        outcome_version: Number(outcomeVersion),
+        intervention_id: interventionId || null,
+        comparison_basis: comparisonBasis,
+        confounders: safeParseJson(confounders),
+        series_break: Boolean(seriesBreak),
+        outcome_confidence: outcomeConfidence,
+        permitted_claims: safeParseJson(permittedClaims) || [],
+        evidence_refs: safeParseJson(evidenceRefs) || [],
+        release_id: releaseId,
+        plane: "B",
+        created_at: createdAt || new Date().toISOString()
+      };
+      memDb.outcomeEvaluations.set(id, rec);
+      return { rows: [rec], rowCount: 1, command: "INSERT", oid: 0, fields: [] };
+    }
+
+    // Outcome Evaluation Select
+    if (upper.includes("FROM OUTCOME_EVALUATION")) {
+      let rows = Array.from(memDb.outcomeEvaluations.values()).filter(e => e.tenant_id === this.tenantContext);
+      if (params.length > 0) {
+        rows = rows.filter(e => e.id === params[0] || e.intervention_id === params[0]);
+      }
+      return { rows, rowCount: rows.length, command: "SELECT", oid: 0, fields: [] };
+    }
+
+    // AI Change Profile Insert
+    if (upper.includes("INSERT INTO AI_CHANGE_PROFILE")) {
+      const safeParse = (val: any) => {
+        if (!val) return [];
+        if (typeof val !== "string") return val;
+        try { return JSON.parse(val); } catch { return [val]; }
+      };
+      const [id, tId, title, version, affectedRoles, affectedTasks, automationMode, decisionRights, humanOverride, monitoringChanges, throughputAssumptions, rolloutDate, trainingSupport] = params;
+      const rec = {
+        id,
+        tenant_id: tId,
+        title,
+        version: Number(version) || 1,
+        affected_roles: safeParse(affectedRoles),
+        affected_tasks: safeParse(affectedTasks),
+        automation_mode: automationMode,
+        decision_rights: decisionRights,
+        human_override: humanOverride,
+        monitoring_changes: monitoringChanges,
+        throughput_assumptions: throughputAssumptions,
+        rollout_date: rolloutDate,
+        training_support: trainingSupport
+      };
+      memDb.aiChangeProfiles.set(`${id}:${rec.version}`, rec);
+      memDb.aiChangeProfiles.set(id, rec);
+      return { rows: [rec], rowCount: 1, command: "INSERT", oid: 0, fields: [] };
+    }
+
+    // AI Change Profile Select
+    if (upper.includes("FROM AI_CHANGE_PROFILE")) {
+      let rows = Array.from(memDb.aiChangeProfiles.values()).filter(p => p.tenant_id === this.tenantContext);
+      const seen = new Set<string>();
+      rows = rows.filter(r => {
+        const k = `${r.id}:${r.version}`;
+        if (seen.has(k)) return false;
+        seen.add(k);
+        return true;
+      });
+      if (upper.includes("VERSION = $3") && params.length >= 3) {
+        rows = rows.filter(p => p.id === params[0] && p.version === Number(params[2]));
+      } else if (params.length > 0) {
+        rows = rows.filter(p => p.id === params[0]);
+      }
+      return { rows, rowCount: rows.length, command: "SELECT", oid: 0, fields: [] };
+    }
+
+    // AI Work-Design Assessment Insert
+    if (upper.includes("INSERT INTO AI_WORKDESIGN_ASSESSMENT")) {
+      const safeParse = (val: any) => {
+        if (!val) return [];
+        if (typeof val !== "string") return val;
+        try { return JSON.parse(val); } catch { return [val]; }
+      };
+      const [id, tId, profileId, profileVersion, stage, hazardIds, controlIds, baselineReleaseIds, verificationRefs, version] = params;
+      const rec = {
+        id,
+        tenant_id: tId,
+        profile_id: profileId,
+        profile_version: Number(profileVersion) || 1,
+        stage: stage || "REGISTERED",
+        hazard_ids: safeParse(hazardIds),
+        control_ids: safeParse(controlIds),
+        baseline_release_ids: safeParse(baselineReleaseIds),
+        verification_refs: safeParse(verificationRefs),
+        version: Number(version) || 1
+      };
+      memDb.aiWorkDesignAssessments.set(id, rec);
+      return { rows: [rec], rowCount: 1, command: "INSERT", oid: 0, fields: [] };
+    }
+
+    // AI Work-Design Assessment Update
+    if (upper.includes("UPDATE AI_WORKDESIGN_ASSESSMENT")) {
+      const safeParse = (val: any) => {
+        if (!val) return [];
+        if (typeof val !== "string") return val;
+        try { return JSON.parse(val); } catch { return [val]; }
+      };
+      const [toStage, newHazards, newControls, newBaselines, newVerifications, nextVersion, id, tId] = params;
+      const rec = memDb.aiWorkDesignAssessments.get(id);
+      if (rec && rec.tenant_id === (this.tenantContext || tId)) {
+        rec.stage = toStage;
+        rec.hazard_ids = safeParse(newHazards);
+        rec.control_ids = safeParse(newControls);
+        rec.baseline_release_ids = safeParse(newBaselines);
+        rec.verification_refs = safeParse(newVerifications);
+        rec.version = Number(nextVersion);
+        return { rows: [rec], rowCount: 1, command: "UPDATE", oid: 0, fields: [] };
+      }
+      return { rows: [], rowCount: 0, command: "UPDATE", oid: 0, fields: [] };
+    }
+
+    // AI Work-Design Assessment Select
+    if (upper.includes("FROM AI_WORKDESIGN_ASSESSMENT")) {
+      let rows = Array.from(memDb.aiWorkDesignAssessments.values()).filter(a => a.tenant_id === this.tenantContext);
+      if (params.length > 0) {
+        rows = rows.filter(a => a.id === params[0]);
+      }
+      return { rows, rowCount: rows.length, command: "SELECT", oid: 0, fields: [] };
+    }
+
     return { rows: [], rowCount: 0, command: "SELECT", oid: 0, fields: [] };
   }
 
@@ -1798,11 +2171,16 @@ async function checkPgHealth(): Promise<boolean> {
  * withTenant: Transaction-local tenant context helper.
  * Enforces fail-closed isolation and prevents pooled connection leakage.
  */
-export async function withTenant<T>(tenantId: string, fn: (tx: Tx) => Promise<T>): Promise<T> {
+export async function withTenant<T>(
+  tenantId: string,
+  fn: (tx: Tx) => Promise<T>,
+  options?: { writePlane?: "A" | "B" }
+): Promise<T> {
   if (!/^[0-9a-f-]{36}$/i.test(tenantId)) {
     throw new AppError("VALIDATION", "Invalid tenant ID format");
   }
 
+  const writePlane = options?.writePlane || "A";
   const usePg = await checkPgHealth();
 
   if (usePg && appPool) {
@@ -1811,6 +2189,7 @@ export async function withTenant<T>(tenantId: string, fn: (tx: Tx) => Promise<T>
       await client.query("BEGIN");
       // Set transaction-local setting; third parameter 'true' means local to this transaction only
       await client.query("SELECT set_config('app.tenant_id', $1, true)", [tenantId]);
+      await client.query("SELECT set_config('app.write_plane', $1, true)", [writePlane]);
       const out = await fn({ q: client.query.bind(client) as QueryFn, tenantId });
       await client.query("COMMIT");
       return out;
@@ -1827,6 +2206,7 @@ export async function withTenant<T>(tenantId: string, fn: (tx: Tx) => Promise<T>
   try {
     await memClient.query("BEGIN");
     await memClient.query("SELECT set_config('app.tenant_id', $1, true)", [tenantId]);
+    await memClient.query("SELECT set_config('app.write_plane', $1, true)", [writePlane]);
     const out = await fn({ q: memClient.query.bind(memClient), tenantId });
     await memClient.query("COMMIT");
     return out;

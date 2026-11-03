@@ -663,9 +663,21 @@ export function HazardControlTab({ currentTenant, token }: HazardControlTabProps
                   onChange={e => setNewOriginatingReleaseId(e.target.value)}
                   placeholder="Originating Release ID"
                   className="text-control monospace"
-                  style={{ width: "100%", marginBottom: "0.5rem" }}
+                  style={{ width: "100%", marginBottom: "0.25rem" }}
                   required
                 />
+                <div style={{ display: "flex", justifyContent: "space-between", alignItems: "center", marginBottom: "0.5rem" }}>
+                  <small style={{ color: "var(--muted)", fontSize: "0.75rem" }}>
+                    Must reference an approved cohort release ID.
+                  </small>
+                  <button
+                    type="button"
+                    onClick={() => setNewOriginatingReleaseId(BASELINE_RELEASE_ID)}
+                    style={{ background: "none", border: "none", color: "var(--coral)", cursor: "pointer", fontSize: "0.75rem", padding: 0, textDecoration: "underline" }}
+                  >
+                    Use Seeded Baseline
+                  </button>
+                </div>
               </div>
               <button type="submit" disabled={loading} className="btn btn-primary" style={{ width: "100%" }}>
                 + Register Authoritative Hazard

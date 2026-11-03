@@ -40,12 +40,16 @@ export function CohortAnalyticsTab({ currentTenant, token }: CohortAnalyticsTabP
     fetchMetricDefinitions(token)
       .then(rawDefs => {
         const defs = (Array.isArray(rawDefs) ? rawDefs : [])
-          .map((d: any) => ({
-            ...d,
-            id: d.id || d.metric_id || "BOUNDARY_INTRUSION_SHARE",
-            name: d.name || d.id || d.metric_id || "Boundary Intrusion Share"
-          }))
-          .filter(d => Boolean(d.id));
+          .map((d: any) => {
+            const id = String(d.id || d.metric_id || "").trim();
+            const name = String(d.name || "").trim();
+            return {
+              ...d,
+              id: id || "BOUNDARY_INTRUSION_SHARE",
+              name: name || id || "Boundary Intrusion Share"
+            };
+          })
+          .filter(d => Boolean(d.id && d.name));
 
         if (defs.length === 0) {
           defs.push({
