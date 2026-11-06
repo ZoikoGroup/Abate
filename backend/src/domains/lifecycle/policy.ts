@@ -34,8 +34,12 @@ export interface HoldRow {
 
 export interface FactRow {
   id: string;
+  tenant_id?: string;
   connection_id: string;
+  source_record_id?: string;
+  revision?: number;
   end_at: string | Date;
+  [key: string]: any;
 }
 
 export { canonicalJson, sha256Hex } from "../../platform/canonical";

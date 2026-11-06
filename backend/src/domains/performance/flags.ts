@@ -87,11 +87,27 @@ export async function listFeatureFlags(
      WHERE tenant_id = $1 OR tenant_id IS NULL`,
     [tenantId]
   );
-  return res.rows.map((r: any) => ({
-    flag: r.flag,
-    enabled: Boolean(r.enabled),
-    tenantId: r.tenant_id,
-    changedBy: r.changed_by,
-    changedAt: r.changed_at
-  }));
+  const rows = res.rows || [];
+  const map = new Map<string, FeatureFlagView>();
+  // Pre-fill platform defaults
+  for (const [flag, enabled] of Object.entries(DEFAULT_FEATURE_FLAGS)) {
+    map.set(flag, {
+      flag,
+      enabled,
+      tenantId,
+      changedBy: "SYSTEM_DEFAULT",
+      changedAt: new Date().toISOString()
+    });
+  }
+  // Apply database overlays (tenant-specific or platform)
+  for (const r of rows) {
+    map.set(r.flag, {
+      flag: r.flag,
+      enabled: Boolean(r.enabled),
+      tenantId: r.tenant_id,
+      changedBy: r.changed_by,
+      changedAt: r.changed_at
+    });
+  }
+  return Array.from(map.values());
 }

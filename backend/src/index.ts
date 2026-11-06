@@ -1349,7 +1349,7 @@ app.post("/api/v2/retention/runs", async (req: Request, res: Response) => {
   }
 });
 
-app.post("/api/v2/legal-holds", async (req: Request, res: Response) => {
+app.post(["/api/v2/legal-holds", "/api/v2/lifecycle/holds"], async (req: Request, res: Response) => {
   try {
     const who = await authenticate(getHeader(req, "authorization"));
     const actor = await resolveActor(who.tenantId, who.subject, new Date());
@@ -1365,7 +1365,7 @@ app.post("/api/v2/legal-holds", async (req: Request, res: Response) => {
   }
 });
 
-app.post("/api/v2/legal-holds/:id/release", async (req: Request, res: Response) => {
+app.post(["/api/v2/legal-holds/:id/release", "/api/v2/lifecycle/holds/:id/release"], async (req: Request, res: Response) => {
   try {
     const who = await authenticate(getHeader(req, "authorization"));
     const actor = await resolveActor(who.tenantId, who.subject, new Date());

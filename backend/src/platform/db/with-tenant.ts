@@ -596,6 +596,40 @@ class MemoryClient {
       return { rows: results, rowCount: results.length, command: "SELECT", oid: 0, fields: [] };
     }
 
+    // Effective membership select (Domain S06 Privacy Release & Cohort resolution)
+    if (upper.includes("FROM EFFECTIVE_MEMBERSHIP") || upper.includes("FROM MEMBERSHIP")) {
+      const tId = this.tenantContext || (params && params[0]);
+      let rows = Array.from(memDb.memberships.values());
+      if (tId) {
+        rows = rows.filter(m => m.tenant_id === tId);
+      }
+      // Filter by organization_id if requested
+      if (upper.includes("ORGANIZATION_ID =") && params.length >= 2) {
+        const orgId = params.length >= 3 ? params[1] : params[0];
+        const orgFiltered = rows.filter(m => m.organization_id === orgId);
+        if (orgFiltered.length > 0) {
+          rows = orgFiltered;
+        }
+      }
+      // Filter valid memberships by periodStart date
+      const periodParam = params.find(p => typeof p === "string" && p.includes("-") && p.includes("T"));
+      if (periodParam) {
+        const periodTime = new Date(periodParam).getTime();
+        rows = rows.filter(m => !m.valid_to || new Date(m.valid_to).getTime() > periodTime);
+      }
+      if (upper.includes("DISTINCT PRINCIPAL_ID")) {
+        const distinctIds = Array.from(new Set(rows.map(m => m.principal_id)));
+        return {
+          rows: distinctIds.map(pid => ({ principal_id: pid })),
+          rowCount: distinctIds.length,
+          command: "SELECT",
+          oid: 0,
+          fields: []
+        };
+      }
+      return { rows, rowCount: rows.length, command: "SELECT", oid: 0, fields: [] };
+    }
+
     // Principal select
     if (upper.includes("FROM PRINCIPAL")) {
       let rows = Array.from(memDb.principals.values()).filter(p => p.tenant_id === this.tenantContext);
@@ -1064,6 +1098,33 @@ class MemoryClient {
       return { rows: [], rowCount: 0, command: "UPDATE", oid: 0, fields: [] };
     }
 
+    // Privacy Decision + Release join (idempotent query hash check)
+    if (upper.includes("FROM PRIVACY_DECISION") && upper.includes("PRIVACY_RELEASE")) {
+      const tId = params[0] || this.tenantContext;
+      const queryHash = params[1];
+      const matchingDec = Array.from(memDb.privacyDecisions.values()).find(
+        d => (d.tenant_id === tId || !tId) && d.semantic_query_hash === queryHash && (d.outcome === "RELEASED" || d.outcome === "APPROVED")
+      );
+      if (matchingDec) {
+        const matchingRel = Array.from(memDb.privacyReleases.values()).find(
+          r => r.decision_id === matchingDec.id && r.status === "RELEASED"
+        );
+        if (matchingRel) {
+          return { rows: [{ id: matchingRel.id, status: matchingRel.status }], rowCount: 1, command: "SELECT", oid: 0, fields: [] };
+        }
+      }
+      return { rows: [], rowCount: 0, command: "SELECT", oid: 0, fields: [] };
+    }
+
+    // Privacy Decision Select
+    if (upper.includes("FROM PRIVACY_DECISION")) {
+      let rows = Array.from(memDb.privacyDecisions.values()).filter(d => d.tenant_id === this.tenantContext);
+      if (params.length > 0) {
+        rows = rows.filter(d => d.id === params[0] || d.semantic_query_hash === params[0]);
+      }
+      return { rows, rowCount: rows.length, command: "SELECT", oid: 0, fields: [] };
+    }
+
     // Privacy Release Select
     if (upper.includes("FROM PRIVACY_RELEASE") && !upper.includes("JOIN RELEASED_ARTIFACT")) {
       let rows = Array.from(memDb.privacyReleases.values()).filter(r => r.tenant_id === this.tenantContext);
@@ -1118,7 +1179,8 @@ class MemoryClient {
         const r = memDb.privacyReleases.get(releaseId);
         const combined = {
           ...a,
-          rstatus: r ? r.status : a.status
+          rstatus: r ? r.status : a.status,
+          plane: (r && r.plane) || a.plane || "A"
         };
         return { rows: [combined], rowCount: 1, command: "SELECT", oid: 0, fields: [] };
       }
@@ -1211,13 +1273,20 @@ class MemoryClient {
 
     // Cause Insert
     if (upper.includes("INSERT INTO CAUSE")) {
-      const [id, tId, hId, statement, status, reviewedBy, reviewedAt, version] = params;
+      let id: string, tId: string, hId: string, statement: string, status: any, reviewedBy: any, reviewedAt: any, version: any;
+      if (params.length === 4) {
+        [id, tId, hId, statement] = params;
+        status = upper.includes("'REVIEWED_ACCEPTED'") ? "REVIEWED_ACCEPTED" : upper.includes("'REVIEWED_REJECTED'") ? "REVIEWED_REJECTED" : "PROPOSED";
+        version = 1;
+      } else {
+        [id, tId, hId, statement, status, reviewedBy, reviewedAt, version] = params;
+      }
       const rec = {
         id,
         tenant_id: tId,
         hazard_id: hId,
         statement,
-        status: status || "PROPOSED",
+        status: status || (upper.includes("'REVIEWED_ACCEPTED'") ? "REVIEWED_ACCEPTED" : upper.includes("'REVIEWED_REJECTED'") ? "REVIEWED_REJECTED" : "PROPOSED"),
         reviewed_by: reviewedBy || null,
         reviewed_at: reviewedAt || null,
         version: version || 1,

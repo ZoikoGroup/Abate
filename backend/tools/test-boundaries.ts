@@ -1,6 +1,8 @@
 // backend/tools/test-boundaries.ts
 import assert from "node:assert";
 import crypto from "node:crypto";
+import fs from "node:fs";
+import path from "node:path";
 import { GOLDEN_01 } from "../src/fixtures/golden01";
 import { seedTwoTenants } from "../src/fixtures/seed";
 import { withTenant, withTenantOn, memDb } from "../src/platform/db/with-tenant";
@@ -34,15 +36,41 @@ import { registerAiChangeProfile, createAssessment, advanceAssessment, getAssess
 
 console.log("\x1b[36m=== Abate Task Runner: test-boundaries (Constitutional & Isolation Gates) ===\x1b[0m");
 
+interface BoundaryTestResult {
+  id: number;
+  name: string;
+  status: "PASSED" | "FAILED";
+  durationMs: number;
+  error?: string;
+}
+
+const testResults: BoundaryTestResult[] = [];
 let passed = 0;
+const suiteStart = Date.now();
 
 async function test(name: string, fn: () => Promise<void>) {
+  const start = Date.now();
   try {
     await fn();
+    const durationMs = Date.now() - start;
     console.log(`  \x1b[32m✔\x1b[0m ${name}`);
     passed++;
+    testResults.push({
+      id: testResults.length + 1,
+      name,
+      status: "PASSED",
+      durationMs
+    });
   } catch (err: any) {
+    const durationMs = Date.now() - start;
     console.error(`  \x1b[31m✖\x1b[0m ${name}: ${err.message}`);
+    testResults.push({
+      id: testResults.length + 1,
+      name,
+      status: "FAILED",
+      durationMs,
+      error: err.message
+    });
     process.exit(1);
   }
 }
@@ -1650,6 +1678,26 @@ async function run() {
   });
 
   console.log(`\x1b[32m[SUCCESS] All ${passed} boundary, isolation, and reliability tests passed.\x1b[0m`);
+
+  const reportPath = path.resolve(__dirname, "../../frontend/public/test-report.json");
+  try {
+    fs.mkdirSync(path.dirname(reportPath), { recursive: true });
+    const payload = {
+      suite: "Constitutional & Isolation Boundary Verification (ZAB-ENG-001)",
+      command: "npm run test-boundaries",
+      timestamp: new Date().toISOString(),
+      role: "AUDITOR / BOUNDARY_VERIFIER",
+      total: testResults.length,
+      passed,
+      failed: testResults.filter(t => t.status === "FAILED").length,
+      durationMs: Date.now() - suiteStart,
+      tests: testResults
+    };
+    fs.writeFileSync(reportPath, JSON.stringify(payload, null, 2), "utf-8");
+    console.log(`\x1b[32m[REPORT] Wrote test evidence artifact to ${reportPath}\x1b[0m`);
+  } catch (err: any) {
+    console.warn("[REPORT] Could not write test report:", err.message);
+  }
 }
 
 run();
