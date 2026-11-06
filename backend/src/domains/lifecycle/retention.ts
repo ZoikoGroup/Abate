@@ -12,7 +12,12 @@ import {
   PlaceLegalHoldInput,
   ReleaseLegalHoldInput,
   RetentionRunReceipt,
-  JurisdictionCoverage
+  JurisdictionCoverage,
+  RetentionClassView,
+  LegalHoldView,
+  RetentionRunView,
+  RetentionStateView,
+  RetentionPreviewView
 } from "../../contracts/retention";
 import {
   retentionBoundsViolation,
@@ -44,13 +49,13 @@ function requireIdempotencyKey(key: string | null | undefined): string {
   return key;
 }
 
-interface RunPlan {
+export interface RunPlan {
   status: RetentionRunReceipt["status"];
   blockedReason: string | null;
-  activeClass: any | null;
+  activeClass: RetentionClassView | null;
   cutoff: Date | null;
   eligible: number;
-  purge: (FactRow & Record<string, any>)[];
+  purge: (FactRow & { source_record_id?: string; revision?: number })[];
   held: FactRow[];
 }
 
@@ -60,8 +65,11 @@ interface RunPlan {
  */
 async function planRun(tx: Tx, category: DataCategory, now: Date): Promise<RunPlan> {
   const none = { cutoff: null, eligible: 0, purge: [], held: [] };
-  const classes = (await tx.q(`SELECT * FROM retention_class WHERE data_category = $1`, [category])).rows;
-  const activeClass = classes.find((c: any) => c.status === "ACTIVE" && c.data_category === category) ?? null;
+  const classes: RetentionClassView[] = (await tx.q(`SELECT * FROM retention_class WHERE data_category = $1`, [category])).rows;
+  const activeClass = classes
+    .filter(c => c.status === "ACTIVE" && c.data_category === category)
+    .sort((a, b) => b.version - a.version)[0] ?? null;
+
   if (!activeClass) {
     return { status: "NO_POLICY", blockedReason: null, activeClass: null, ...none };
   }
@@ -79,28 +87,30 @@ async function planRun(tx: Tx, category: DataCategory, now: Date): Promise<RunPl
   const holds: HoldRow[] = (await tx.q(`SELECT * FROM legal_hold WHERE released_at IS NULL`)).rows;
   const { eligible, purge, held } = partitionForPurge(facts, holds, cutoff);
 
-  return { status: "COMPLETED", blockedReason: null, activeClass, cutoff, eligible, purge, held };
+  return {
+    status: "COMPLETED",
+    blockedReason: null,
+    activeClass,
+    cutoff,
+    eligible,
+    purge: purge as (FactRow & { source_record_id?: string; revision?: number })[],
+    held
+  };
 }
 
 export async function getRetentionState(args: {
   who: AuthenticatedIdentity;
   actor: Actor;
-}): Promise<{
-  coverage: JurisdictionCoverage;
-  classes: any[];
-  holds: any[];
-  runs: any[];
-  tombstones: { total: number; verified: number; recent: any[] };
-}> {
+}): Promise<RetentionStateView> {
   authorize(args.actor, "retention.read");
 
   return withTenant(args.who.tenantId, async (tx) => {
     const { coverage } = await resolveTenantCoverage(tx, new Date());
-    const classes = (await tx.q(`SELECT * FROM retention_class`)).rows
+    const classes: RetentionClassView[] = (await tx.q(`SELECT * FROM retention_class`)).rows
       .sort((a: any, b: any) => b.version - a.version);
-    const holds = (await tx.q(`SELECT * FROM legal_hold`)).rows
+    const holds: LegalHoldView[] = (await tx.q(`SELECT * FROM legal_hold`)).rows
       .sort((a: any, b: any) => +new Date(b.placed_at) - +new Date(a.placed_at));
-    const runs = (await tx.q(`SELECT * FROM retention_run`)).rows
+    const runs: RetentionRunView[] = (await tx.q(`SELECT * FROM retention_run`)).rows
       .sort((a: any, b: any) => +new Date(b.completed_at) - +new Date(a.completed_at));
     const tombstones = (await tx.q(`SELECT * FROM deletion_tombstone`)).rows
       .sort((a: any, b: any) => +new Date(b.deleted_at) - +new Date(a.deleted_at));
@@ -119,8 +129,8 @@ export async function getRetentionState(args: {
           runId: t.run_id,
           dataCategory: t.data_category,
           recordDigest: t.record_digest,
-          deletedAt: t.deleted_at,
-          verifiedAt: t.verified_at
+          deletedAt: typeof t.deleted_at === "string" ? t.deleted_at : new Date(t.deleted_at).toISOString(),
+          verifiedAt: t.verified_at ? (typeof t.verified_at === "string" ? t.verified_at : new Date(t.verified_at).toISOString()) : null
         }))
       }
     };
@@ -132,7 +142,7 @@ export async function previewRetention(args: {
   actor: Actor;
   dataCategory: DataCategory;
   now?: Date;
-}): Promise<{ status: RetentionRunReceipt["status"]; blockedReason: string | null; cutoff: string | null; eligible: number; held: number; purgeable: number }> {
+}): Promise<RetentionPreviewView> {
   authorize(args.actor, "retention.read");
 
   return withTenant(args.who.tenantId, async (tx) => {
@@ -177,13 +187,14 @@ export async function setRetentionClass(args: {
         throw new AppError("VALIDATION", violation);
       }
 
-      const existing = (await tx.q(`SELECT * FROM retention_class WHERE data_category = $1`, [input.dataCategory])).rows
+      const existing: RetentionClassView[] = (await tx.q(`SELECT * FROM retention_class WHERE data_category = $1`, [input.dataCategory])).rows
         .filter((c: any) => c.data_category === input.dataCategory);
-      const prior = existing.find((c: any) => c.status === "ACTIVE");
-      const version = existing.reduce((max: number, c: any) => Math.max(max, c.version), 0) + 1;
+      const activeClasses = existing.filter(c => c.status === "ACTIVE");
+      const prior = activeClasses.sort((a, b) => b.version - a.version)[0] ?? null;
+      const version = existing.reduce((max, c) => Math.max(max, c.version), 0) + 1;
 
-      if (prior) {
-        await tx.q(`UPDATE retention_class SET status = 'SUPERSEDED' WHERE id = $1`, [prior.id]);
+      for (const p of activeClasses) {
+        await tx.q(`UPDATE retention_class SET status = 'SUPERSEDED' WHERE id = $1`, [p.id]);
       }
 
       const id = crypto.randomUUID();
@@ -199,7 +210,7 @@ export async function setRetentionClass(args: {
         retentionDays: input.retentionDays,
         basis: input.basis,
         version,
-        status: "ACTIVE",
+        status: "ACTIVE" as const,
         packId: pack.pack_key,
         packVersion: pack.version,
         supersededId: prior?.id ?? null
@@ -358,9 +369,11 @@ export async function releaseLegalHold(args: {
  */
 export async function purgeWithTombstones(
   tx: Tx,
-  facts: Array<FactRow & Record<string, any>>,
+  facts: Array<FactRow & { source_record_id?: string; revision?: number; [key: string]: any }>,
   opts: { runId: string; category: DataCategory; tenantSecret: string }
 ): Promise<number> {
+  if (facts.length === 0) return 0;
+
   for (const fact of facts) {
     await tx.q(
       `INSERT INTO deletion_tombstone (id, tenant_id, run_id, data_category, record_ref, record_digest, record_key_digest)
@@ -374,15 +387,13 @@ export async function purgeWithTombstones(
         sha256Hex(canonicalJson(fact)),
         recordKeyDigest(opts.tenantSecret, {
           connectionId: fact.connection_id,
-          sourceRecordId: fact.source_record_id,
-          revision: fact.revision
+          sourceRecordId: fact.source_record_id ?? fact.id,
+          revision: Number(fact.revision) || 1
         })
       ]
     );
     await tx.q(`DELETE FROM work_fact_revision WHERE id = $1`, [fact.id]);
   }
-
-  if (facts.length === 0) return 0;
 
   const purgedIds = facts.map(f => f.id);
   const remaining = new Set(
@@ -423,7 +434,9 @@ export async function runRetention(args: {
       const runId = crypto.randomUUID();
       const plan = await planRun(tx, args.dataCategory, now);
 
-      const verified = await purgeWithTombstones(tx, plan.purge, { runId, category: args.dataCategory, tenantSecret });
+      const verified = plan.status === "COMPLETED" && plan.purge.length > 0
+        ? await purgeWithTombstones(tx, plan.purge, { runId, category: args.dataCategory, tenantSecret })
+        : 0;
 
       const receipt: RetentionRunReceipt = {
         runId,

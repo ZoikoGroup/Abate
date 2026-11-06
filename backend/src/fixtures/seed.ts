@@ -200,6 +200,7 @@ export async function seedTwoTenants(opts: { clock?: Date } = {}) {
     quality: "VALID",
     interpretation: "23.4% of recorded minutes occurred outside scheduled boundary windows.",
     status: "RELEASED",
+    plane: "A",
     artifact_hash: "sha256-baseline-artifact-1"
   };
   memDb.releasedArtifacts.set(baselineReleaseId, baselineArtifact);

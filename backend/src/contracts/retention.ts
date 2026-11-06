@@ -102,3 +102,78 @@ export interface RetentionRunReceipt {
   verified: number;
   completedAt: string;
 }
+
+export interface RetentionClassView {
+  id: string;
+  tenant_id: string;
+  data_category: DataCategory;
+  retention_days: number;
+  basis: string;
+  version: number;
+  status: "ACTIVE" | "SUPERSEDED";
+  pack_id: string;
+  pack_version: number;
+  set_by: string;
+  created_at: string;
+}
+
+export interface LegalHoldView {
+  id: string;
+  tenant_id: string;
+  data_category: DataCategory;
+  scope_connection_id: string | null;
+  matter_ref: string;
+  reason: string;
+  placed_by: string;
+  placed_at: string;
+  released_by: string | null;
+  released_at: string | null;
+  release_reason: string | null;
+}
+
+export interface RetentionRunView {
+  id: string;
+  tenant_id: string;
+  data_category: DataCategory;
+  status: "COMPLETED" | "NO_POLICY" | "BLOCKED";
+  blocked_reason: string | null;
+  retention_class_id: string | null;
+  retention_class_version: number | null;
+  cutoff: string | null;
+  eligible: number;
+  held: number;
+  purged: number;
+  verified: number;
+  run_by: string;
+  completed_at: string;
+}
+
+export interface TombstoneDigestView {
+  id: string;
+  runId: string;
+  dataCategory: DataCategory;
+  recordDigest: string;
+  deletedAt: string;
+  verifiedAt: string | null;
+}
+
+export interface RetentionStateView {
+  coverage: JurisdictionCoverage;
+  classes: RetentionClassView[];
+  holds: LegalHoldView[];
+  runs: RetentionRunView[];
+  tombstones: {
+    total: number;
+    verified: number;
+    recent: TombstoneDigestView[];
+  };
+}
+
+export interface RetentionPreviewView {
+  status: RetentionRunReceipt["status"];
+  blockedReason: string | null;
+  cutoff: string | null;
+  eligible: number;
+  held: number;
+  purgeable: number;
+}

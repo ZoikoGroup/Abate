@@ -83,6 +83,30 @@ export function CohortAnalyticsTab({ currentTenant, token }: CohortAnalyticsTabP
       });
   }, [token]);
 
+  // Adjust default cohortRef when switching tenant
+  useEffect(() => {
+    if (currentTenant.id.includes("-b000-")) {
+      setCohortRef("org:00000000-0000-4000-b001-000000000001");
+    } else {
+      setCohortRef("org:00000000-0000-4000-a001-000000000001");
+    }
+  }, [currentTenant.id]);
+
+  // Attempt to load baseline release on mount
+  useEffect(() => {
+    if (!token) return;
+    fetchRelease("00000000-0000-4000-a003-000000000001", token)
+      .then(rel => {
+        if (rel && rel.status === "RELEASED") {
+          setActiveRelease(rel);
+          setLastReleaseId(rel.releaseId);
+        }
+      })
+      .catch(() => {
+        // Safe to ignore if not seeded or unreleased
+      });
+  }, [token, currentTenant.id]);
+
   // Execute Semantic Query
   const handleQuery = async (customMembers?: string[], customQueryOverride?: Partial<SemanticQuery>) => {
     if (!token) return;

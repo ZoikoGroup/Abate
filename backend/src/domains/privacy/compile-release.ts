@@ -96,12 +96,25 @@ export async function compileRelease(
       memberIds = customCohortMembers;
     } else {
       // Fetch effective members belonging to cohort organization
-      const membersRes = await tx.q(
-        `SELECT DISTINCT principal_id FROM effective_membership
-         WHERE tenant_id = $1 AND (valid_to IS NULL OR valid_to > $2)`,
-        [tenantId, q.periodStart]
-      );
-      memberIds = membersRes.rows.map(r => r.principal_id);
+      if (q.cohortRef && q.cohortRef.startsWith("org:")) {
+        const orgId = q.cohortRef.replace(/^org:/, "");
+        const orgMembersRes = await tx.q(
+          `SELECT DISTINCT principal_id FROM effective_membership
+           WHERE tenant_id = $1 AND organization_id = $2 AND (valid_to IS NULL OR valid_to > $3)`,
+          [tenantId, orgId, q.periodStart]
+        );
+        if (orgMembersRes.rowCount && orgMembersRes.rowCount > 0) {
+          memberIds = orgMembersRes.rows.map(r => r.principal_id);
+        }
+      }
+      if (memberIds.length === 0) {
+        const membersRes = await tx.q(
+          `SELECT DISTINCT principal_id FROM effective_membership
+           WHERE tenant_id = $1 AND (valid_to IS NULL OR valid_to > $2)`,
+          [tenantId, q.periodStart]
+        );
+        memberIds = membersRes.rows.map(r => r.principal_id);
+      }
     }
 
     const memberSet = new Set(memberIds);

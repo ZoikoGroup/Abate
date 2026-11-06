@@ -459,7 +459,7 @@ export function OutcomesAiChangeTab({ currentTenant, token }: OutcomesAiChangeTa
       </div>
 
       {/* Main Grid: Section 1 (Outcomes) & Section 2 (AI Change) */}
-      <div style={{ display: "grid", gridTemplateColumns: "1fr 1.1fr", gap: "1.25rem" }}>
+      <div style={{ display: "grid", gridTemplateColumns: "repeat(auto-fit, minmax(360px, 1fr))", gap: "1.25rem" }}>
         {/* Left Column: Domain S13 Outcomes */}
         <div className="card">
           <div className="card-header">

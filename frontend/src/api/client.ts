@@ -1172,7 +1172,23 @@ export interface AiWorkDesignAssessmentView {
 }
 
 export async function fetchFeatureFlags(token?: string): Promise<Record<string, boolean>> {
-  return api<Record<string, boolean>>("/api/v2/flags", { token });
+  const res = await api<any>("/api/v2/flags", { token });
+  const map: Record<string, boolean> = {
+    outcomes_plane_b: false,
+    ai_change_assessment: false
+  };
+  if (Array.isArray(res)) {
+    for (const item of res) {
+      if (item && item.flag) {
+        map[item.flag] = Boolean(item.enabled);
+      }
+    }
+  } else if (res && typeof res === "object") {
+    for (const [k, v] of Object.entries(res)) {
+      map[k] = Boolean(v);
+    }
+  }
+  return map;
 }
 
 export async function setFeatureFlag(flag: string, enabled: boolean, token?: string): Promise<FeatureFlagView> {

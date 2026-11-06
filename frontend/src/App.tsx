@@ -23,6 +23,7 @@ import { OutcomesAiChangeTab } from "./components/Tabs/OutcomesAiChangeTab";
 import { OperationsTab } from "./components/Tabs/OperationsTab";
 import { OutboxTab } from "./components/Tabs/OutboxTab";
 import { AuditTab } from "./components/Tabs/AuditTab";
+import { LiveDemoConsole } from "./components/Demo/LiveDemoConsole";
 import "./index.css";
 
 type TabKey = "constitutional" | "isolation" | "organizations" | "ingestion" | "analytics" | "hazards" | "retention" | "ai" | "outcomes" | "operations" | "outbox" | "audit";
@@ -40,6 +41,33 @@ export default function App() {
   const [auditEvents, setAuditEvents] = useState<AuditEvent[]>([]);
   const [loading, setLoading] = useState(false);
   const [errorMsg, setErrorMsg] = useState<string | null>(null);
+
+  const [showDemoConsole, setShowDemoConsole] = useState(() => {
+    if (typeof window !== "undefined") {
+      return window.location.pathname.startsWith("/demo") || window.location.hash === "#demo";
+    }
+    return false;
+  });
+
+  const handleToggleDemo = (open: boolean) => {
+    setShowDemoConsole(open);
+    if (typeof window !== "undefined") {
+      const newPath = open ? "/demo" : "/";
+      if (window.location.pathname !== newPath) {
+        window.history.pushState(null, "", newPath);
+      }
+    }
+  };
+
+  useEffect(() => {
+    const onPopState = () => {
+      setShowDemoConsole(
+        window.location.pathname.startsWith("/demo") || window.location.hash === "#demo"
+      );
+    };
+    window.addEventListener("popstate", onPopState);
+    return () => window.removeEventListener("popstate", onPopState);
+  }, []);
 
   const currentTenant = PRESET_TENANTS.find(t => t.id === activeTenantId) || PRESET_TENANTS[0];
 
@@ -108,6 +136,14 @@ export default function App() {
     fetchTenantData(activeTenantId, activeRole);
   };
 
+  if (showDemoConsole) {
+    return (
+      <div className="app-container">
+        <LiveDemoConsole onClose={() => handleToggleDemo(false)} />
+      </div>
+    );
+  }
+
   return (
     <div className="app-container">
       <Navbar
@@ -118,9 +154,18 @@ export default function App() {
         health={health}
         onRefresh={handleRefreshAll}
         loading={loading}
+        onOpenDemo={() => handleToggleDemo(true)}
       />
 
       <nav className="tabs-navigation" aria-label="Abate Workspaces">
+        <button
+          type="button"
+          className="tab-button demo-tab-btn"
+          onClick={() => handleToggleDemo(true)}
+          style={{ borderColor: "var(--abate-coral, #E26D5A)", color: "#E26D5A", fontWeight: 700 }}
+        >
+          ✨ Live Demo Console
+        </button>
         <button
           type="button"
           className={`tab-button ${activeTab === "organizations" ? "active" : ""}`}

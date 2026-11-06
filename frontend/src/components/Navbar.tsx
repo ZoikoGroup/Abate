@@ -9,6 +9,7 @@ interface NavbarProps {
   health: SystemHealth | null;
   onRefresh: () => void;
   loading: boolean;
+  onOpenDemo?: () => void;
 }
 
 export function Navbar({
@@ -18,7 +19,8 @@ export function Navbar({
   onSelectRole,
   health,
   onRefresh,
-  loading
+  loading,
+  onOpenDemo
 }: NavbarProps) {
   const currentTenant = PRESET_TENANTS.find(t => t.id === currentTenantId) || PRESET_TENANTS[0];
 
@@ -39,6 +41,17 @@ export function Navbar({
         </div>
 
         <div className="header-status">
+          {onOpenDemo && (
+            <button
+              type="button"
+              className="btn btn-primary btn-sm demo-launch-btn"
+              onClick={onOpenDemo}
+              aria-label="Launch Guided Live Demo Console"
+              style={{ backgroundColor: "var(--abate-coral, #E26D5A)", color: "#FFFFFF", fontWeight: "bold" }}
+            >
+              ✨ Live Demo Console
+            </button>
+          )}
           <div className={`health-indicator ${health ? "online" : "offline"}`}>
             <span className="dot" />
             <span>{health ? `Backend Connected (v${health.version})` : "Backend Disconnected"}</span>
