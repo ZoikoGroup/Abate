@@ -1037,6 +1037,10 @@ export async function fetchKillSwitches(token?: string): Promise<KillSwitchRecor
   return api<KillSwitchRecord[]>("/api/v2/ai/kill-switches", { token });
 }
 
+export async function fetchKillSwitchesOps(supportToken: string): Promise<KillSwitchRecord[]> {
+  return api<KillSwitchRecord[]>("/api/v2/ops/kill-switches", { token: supportToken });
+}
+
 export async function setKillSwitch(
   scope: string,
   active: boolean,
