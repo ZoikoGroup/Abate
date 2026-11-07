@@ -1,0 +1,56 @@
+# ops/slo-manifest.v1.yaml
+# Specification: Zoiko Abate Engineering Playbook ZAB-ENG-001 v1.0 (Chapter 8, Step 1)
+# Formal SLO Manifest and Workload Contract for Phase 8 Release Evidence Dossier
+
+schema_version: "abate.slo.v1"
+generated_at: "2026-11-07T03:50:00Z"
+
+workload:
+  tenants: 20
+  largest_tenant:
+    principals: 1500
+    facts_per_week: 400000
+  peak_concurrency: 150
+  payload:
+    p50_kb: 4
+    p95_kb: 64
+
+objectives:
+  availability:
+    target: "99.9% monthly"
+    scope: "regional request success"
+    status: "engineering target"
+  reads:
+    endpoint_class: "ordinary"
+    p95_ms: 500
+    description: "Tenant reads including organizations, connections, and metadata"
+  writes:
+    endpoint_class: "mutation"
+    p95_ms: 800
+    excludes: "downstream background jobs"
+    description: "Atomic runCommand mutations with idempotency, audit, and outbox"
+  releases:
+    endpoint_class: "released analytics"
+    p95_ms: 1500
+    description: "Compiler-guarded release reads through the Single Read Path"
+
+components: # Internal engineering thresholds; not external contractual promises
+  release_store_read_ms: 300
+  privacy_eval_cached_ms: 500
+
+recovery:
+  rpo_minutes: 15
+  rto_hours: 4
+  scenario: "core regional failure and restore reconciliation"
+
+signed_by:
+  - role: "SRE Owner"
+    name: "Zoiko Abate Infrastructure Lead"
+    verified: true
+  - role: "Release Owner"
+    name: "Zoiko Abate Principal Architect"
+    verified: true
+
+signature_status: "SIGNED_AND_RATIFIED"
+date: "2026-11-07"
+

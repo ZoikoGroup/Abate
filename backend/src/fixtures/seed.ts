@@ -445,6 +445,20 @@ export async function seedTwoTenants(opts: { clock?: Date } = {}) {
     enabled: true
   });
 
+  // Seed Phase 8 Five Independent Kill Switches (Playbook §8.4 / Page 91-92)
+  const defaultKillSwitches = [
+    { scope: "connector:zoikotime", active: false, changed_by: "system.init", changed_at: validFrom },
+    { scope: "release_path", active: false, changed_by: "system.init", changed_at: validFrom },
+    { scope: "pack:legal-uk-sra", active: false, changed_by: "system.init", changed_at: validFrom },
+    { scope: "all_ai", active: false, changed_by: "system.init", changed_at: validFrom },
+    { scope: "tool:ticket_notification", active: false, changed_by: "system.init", changed_at: validFrom }
+  ];
+  for (const ks of defaultKillSwitches) {
+    if (!memDb.aiKillSwitches.has(ks.scope)) {
+      memDb.aiKillSwitches.set(ks.scope, ks);
+    }
+  }
+
   return {
     tenantA: { tenant: tA, org: orgA, principal: principalA, membership: membershipA, connection: connA },
     tenantB: { tenant: tB, org: orgB, principal: principalB, membership: membershipB, connection: connB }
