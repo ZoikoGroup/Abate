@@ -135,15 +135,16 @@ export const WhatHappened: React.FC<WhatHappenedProps> = ({ stepId, data }) => {
       {stepId === 6 && (
         <div className="explanation-content">
           <p>
-            The client attempted to reuse the same <code>Idempotency-Key</code> with a modified organization name.
+            The client issued a command to create a secondary division (<code>Dispute Resolution &amp; Advisory Division</code>)
+            using a fresh, cryptographically generated <code>Idempotency-Key</code>.
           </p>
           <p>
-            The backend detected that the computed payload SHA-256 hash differed from the stored hash for that key,
-            and immediately aborted the transaction with <strong>409 CONFLICT</strong>.
+            The backend successfully executed the <strong>4-way atomic state change</strong>: inserting the organization record,
+            persisting the idempotency payload hash, logging the immutable audit event, and queuing the outbox event.
           </p>
           <p className="note-text">
-            <strong>Key Guarantee:</strong> Idempotency keys cannot be hijacked or repurposed for different data.
-            Silent overwrite is impossible.
+            <strong>Key Guarantee:</strong> Every independent business unit receives its own atomic transaction and fresh key.
+            HTTP <strong>200 OK</strong> confirmed.
           </p>
         </div>
       )}
@@ -151,15 +152,16 @@ export const WhatHappened: React.FC<WhatHappenedProps> = ({ stepId, data }) => {
       {stepId === 7 && (
         <div className="explanation-content">
           <p>
-            The client attempted to issue a <code>POST /api/v2/organizations</code> without providing an{" "}
-            <code>Idempotency-Key</code> header.
+            The client performed an authoritative direct resource query (<code>GET /api/v2/organizations/:id</code>)
+            using its tenant-bound JWT token.
           </p>
           <p>
-            The pipeline rejected the request immediately at the HTTP perimeter with <strong>400 VALIDATION</strong>,
-            preventing any unkeyed mutation from reaching the database transaction layer.
+            The database verified tenant ownership under Row-Level Security (RLS) and returned the complete persisted
+            organization entity with status <strong>200 OK</strong>.
           </p>
           <p className="note-text">
-            <strong>Key Guarantee:</strong> State-changing API commands without an idempotency key are rejected by policy.
+            <strong>Key Guarantee:</strong> Authoritative data is instantly queryable by authorized tenant actors.
+            Read path fully verified.
           </p>
         </div>
       )}

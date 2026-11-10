@@ -13,6 +13,7 @@
     "test-slo": "tsx tools/test-slo.ts",
     "test-recovery": "tsx tools/reconcile-after-restore.ts",
     "test-load": "tsx tools/test-load.ts",
+    "test-legal": "tsx tools/test-sector-legal.ts",
     "demo-cycle": "tsx tools/demo-cycle.ts",
     "build-dossier": "tsx tools/build-dossier.ts",
     "build": "tsc",

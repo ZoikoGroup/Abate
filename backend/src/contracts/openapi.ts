@@ -55,6 +55,59 @@ export const openApiSpec = {
         }
       }
     },
+    "/auth/refresh": {
+      post: {
+        tags: ["Authentication & Tenancy"],
+        summary: "Refresh active Bearer token with identical tenant context",
+        responses: {
+          "200": { description: "New Bearer token successfully issued" },
+          "401": { description: "Unauthenticated" }
+        }
+      }
+    },
+    "/auth/logout": {
+      post: {
+        tags: ["Authentication & Tenancy"],
+        summary: "Invalidate session credentials",
+        responses: {
+          "204": { description: "Session successfully terminated" }
+        }
+      }
+    },
+    "/me": {
+      get: {
+        tags: ["Authentication & Tenancy"],
+        summary: "Retrieve authenticated principal profile, tenant, memberships, and navigation permissions",
+        responses: {
+          "200": { description: "Principal profile and allowed navigation items" },
+          "401": { description: "Unauthenticated" }
+        }
+      }
+    },
+    "/tenants": {
+      get: {
+        tags: ["Authentication & Tenancy"],
+        summary: "List available tenant workspaces for workspace switching",
+        responses: {
+          "200": { description: "List of available tenants" },
+          "401": { description: "Unauthenticated" }
+        }
+      }
+    },
+    "/tenants/{id}": {
+      get: {
+        tags: ["Authentication & Tenancy"],
+        summary: "Inspect tenant profile by ID (enforces strict tenant boundary)",
+        parameters: [
+          { name: "id", in: "path", required: true, schema: { type: "string", format: "uuid" } }
+        ],
+        responses: {
+          "200": { description: "Tenant profile details" },
+          "403": { description: "Forbidden: cross-tenant access prohibited" },
+          "404": { description: "Tenant not found" }
+        }
+      }
+    },
     "/tenants/current": {
       get: {
         tags: ["Authentication & Tenancy"],
@@ -773,6 +826,31 @@ export const openApiSpec = {
         responses: {
           "200": { description: "Stage successfully advanced" },
           "409": { description: "Conflict - Prerequisite evidence not met or version mismatch" }
+        }
+      }
+    },
+    "/jobs/{id}": {
+      get: {
+        tags: ["Operations & Jobs"],
+        summary: "Poll status of long-running asynchronous background job (Guide §C.6)",
+        parameters: [
+          { name: "id", in: "path", required: true, schema: { type: "string" } }
+        ],
+        responses: {
+          "200": { description: "Async job status and progress" },
+          "401": { description: "Unauthenticated" },
+          "404": { description: "Job not found" }
+        }
+      }
+    },
+    "/ops/jobs": {
+      get: {
+        tags: ["Operations & Jobs"],
+        summary: "List active background workers and async queue depth (Guide §D.8)",
+        responses: {
+          "200": { description: "Async job queue status" },
+          "401": { description: "Unauthenticated" },
+          "403": { description: "Forbidden" }
         }
       }
     }

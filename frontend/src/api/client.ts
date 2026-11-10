@@ -1276,3 +1276,139 @@ export async function advanceAiAssessment(
     token
   });
 }
+
+// -------------------------------------------------------------
+// Legal Sector Pack Client (SRA 2023 / Health & Safety At Work)
+// -------------------------------------------------------------
+
+export interface LegalMatterView {
+  matterId: string;
+  matterTitle: string;
+  practiceArea: "COMMERCIAL_LITIGATION" | "CORPORATE_MA" | "REGULATORY_INVESTIGATION" | "ARBITRATION";
+  currentPhase: "TRIAL_PREP" | "TRIAL" | "COURT_HEARING" | "CLOSING" | "CLOSING_TRANSACTION" | "FILING_DEADLINE" | "DISCOVERY";
+  jurisdiction: "EWHC" | "UK_TRIBUNAL" | "LCIA_ARBITRATION" | "COMPETITION_APPEAL_TRIBUNAL";
+  leadPartnerId: string;
+  activeWindowStart: string;
+  activeWindowEnd: string;
+}
+
+export interface LegalFatigueAssessmentView {
+  matterId: string;
+  practiceArea: string;
+  currentPhase: string;
+  hasFatigueSurge: boolean;
+  consecutiveLateNightsCount: number;
+  statutoryReference: string;
+  applicableGate: "SUPERVISORY_PARTNER_CONSULTATION" | "STANDARD_APPROVAL";
+  regulatoryNotice: string;
+}
+
+export async function fetchLegalMatters(token?: string): Promise<LegalMatterView[]> {
+  const res = await api<{ items: LegalMatterView[] }>("/api/v2/sector/legal/matters", { token });
+  return res.items || [];
+}
+
+export async function checkLegalFatigue(matterId: string, token?: string, intervals?: any[]): Promise<LegalFatigueAssessmentView> {
+  return api<LegalFatigueAssessmentView>("/api/v2/sector/legal/fatigue-check", {
+    method: "POST",
+    body: JSON.stringify({ matterId, intervals }),
+    token
+  });
+}
+
+export async function mapLegalMatter(matter: any, token?: string): Promise<any> {
+  return api<any>("/api/v2/sector/legal/matters/map", {
+    method: "POST",
+    body: JSON.stringify(matter),
+    token
+  });
+}
+
+// -------------------------------------------------------------
+// Principal, Tenancy and Async Operations Client (Guide §D.1 & §C.6)
+// -------------------------------------------------------------
+
+export interface PrincipalProfileView {
+  principalId: string;
+  tenantId: string;
+  tenantName: string;
+  subject: string;
+  purpose: string;
+  role: string;
+  memberships: Array<{
+    organizationId: string;
+    domainRole: string;
+  }>;
+  allowedNav: string[];
+}
+
+export interface TenantWorkspaceItem {
+  id: string;
+  tenantId: string;
+  name: string;
+  region: string;
+  state: "ACTIVE" | "SUSPENDED" | "PROVISIONING";
+  cohortSize: number;
+}
+
+export interface AsyncJobView {
+  id: string;
+  tenantId?: string;
+  type: string;
+  state: "QUEUED" | "RUNNING" | "COMPLETED" | "FAILED";
+  progress: number;
+  result?: any;
+  error?: string | null;
+  createdAt: string;
+  updatedAt: string;
+}
+
+export interface OpsJobsOverview {
+  queueDepth: number;
+  activeWorkers: number;
+  items: Array<{
+    id: string;
+    type: string;
+    state: string;
+    progress: number;
+    ageSeconds: number;
+    durationMs: number;
+    createdAt?: string;
+    updatedAt?: string;
+  }>;
+}
+
+export async function fetchMe(token?: string): Promise<PrincipalProfileView> {
+  return api<PrincipalProfileView>("/api/v2/me", { token });
+}
+
+export async function fetchTenants(token?: string): Promise<TenantWorkspaceItem[]> {
+  const res = await api<{ items: TenantWorkspaceItem[] }>("/api/v2/tenants", { token });
+  return res.items || [];
+}
+
+export async function fetchTenantById(id: string, token?: string): Promise<any> {
+  return api<any>(`/api/v2/tenants/${id}`, { token });
+}
+
+export async function logoutUser(token?: string): Promise<void> {
+  await api<void>("/api/v2/auth/logout", {
+    method: "POST",
+    token
+  });
+}
+
+export async function refreshToken(token?: string): Promise<{ token: string; expiresIn: string }> {
+  return api<{ token: string; expiresIn: string }>("/api/v2/auth/refresh", {
+    method: "POST",
+    token
+  });
+}
+
+export async function fetchAsyncJob(id: string, token?: string): Promise<AsyncJobView> {
+  return api<AsyncJobView>(`/api/v2/jobs/${id}`, { token });
+}
+
+export async function fetchOpsJobs(token?: string): Promise<OpsJobsOverview> {
+  return api<OpsJobsOverview>("/api/v2/ops/jobs", { token });
+}
