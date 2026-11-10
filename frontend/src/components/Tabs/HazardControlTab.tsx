@@ -19,6 +19,10 @@ import {
   concludeVerification,
   setHazardDisposition,
   exportEvidencePackage,
+  fetchLegalMatters,
+  checkLegalFatigue,
+  type LegalMatterView,
+  type LegalFatigueAssessmentView,
   PRESET_TENANTS,
   BASELINE_RELEASE_ID
 } from "../../api/client";
@@ -58,11 +62,50 @@ export function HazardControlTab({ currentTenant, token }: HazardControlTabProps
   const [editScope, setEditScope] = useState("");
   const [editObjective, setEditObjective] = useState("");
 
+  // Legal Sector States (SRA Workplace Culture & Trial Windows)
+  const [legalMatters, setLegalMatters] = useState<LegalMatterView[]>([]);
+  const [selectedMatterId, setSelectedMatterId] = useState<string | null>(null);
+  const [fatigueAssessment, setFatigueAssessment] = useState<LegalFatigueAssessmentView | null>(null);
+
   const [feedback, setFeedback] = useState<{
     type: "success" | "warning" | "error" | "conflict";
     title: string;
     details: string;
   } | null>(null);
+
+  // Load Legal Sector Matters & Fatigue Assessment
+  const loadLegalMatters = async () => {
+    if (!token) return;
+    try {
+      const matters = await fetchLegalMatters(token);
+      setLegalMatters(matters);
+      if (matters.length > 0) {
+        const first = matters[0];
+        setSelectedMatterId(first.matterId);
+        const assessment = await checkLegalFatigue(first.matterId, token);
+        setFatigueAssessment(assessment);
+      } else {
+        setSelectedMatterId(null);
+        setFatigueAssessment(null);
+      }
+    } catch (err) {
+      console.warn("Could not load legal sector matters:", err);
+    }
+  };
+
+  const handleSelectMatter = async (matterId: string) => {
+    setSelectedMatterId(matterId);
+    if (!token) return;
+    try {
+      setLoading(true);
+      const assessment = await checkLegalFatigue(matterId, token);
+      setFatigueAssessment(assessment);
+    } catch (err: any) {
+      console.warn("Fatigue assessment failed:", err);
+    } finally {
+      setLoading(false);
+    }
+  };
 
   // Load Hazards
   const loadHazards = async () => {
@@ -83,6 +126,7 @@ export function HazardControlTab({ currentTenant, token }: HazardControlTabProps
 
   useEffect(() => {
     loadHazards();
+    loadLegalMatters();
   }, [token, currentTenant.id]);
 
   // Load Hazard Detail when selection changes
@@ -580,6 +624,89 @@ export function HazardControlTab({ currentTenant, token }: HazardControlTabProps
             <span className={`badge ${hazardDetail?.hazard.disposition === "CONTROLLED" ? "badge-aubergine" : "badge-secondary"}`}>7. Review</span>
           </div>
         </div>
+      </div>
+
+      {/* UK Legal Sector Pack & Matter Surge Panel */}
+      <div className="card" style={{ marginBottom: "1.5rem", borderLeft: "4px solid var(--aubergine)" }}>
+        <div className="card-header" style={{ marginBottom: "0.75rem" }}>
+          <div>
+            <div style={{ display: "flex", alignItems: "center", gap: "0.5rem", marginBottom: "0.25rem" }}>
+              <span className="badge badge-aubergine">SECTOR: LEGAL SERVICES</span>
+              <span className="badge badge-coral">SRA 2023 &bull; ISO 45003</span>
+            </div>
+            <h3 style={{ margin: 0 }}>UK Legal Practice: Matters, Demand Windows &amp; Fatigue Triggers</h3>
+            <p className="card-desc" style={{ marginTop: "0.25rem" }}>
+              Maps legal matters to neutral work items. Detects unbuffered evening drafting during critical trial prep windows under SRA Workplace Culture guidance.
+            </p>
+          </div>
+        </div>
+
+        {legalMatters.length === 0 ? (
+          <p className="text-muted" style={{ fontStyle: "italic" }}>No active legal matters registered for this tenant.</p>
+        ) : (
+          <div>
+            <div style={{ display: "grid", gridTemplateColumns: "repeat(auto-fit, minmax(280px, 1fr))", gap: "1rem", marginBottom: "1rem" }}>
+              {legalMatters.map(m => {
+                const isSelected = m.matterId === selectedMatterId;
+                return (
+                  <div
+                    key={m.matterId}
+                    onClick={() => handleSelectMatter(m.matterId)}
+                    style={{
+                      padding: "0.85rem",
+                      borderRadius: "6px",
+                      border: isSelected ? "2px solid var(--aubergine)" : "1px solid var(--border-color)",
+                      background: isSelected ? "#FBF9F6" : "#FFFFFF",
+                      cursor: "pointer",
+                      transition: "all 0.15s ease"
+                    }}
+                  >
+                    <div style={{ display: "flex", justifyContent: "space-between", alignItems: "center", marginBottom: "0.35rem" }}>
+                      <span className="monospace font-bold" style={{ fontSize: "0.85rem", color: "var(--aubergine)" }}>{m.matterId}</span>
+                      <span className="badge badge-sm badge-secondary">{m.currentPhase}</span>
+                    </div>
+                    <div style={{ fontWeight: 600, fontSize: "0.9rem", marginBottom: "0.25rem" }}>{m.matterTitle}</div>
+                    <div style={{ fontSize: "0.75rem", color: "var(--muted-text)" }}>
+                      Area: <strong>{m.practiceArea.replace("_", " ")}</strong> &bull; Court: <strong>{m.jurisdiction}</strong>
+                    </div>
+                  </div>
+                );
+              })}
+            </div>
+
+            {fatigueAssessment && (
+              <div
+                style={{
+                  padding: "0.9rem 1.1rem",
+                  borderRadius: "6px",
+                  background: fatigueAssessment.hasFatigueSurge ? "#FFF5F5" : "#F4FBF7",
+                  border: `1px solid ${fatigueAssessment.hasFatigueSurge ? "var(--coral)" : "var(--success)"}`
+                }}
+              >
+                <div style={{ display: "flex", alignItems: "center", justifyContent: "space-between", marginBottom: "0.35rem" }}>
+                  <div style={{ display: "flex", alignItems: "center", gap: "0.5rem" }}>
+                    <span className={`badge ${fatigueAssessment.hasFatigueSurge ? "badge-coral" : "badge-success"}`}>
+                      {fatigueAssessment.hasFatigueSurge ? "⚠ SRA FATIGUE SURGE DETECTED" : "✔ WITHIN SRA BOUNDARIES"}
+                    </span>
+                    <span className="text-sm font-bold">{fatigueAssessment.statutoryReference}</span>
+                  </div>
+                  <span className="badge badge-dark">Gate: {fatigueAssessment.applicableGate}</span>
+                </div>
+                <div style={{ fontSize: "0.85rem", color: "var(--graphite)", marginBottom: "0.5rem" }}>
+                  {fatigueAssessment.regulatoryNotice}
+                </div>
+                <div style={{ fontSize: "0.8rem", color: "var(--muted-text)" }}>
+                  Consecutive late-night sessions (&gt;20:00 UTC): <strong>{fatigueAssessment.consecutiveLateNightsCount} days</strong>.
+                  {fatigueAssessment.hasFatigueSurge && (
+                    <span style={{ marginLeft: "0.5rem", color: "var(--coral)", fontWeight: 600 }}>
+                      Mandatory: Supervisory Partner Consultation required prior to hazard disposition closure.
+                    </span>
+                  )}
+                </div>
+              </div>
+            )}
+          </div>
+        )}
       </div>
 
       {/* Grid: Left Column (Hazard & Causes) / Right Column (Controls & Verification) */}

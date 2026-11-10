@@ -38,7 +38,13 @@ export function OrganizationsTab({
     setSubmitting(true);
     setFeedback(null);
 
-    const keyToUse = customKey || idempotencyKey;
+    // Auto-generate fresh key if current key is blank and this is not an intentional keyless test
+    let keyToUse = customKey !== undefined ? customKey : idempotencyKey.trim();
+    if (customKey === undefined && !keyToUse) {
+      keyToUse = `idem-${crypto.randomUUID().slice(0, 8)}`;
+      setIdempotencyKey(keyToUse);
+    }
+
     const basePayload = { name: orgName || "Strategic Advisory Practice" };
     const payload = customPayload || (injectProhibitedField
       ? { ...basePayload, keystroke_tracker_payload: "ILLEGAL_SURVEILLANCE_FIELD" }
@@ -65,6 +71,8 @@ export function OrganizationsTab({
       });
 
       setOrgName("");
+      // Automatically generate a fresh unique key for the next organization creation
+      setIdempotencyKey(`idem-${crypto.randomUUID().slice(0, 8)}`);
       onRefresh();
     } catch (err) {
       if (err instanceof ApiError) {

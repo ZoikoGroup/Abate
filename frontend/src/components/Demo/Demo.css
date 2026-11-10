@@ -1175,6 +1175,32 @@
   border-radius: 4px;
 }
 
+.http-status-pill.guarded {
+  background-color: #E8F5E9;
+  color: #2E7D32;
+  font-weight: 700;
+  border: 1px solid #A5D6A7;
+}
+
+.modal-security-callout {
+  margin-top: 18px;
+  padding: 14px 18px;
+  border-radius: 6px;
+  background-color: #F8F9FA;
+  border-left: 4px solid #2E7D32;
+  font-size: 0.82rem;
+  line-height: 1.45;
+  color: #2F343A;
+}
+
+.modal-security-callout strong {
+  color: #2B1B38;
+}
+
+.modal-security-callout p {
+  margin: 4px 0 0 0;
+}
+
 .unrun-pill {
   font-size: 0.75rem;
   color: var(--abate-sage);

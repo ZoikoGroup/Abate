@@ -20,13 +20,14 @@ import { HazardControlTab } from "./components/Tabs/HazardControlTab";
 import { RetentionTab } from "./components/Tabs/RetentionTab";
 import { BoundedAiTab } from "./components/Tabs/BoundedAiTab";
 import { OutcomesAiChangeTab } from "./components/Tabs/OutcomesAiChangeTab";
+import { LegalPracticeTab } from "./components/Tabs/LegalPracticeTab";
 import { OperationsTab } from "./components/Tabs/OperationsTab";
 import { OutboxTab } from "./components/Tabs/OutboxTab";
 import { AuditTab } from "./components/Tabs/AuditTab";
 import { LiveDemoConsole } from "./components/Demo/LiveDemoConsole";
 import "./index.css";
 
-type TabKey = "constitutional" | "isolation" | "organizations" | "ingestion" | "analytics" | "hazards" | "retention" | "ai" | "outcomes" | "operations" | "outbox" | "audit";
+type TabKey = "constitutional" | "isolation" | "organizations" | "ingestion" | "analytics" | "hazards" | "retention" | "ai" | "outcomes" | "legal" | "operations" | "outbox" | "audit";
 
 export default function App() {
   const [activeTenantId, setActiveTenantId] = useState(PRESET_TENANTS[0].id);
@@ -217,6 +218,13 @@ export default function App() {
         </button>
         <button
           type="button"
+          className={`tab-button ${activeTab === "legal" ? "active" : ""}`}
+          onClick={() => setActiveTab("legal")}
+        >
+          Legal Sector Pack (SRA 2023)
+        </button>
+        <button
+          type="button"
           className={`tab-button ${activeTab === "operations" ? "active" : ""}`}
           onClick={() => setActiveTab("operations")}
         >
@@ -320,6 +328,13 @@ export default function App() {
 
         {activeTab === "outcomes" && (
           <OutcomesAiChangeTab
+            currentTenant={currentTenant}
+            token={token}
+          />
+        )}
+
+        {activeTab === "legal" && (
+          <LegalPracticeTab
             currentTenant={currentTenant}
             token={token}
           />

@@ -23,19 +23,13 @@ const tenantB = GOLDEN_01.tenantB.id;
 const actorA: Actor = {
   tenantId: tenantA,
   principalId: "00000000-0000-4000-a000-000000000001",
-  subject: "auth0|user-tenant-a-risk-owner",
-  role: "RISK_OWNER",
-  domainRoles: ["RISK_OWNER"],
-  memberships: [{ domain_role: "RISK_OWNER", organization_id: "org-1" } as any]
+  memberships: [{ domain_role: "RISK_OWNER", organization_id: "org-1" }]
 };
 
 const actorB: Actor = {
   tenantId: tenantB,
   principalId: "00000000-0000-4000-b000-000000000001",
-  subject: "auth0|user-tenant-b-risk-owner",
-  role: "RISK_OWNER",
-  domainRoles: ["RISK_OWNER"],
-  memberships: [{ domain_role: "RISK_OWNER", organization_id: "org-2" } as any]
+  memberships: [{ domain_role: "RISK_OWNER", organization_id: "org-2" }]
 };
 
 async function runLoadTests() {
@@ -55,9 +49,11 @@ async function runLoadTests() {
       const start = Date.now();
       const res = await compileRelease(tenantA, {
         metricId: "BOUNDARY_INTRUSION_SHARE",
+        metricVersion: 1,
         cohortRef: "tenantA-ops",
         periodStart: "2026-01-05T00:00:00Z",
-        periodEnd: "2026-03-01T00:00:00Z"
+        periodEnd: "2026-03-01T00:00:00Z",
+        releaseClass: "CLASS_B"
       });
       const duration = Date.now() - start;
       releaseLatencies.push(duration);
@@ -86,7 +82,7 @@ async function runLoadTests() {
       const start = Date.now();
       const orgName = `Load Org ${i}-${crypto.randomUUID().slice(0, 6)}`;
       await createOrganization({
-        who: { tenantId: tenantA, subject: actorA.subject, purpose: "load-test" },
+        who: { tenantId: tenantA, subject: "auth0|user-tenant-a-risk-owner", purpose: "load-test", role: "RISK_OWNER" },
         actor: actorA,
         body: { name: orgName },
         idempotencyKey: `load-${crypto.randomUUID()}`
@@ -139,10 +135,10 @@ async function runLoadTests() {
   await Promise.all(noisyTasks.map(fn => fn()));
 
   // 4. Assert against ops/slo-manifest.v1.yaml targets
-  const releaseP95 = p95(releaseLatencies);
-  const writeP95 = p95(writeLatencies);
-  const readP95 = p95(readLatencies);
-  const tenantBP95 = p95(tenantBLatencies);
+  const releaseP95 = p95(releaseLatencies) ?? 0;
+  const writeP95 = p95(writeLatencies) ?? 0;
+  const readP95 = p95(readLatencies) ?? 0;
+  const tenantBP95 = p95(tenantBLatencies) ?? 0;
 
   console.log(`\n  --- Measured Concurrency & Latency Results ---`);
   console.log(`  Release Analytics p95: ${releaseP95} ms (Manifest target: <= 1500 ms)`);

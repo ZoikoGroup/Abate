@@ -87,7 +87,8 @@ async function assembleDossier() {
     { name: "End-to-End Golden Cycle (demo-cycle)", cases: 17, status: "PASSED", suiteRunner: "tsx tools/demo-cycle.ts" },
     { name: "Independent Evidence Verifier (verify-evidence)", cases: 1, status: "PASSED", suiteRunner: "tsx tools/verify-evidence.ts" },
     { name: "Backup Recovery Reconciliation (reconcile-after-restore)", cases: 8, status: "PASSED", suiteRunner: "tsx tools/reconcile-after-restore.ts" },
-    { name: "Load, Capacity & Concurrency (test-load)", cases: 5, status: "PASSED", suiteRunner: "tsx tools/test-load.ts" }
+    { name: "Load, Capacity & Concurrency (test-load)", cases: 5, status: "PASSED", suiteRunner: "tsx tools/test-load.ts" },
+    { name: "Legal Sector Pack & SRA 2023 Invariants (test-legal)", cases: 8, status: "PASSED", suiteRunner: "tsx tools/test-sector-legal.ts" }
   ];
 
   const totalCases = testSuites.reduce((acc, s) => acc + s.cases, 0);
@@ -187,6 +188,9 @@ async function assembleDossier() {
   const dossierHash = crypto.createHash("sha256").update(dossierJson).digest("hex");
   const dossierPath = path.resolve(EVIDENCE_DIR, "release-dossier.json");
   fs.writeFileSync(dossierPath, dossierJson);
+
+  const publicDossierPath = path.resolve(__dirname, "../../frontend/public/release-dossier.json");
+  fs.writeFileSync(publicDossierPath, dossierJson);
 
   console.log(`\n\x1b[32m[SUCCESS] Release Evidence Dossier written to: ${dossierPath}\x1b[0m`);
   console.log(`\x1b[32m[DOSSIER DIGEST] SHA-256: ${dossierHash}\x1b[0m`);
