@@ -2,6 +2,10 @@
 
 This inventory document provides an authoritative, code-verified audit of the running Abate backend service (`http://localhost:5000` / `/api/v2`), its exact routes, request/response contracts, transactional side effects, authentication mechanics, and seeded fixtures.
 
+## Database Migration Workflow
+
+Run migrations from `backend/` with `npm run migrate` after PostgreSQL is available and the migrator connection is configured. The runner serializes concurrent executions with a PostgreSQL advisory lock, records each applied SQL file and SHA-256 checksum in `schema_migrations`, and applies each new migration in its own transaction. A connection or migration error exits non-zero; it is not treated as an in-memory migration.
+
 ---
 
 ## 1. Routes & Contract Catalog
@@ -306,4 +310,3 @@ The test runner `backend/tools/test-boundaries.ts` runs 57 boundary, isolation, 
 | **8** | Switch to Tenant B | `POST /api/v2/auth/token` + `GET /api/v2/organizations` | Database RLS isolation: B sees 0 rows of A | **YES** |
 | **9** | Test Evidence | Reads `frontend/public/test-report.json` | 57 automated boundary tests pass | **YES** |
 | **10** | Roadmap | None (Static Blueprint) | Phases 2-8 clearly demarcated | **YES** |
-

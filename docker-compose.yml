@@ -18,6 +18,7 @@ services:
       retries: 10
     volumes:
       - pgdata:/var/lib/postgresql/data
+      - ./backend/db/init:/docker-entrypoint-initdb.d:ro
 
   objectstore:
     image: minio/minio:RELEASE.2024-03-05T04-48-44Z
@@ -36,4 +37,3 @@ services:
 volumes:
   pgdata:
   miniodata:
-
