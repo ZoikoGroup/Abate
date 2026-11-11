@@ -710,7 +710,7 @@ export function HazardControlTab({ currentTenant, token }: HazardControlTabProps
       </div>
 
       {/* Grid: Left Column (Hazard & Causes) / Right Column (Controls & Verification) */}
-      <div style={{ display: "grid", gridTemplateColumns: "1fr 1fr", gap: "1.5rem", marginBottom: "1.5rem" }}>
+      <div className="resp-grid-2" style={{ gap: "1.5rem", marginBottom: "1.5rem" }}>
         
         {/* LEFT COLUMN: Hazard & Causes */}
         <div style={{ display: "flex", flexDirection: "column", gap: "1.5rem" }}>
@@ -959,7 +959,7 @@ export function HazardControlTab({ currentTenant, token }: HazardControlTabProps
                   required
                 />
               </div>
-              <div style={{ display: "grid", gridTemplateColumns: "1fr 1fr", gap: "0.5rem", marginBottom: "0.75rem" }}>
+              <div className="resp-grid-2" style={{ gap: "0.5rem", marginBottom: "0.75rem" }}>
                 <div>
                   <label className="form-label">Residual Risk</label>
                   <input
@@ -1057,7 +1057,7 @@ export function HazardControlTab({ currentTenant, token }: HazardControlTabProps
                   {selectedControl.state === "APPROVED" && (
                     <div style={{ background: "var(--ivory)", padding: "0.75rem", borderRadius: "6px", width: "100%", marginBottom: "0.5rem" }}>
                       <div style={{ fontSize: "0.8rem", fontWeight: 700, marginBottom: "0.5rem" }}>Record Attributable Implementation Evidence</div>
-                      <div style={{ display: "grid", gridTemplateColumns: "1fr 1fr", gap: "0.5rem", marginBottom: "0.5rem" }}>
+                      <div className="resp-grid-2" style={{ gap: "0.5rem", marginBottom: "0.5rem" }}>
                         <div>
                           <label className="form-label" style={{ fontSize: "0.75rem" }}>Implementation Kind</label>
                           <select
@@ -1161,7 +1161,7 @@ export function HazardControlTab({ currentTenant, token }: HazardControlTabProps
 
             {selectedControl?.state === "VERIFYING" || selectedControl?.evaluation ? (
               <div>
-                <div style={{ display: "grid", gridTemplateColumns: "1fr 1fr", gap: "1rem", marginBottom: "1rem" }}>
+                <div className="resp-grid-2" style={{ gap: "1rem", marginBottom: "1rem" }}>
                   <div style={{ background: "var(--ivory)", padding: "0.75rem", borderRadius: "6px" }}>
                     <div style={{ fontSize: "0.75rem", color: "var(--muted-text)" }}>BASELINE VALUE</div>
                     <div style={{ fontSize: "1.25rem", fontWeight: 700 }}>32.5%</div>
@@ -1299,7 +1299,7 @@ export function HazardControlTab({ currentTenant, token }: HazardControlTabProps
           <span className="badge badge-coral">ZAB-ENG-001 §8</span>
         </div>
 
-        <div style={{ display: "grid", gridTemplateColumns: "repeat(3, 1fr)", gap: "1rem", marginTop: "1rem" }}>
+        <div className="resp-grid-3" style={{ gap: "1rem", marginTop: "1rem" }}>
           <button
             type="button"
             onClick={handleTestStateRejection}

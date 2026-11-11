@@ -1117,3 +1117,69 @@ pre {
   margin-top: 0.5rem;
 }
 
+
+/* Utility grids used by tabs: shrinkable columns, collapse on small screens */
+.resp-grid-2,
+.resp-grid-3 {
+  display: grid;
+}
+
+.resp-grid-2 {
+  grid-template-columns: repeat(2, minmax(0, 1fr));
+}
+
+.resp-grid-3 {
+  grid-template-columns: repeat(3, minmax(0, 1fr));
+}
+
+.resp-grid-2 > *,
+.resp-grid-3 > * {
+  min-width: 0;
+}
+
+@media (max-width: 900px) {
+  .resp-grid-3 {
+    grid-template-columns: repeat(2, minmax(0, 1fr));
+  }
+}
+
+@media (max-width: 640px) {
+  .resp-grid-2,
+  .resp-grid-3 {
+    grid-template-columns: minmax(0, 1fr);
+  }
+}
+
+/* Long unbroken strings (ids, hashes, tokens) must wrap instead of widening the page */
+.monospace,
+.monospace-badge,
+code {
+  overflow-wrap: anywhere;
+}
+
+/* Tabs build many header/toolbars as inline flex rows without wrapping; let them wrap on phones */
+@media (max-width: 640px) {
+  [style*="display: flex"]:not([style*="flex-direction: column"]):not([style*="flex-wrap"]):not([style*="nowrap"]) {
+    flex-wrap: wrap;
+  }
+}
+
+/* Inputs never exceed their container */
+input,
+select,
+textarea,
+.select-control {
+  max-width: 100%;
+}
+
+/* Badges: cap at container width and break only truly unbreakable strings (break-word keeps min-content sizing intact) */
+.badge {
+  max-width: 100%;
+  overflow-wrap: break-word;
+}
+
+/* Tenant-name badge sits on white cards inside tabs (it is styled for the dark header otherwise) */
+.app-main .monospace-badge {
+  color: var(--graphite);
+  background: rgba(43, 27, 56, 0.08);
+}

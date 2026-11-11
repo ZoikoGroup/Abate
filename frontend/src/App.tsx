@@ -1,5 +1,5 @@
 // frontend/src/App.tsx
-import { useState, useEffect, useCallback } from "react";
+import { useState, useEffect, useCallback, lazy, Suspense } from "react";
 import {
   api,
   requestToken,
@@ -11,21 +11,29 @@ import {
   type AuditEvent
 } from "./api/client";
 import { Navbar } from "./components/Navbar";
-import { ConstitutionalTab } from "./components/Tabs/ConstitutionalTab";
-import { IsolationTab } from "./components/Tabs/IsolationTab";
 import { OrganizationsTab } from "./components/Tabs/OrganizationsTab";
-import { IngestionTab } from "./components/Tabs/IngestionTab";
-import { CohortAnalyticsTab } from "./components/Tabs/CohortAnalyticsTab";
-import { HazardControlTab } from "./components/Tabs/HazardControlTab";
-import { RetentionTab } from "./components/Tabs/RetentionTab";
-import { BoundedAiTab } from "./components/Tabs/BoundedAiTab";
-import { OutcomesAiChangeTab } from "./components/Tabs/OutcomesAiChangeTab";
-import { LegalPracticeTab } from "./components/Tabs/LegalPracticeTab";
-import { OperationsTab } from "./components/Tabs/OperationsTab";
-import { OutboxTab } from "./components/Tabs/OutboxTab";
-import { AuditTab } from "./components/Tabs/AuditTab";
-import { LiveDemoConsole } from "./components/Demo/LiveDemoConsole";
 import "./index.css";
+
+// Code-split: each workspace tab (and the demo console) loads on first use. OrganizationsTab is the default tab, so it stays eager.
+const ConstitutionalTab = lazy(() => import("./components/Tabs/ConstitutionalTab").then((m) => ({ default: m.ConstitutionalTab })));
+const IsolationTab = lazy(() => import("./components/Tabs/IsolationTab").then((m) => ({ default: m.IsolationTab })));
+const IngestionTab = lazy(() => import("./components/Tabs/IngestionTab").then((m) => ({ default: m.IngestionTab })));
+const CohortAnalyticsTab = lazy(() => import("./components/Tabs/CohortAnalyticsTab").then((m) => ({ default: m.CohortAnalyticsTab })));
+const HazardControlTab = lazy(() => import("./components/Tabs/HazardControlTab").then((m) => ({ default: m.HazardControlTab })));
+const RetentionTab = lazy(() => import("./components/Tabs/RetentionTab").then((m) => ({ default: m.RetentionTab })));
+const BoundedAiTab = lazy(() => import("./components/Tabs/BoundedAiTab").then((m) => ({ default: m.BoundedAiTab })));
+const OutcomesAiChangeTab = lazy(() => import("./components/Tabs/OutcomesAiChangeTab").then((m) => ({ default: m.OutcomesAiChangeTab })));
+const LegalPracticeTab = lazy(() => import("./components/Tabs/LegalPracticeTab").then((m) => ({ default: m.LegalPracticeTab })));
+const OperationsTab = lazy(() => import("./components/Tabs/OperationsTab").then((m) => ({ default: m.OperationsTab })));
+const OutboxTab = lazy(() => import("./components/Tabs/OutboxTab").then((m) => ({ default: m.OutboxTab })));
+const AuditTab = lazy(() => import("./components/Tabs/AuditTab").then((m) => ({ default: m.AuditTab })));
+const LiveDemoConsole = lazy(() => import("./components/Demo/LiveDemoConsole").then((m) => ({ default: m.LiveDemoConsole })));
+
+const PaneFallback = () => (
+  <div role="status" aria-live="polite" style={{ padding: "2rem", textAlign: "center", color: "var(--muted-text)" }}>
+    Loading workspace…
+  </div>
+);
 
 type TabKey = "constitutional" | "isolation" | "organizations" | "ingestion" | "analytics" | "hazards" | "retention" | "ai" | "outcomes" | "legal" | "operations" | "outbox" | "audit";
 
@@ -140,7 +148,9 @@ export default function App() {
   if (showDemoConsole) {
     return (
       <div className="app-container">
-        <LiveDemoConsole onClose={() => handleToggleDemo(false)} />
+        <Suspense fallback={<PaneFallback />}>
+          <LiveDemoConsole onClose={() => handleToggleDemo(false)} />
+        </Suspense>
       </div>
     );
   }
@@ -268,6 +278,7 @@ export default function App() {
           </div>
         )}
 
+        <Suspense fallback={<PaneFallback />}>
         {activeTab === "constitutional" && (
           <ConstitutionalTab health={health} info={info} />
         )}
@@ -350,6 +361,7 @@ export default function App() {
         {activeTab === "outbox" && (
           <OutboxTab
             currentTenant={currentTenant}
+            token={token}
             onRefresh={() => fetchTenantData(activeTenantId, activeRole)}
           />
         )}
@@ -361,6 +373,7 @@ export default function App() {
             onRefresh={() => fetchTenantData(activeTenantId, activeRole)}
           />
         )}
+        </Suspense>
       </main>
 
       <footer className="app-footer">

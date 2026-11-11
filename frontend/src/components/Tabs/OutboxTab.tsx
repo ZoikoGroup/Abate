@@ -4,18 +4,21 @@ import { api, type OutboxDrainReport, PRESET_TENANTS } from "../../api/client";
 
 interface OutboxTabProps {
   currentTenant: typeof PRESET_TENANTS[0];
+  token: string | null;
   onRefresh: () => void;
 }
 
-export function OutboxTab({ currentTenant, onRefresh }: OutboxTabProps) {
+export function OutboxTab({ currentTenant, token, onRefresh }: OutboxTabProps) {
   const [draining, setDraining] = useState(false);
   const [drainReport, setDrainReport] = useState<OutboxDrainReport | null>(null);
 
   const handleDrain = async () => {
     setDraining(true);
     try {
+      // The drain endpoint now requires a signed-in tenant member
       const res = await api<OutboxDrainReport>("/api/v2/outbox/drain", {
-        method: "POST"
+        method: "POST",
+        token: token ?? undefined
       });
       setDrainReport(res);
       onRefresh();

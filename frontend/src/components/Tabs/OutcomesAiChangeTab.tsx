@@ -376,7 +376,7 @@ export function OutcomesAiChangeTab({ currentTenant, token }: OutcomesAiChangeTa
         }}
       >
         <div style={{ display: "flex", gap: "1.5rem", flexWrap: "wrap" }}>
-          <div style={{ flex: 1, minWidth: "280px" }}>
+          <div style={{ flex: 1, minWidth: "min(280px, 100%)" }}>
             <div style={{ display: "flex", alignItems: "center", gap: "0.5rem", marginBottom: "0.4rem" }}>
               <PlaneBadge plane="A" />
               <strong style={{ fontSize: "0.875rem", color: "#1E293B" }}>Assurance & Legal Duty Plane</strong>
@@ -389,7 +389,7 @@ export function OutcomesAiChangeTab({ currentTenant, token }: OutcomesAiChangeTa
 
           <div style={{ width: "1px", background: "#E2E8F0" }}></div>
 
-          <div style={{ flex: 1, minWidth: "280px" }}>
+          <div style={{ flex: 1, minWidth: "min(280px, 100%)" }}>
             <div style={{ display: "flex", alignItems: "center", gap: "0.5rem", marginBottom: "0.4rem" }}>
               <PlaneBadge plane="B" />
               <strong style={{ fontSize: "0.875rem", color: "#1E293B" }}>Work-Design & Performance Plane</strong>
@@ -774,7 +774,7 @@ export function OutcomesAiChangeTab({ currentTenant, token }: OutcomesAiChangeTa
               />
             </div>
 
-            <div style={{ display: "grid", gridTemplateColumns: "1fr 1fr", gap: "0.5rem", marginBottom: "0.5rem" }}>
+            <div className="resp-grid-2" style={{ gap: "0.5rem", marginBottom: "0.5rem" }}>
               <div className="form-group">
                 <label className="form-label">Affected Roles</label>
                 <input
