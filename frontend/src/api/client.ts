@@ -1364,17 +1364,27 @@ export interface AsyncJobView {
 }
 
 export interface OpsJobsOverview {
+  workerId?: string;
+  workerState?: string;
+  heartbeatAt?: string;
   queueDepth: number;
+  queueLagMs?: number;
+  totalProcessed?: number;
+  totalFailures?: number;
+  totalDeadLetters?: number;
   activeWorkers: number;
   items: Array<{
     id: string;
     type: string;
     state: string;
-    progress: number;
-    ageSeconds: number;
-    durationMs: number;
+    attempts?: number;
+    lastError?: string;
+    progress?: number;
+    ageSeconds?: number;
+    durationMs?: number;
     createdAt?: string;
     updatedAt?: string;
+    publishedAt?: string;
   }>;
 }
 

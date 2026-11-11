@@ -38,5 +38,36 @@ if (!existsSync(envPath)) {
   }
 }
 console.log("  [OK] Environment configuration verified.");
-console.log("\x1b[32m[SUCCESS] Abate bootstrap completed successfully.\x1b[0m");
+
+// 3. PostgreSQL connectivity preflight check
+import net from "node:net";
+
+async function main() {
+  const isReachable = await new Promise<boolean>((resolve) => {
+    const socket = net.createConnection({ port: 5432, host: "127.0.0.1" });
+    socket.setTimeout(1000);
+    socket.on("connect", () => {
+      socket.destroy();
+      resolve(true);
+    });
+    socket.on("timeout", () => {
+      socket.destroy();
+      resolve(false);
+    });
+    socket.on("error", () => {
+      socket.destroy();
+      resolve(false);
+    });
+  });
+
+  if (!isReachable) {
+    console.warn("\x1b[33m  [WARNING] PostgreSQL is not reachable on 5432. Run docker compose up -d postgres\x1b[0m");
+  } else {
+    console.log("  [OK] PostgreSQL detected on port 5432.");
+  }
+
+  console.log("\x1b[32m[SUCCESS] Abate bootstrap completed successfully.\x1b[0m");
+}
+
+main().catch((err) => fail(err.message));
 

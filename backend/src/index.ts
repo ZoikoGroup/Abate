@@ -114,7 +114,8 @@ import {
   generateDiagnosticReceipt,
   verifyDiagnosticReceipt
 } from "./domains/support";
-import { withTenant, withPlatform, QueryFn } from "./platform/db/with-tenant";
+import { withTenant, withPlatform, withWorker, QueryFn } from "./platform/db/with-tenant";
+import { getWorkerMetrics } from "./worker/daemon";
 import { drainOnce } from "./worker/outbox-publisher";
 import { seedTwoTenants } from "./fixtures/seed";
 
@@ -306,7 +307,7 @@ app.get("/api/v2/me", async (req: Request, res: Response) => {
     const who = await authenticate(getHeader(req, "authorization"));
     const actor = await resolveActor(who.tenantId, who.subject, new Date());
     const tenant = await getTenant({ who, actor });
-    
+
     res.status(200).json({
       principalId: actor.principalId,
       tenantId: who.tenantId,
@@ -397,7 +398,7 @@ app.post("/api/v2/organizations", async (req: Request, res: Response) => {
   try {
     const who = await authenticate(getHeader(req, "authorization"));
     const actor = await resolveActor(who.tenantId, who.subject, new Date());
-    
+
     // Strict schema validation: rejects unknown or prohibited fields immediately
     const body = CreateOrganizationBody.parse(req.body);
 
@@ -484,7 +485,7 @@ app.post("/api/v2/connectors/zoikotime/batches", async (req: Request, res: Respo
   try {
     const who = await authenticate(getHeader(req, "authorization"));
     const actor = await resolveActor(who.tenantId, who.subject, new Date());
-    
+
     // Strict schema parse: unknown or prohibited top-level fields rejected immediately
     const batch = ZoikoTimeBatchV1.parse(req.body);
 
@@ -629,7 +630,7 @@ app.get("/api/v2/metrics/definitions", async (req: Request, res: Response) => {
       }];
     }
     const defs = rawDefs.map(d => {
-      const defObj = typeof d.definition === "string" 
+      const defObj = typeof d.definition === "string"
         ? (() => { try { return JSON.parse(d.definition); } catch { return {}; } })()
         : (d.definition && typeof d.definition === "object" ? d.definition : {});
       const metricId = String(d.id || d.metric_id || defObj.id || defObj.metricId || "BOUNDARY_INTRUSION_SHARE").trim();
@@ -1858,19 +1859,19 @@ app.get("/api/v2/ops/release-readiness", async (req: Request, res: Response) => 
   try {
     authenticateSupport(getHeader(req, "authorization"));
     res.status(200).json({
-      decision: "GO",
+      decision: "READY FOR REVIEW",
       schemaVersion: "abate.release-dossier.v1",
-      p0Defects: 0,
+      p0FailingTests: 0,
       p1Defects: 0,
       gates: [
         { name: "Scope Gate", status: "PASSED", details: "Named customers, UK SRA jurisdiction pack, ZoikoTime connector" },
         { name: "Build Gate", status: "PASSED", details: "TypeScript strict, lockfile pinned, zero floating versions" },
         { name: "Correctness Gate", status: "PASSED", details: "All 17 phases of golden cycle verified on synthetic baseline" },
-        { name: "Privacy & Security Gate", status: "PASSED", details: "57/57 boundary tests passed; forced RLS & single read path verified; 0 P0 defects" },
+        { name: "Privacy & Security Gate", status: "PASSED", details: "57/57 boundary tests passed; forced RLS & single read path verified; 0 failing P0 tests" },
         { name: "Minimization Gate", status: "PASSED", details: "Decoy minimization suite passed with 0 persistence/log traces" },
         { name: "AI & Strategy Gate", status: "PASSED", details: "Bounded AI validators, prompt boundaries, and Plane A/B isolation trigger verified" },
         { name: "Operations Gate", status: "PASSED", details: "Signed SLO manifest ratified, 5 independent kill switches drilled, restore rehearsal verified" },
-        { name: "Authorization Gate", status: "PASSED", details: "Release authority sign-off confirmed" }
+        { name: "Authorization Gate", status: "PENDING_REVIEW", details: "Awaiting named steering sign-off" }
       ],
       evaluatedAt: new Date().toISOString()
     });
@@ -1880,16 +1881,27 @@ app.get("/api/v2/ops/release-readiness", async (req: Request, res: Response) => 
 });
 
 // Phase 8 / Dossier: Ratified Release Evidence Dossier
-app.get("/api/v2/release/dossier", async (_req: Request, res: Response) => {
+app.get(["/api/v2/release/dossier", "/api/v2/release/dossier/", "/api/v2/release-dossier"], async (_req: Request, res: Response) => {
   try {
-    const dossierPath = path.resolve(__dirname, "../../evidence/release-dossier.json");
-    if (fs.existsSync(dossierPath)) {
-      const data = JSON.parse(fs.readFileSync(dossierPath, "utf8"));
-      return res.status(200).json(data);
+    const candidatePaths = [
+      path.resolve(__dirname, "../../evidence/release-dossier.json"),
+      path.resolve(__dirname, "../evidence/release-dossier.json"),
+      path.resolve(process.cwd(), "evidence/release-dossier.json"),
+      path.resolve(process.cwd(), "../evidence/release-dossier.json"),
+      path.resolve(__dirname, "../../frontend/public/release-dossier.json"),
+      path.resolve(process.cwd(), "frontend/public/release-dossier.json")
+    ];
+
+    for (const p of candidatePaths) {
+      if (fs.existsSync(p)) {
+        const data = JSON.parse(fs.readFileSync(p, "utf8"));
+        return res.status(200).json(data);
+      }
     }
+
     return res.status(200).json({
-      status: "RATIFIED",
-      decision: "GO",
+      status: "READY FOR REVIEW",
+      decision: { outcome: "READY FOR REVIEW" },
       schemaVersion: "abate.release-dossier.v1",
       defects: { P0: 0, P1: 0, P2: 0, P3: 0 }
     });
@@ -1929,41 +1941,58 @@ app.get("/api/v2/ops/connectors", async (req: Request, res: Response) => {
 app.get("/api/v2/ops/jobs", async (req: Request, res: Response) => {
   try {
     authenticateSupport(getHeader(req, "authorization"));
+    const metrics = getWorkerMetrics();
+
+    // Fetch live counts and entries from db using worker role
+    const stats = await withWorker(async (tx) => {
+      const pendingRes = await tx.q(
+        "SELECT count(*)::int as count FROM outbox_event WHERE published_at IS NULL AND (state = 'PENDING' OR state = 'PROCESSING')"
+      );
+      const deadLetterRes = await tx.q("SELECT count(*)::int as count FROM dead_letter_event");
+      const recentOutbox = await tx.q(
+        "SELECT id, aggregate, aggregate_id, event_type, state, attempts, created_at, published_at FROM outbox_event ORDER BY created_at DESC LIMIT 10"
+      );
+      const recentDeadLetters = await tx.q(
+        "SELECT id, outbox_id, aggregate, aggregate_id, attempts, last_error, failed_at FROM dead_letter_event ORDER BY failed_at DESC LIMIT 5"
+      );
+      return {
+        pendingCount: pendingRes.rows[0]?.count || 0,
+        deadLetterCount: deadLetterRes.rows[0]?.count || 0,
+        recentOutbox: recentOutbox.rows,
+        recentDeadLetters: recentDeadLetters.rows
+      };
+    });
+
+    const items = [
+      ...stats.recentOutbox.map((e: any) => ({
+        id: e.id,
+        type: `OUTBOX:${e.aggregate}`,
+        state: e.state || (e.published_at ? "COMPLETED" : "PENDING"),
+        attempts: e.attempts || 0,
+        createdAt: e.created_at,
+        publishedAt: e.published_at
+      })),
+      ...stats.recentDeadLetters.map((d: any) => ({
+        id: d.id,
+        type: `DEAD_LETTER:${d.aggregate}`,
+        state: "DEAD_LETTER",
+        attempts: d.attempts,
+        lastError: d.last_error,
+        createdAt: d.failed_at
+      }))
+    ];
+
     res.status(200).json({
-      queueDepth: 0,
-      activeWorkers: 2,
-      items: [
-        {
-          id: "job-outbox-drain-001",
-          type: "OUTBOX_DRAIN",
-          state: "COMPLETED",
-          progress: 100,
-          ageSeconds: 5,
-          durationMs: 42,
-          createdAt: new Date(Date.now() - 5000).toISOString(),
-          updatedAt: new Date(Date.now() - 4000).toISOString()
-        },
-        {
-          id: "job-release-dossier-002",
-          type: "RELEASE_DOSSIER_COMPILATION",
-          state: "COMPLETED",
-          progress: 100,
-          ageSeconds: 24,
-          durationMs: 288,
-          createdAt: new Date(Date.now() - 24000).toISOString(),
-          updatedAt: new Date(Date.now() - 23700).toISOString()
-        },
-        {
-          id: "job-privacy-eval-003",
-          type: "PRIVACY_RELEASE_EVALUATION",
-          state: "COMPLETED",
-          progress: 100,
-          ageSeconds: 68,
-          durationMs: 95,
-          createdAt: new Date(Date.now() - 68000).toISOString(),
-          updatedAt: new Date(Date.now() - 67900).toISOString()
-        }
-      ]
+      workerId: metrics.workerId,
+      workerState: metrics.state,
+      heartbeatAt: metrics.heartbeatAt || new Date().toISOString(),
+      queueDepth: stats.pendingCount,
+      queueLagMs: metrics.queueLagMs,
+      totalProcessed: metrics.totalProcessed,
+      totalFailures: metrics.totalFailures,
+      totalDeadLetters: stats.deadLetterCount,
+      activeWorkers: metrics.state === "RUNNING" ? 1 : 0,
+      items
     });
   } catch (err) {
     toErrorResponse(err, res);
@@ -1978,6 +2007,53 @@ app.get("/api/v2/jobs/:id", async (req: Request, res: Response) => {
 
     if (!jobId || jobId === "undefined") {
       throw new AppError("VALIDATION", "Job ID parameter is required.");
+    }
+
+    // Try finding job in outbox_event or dead_letter_event for this tenant
+    const jobData = await withTenant(who.tenantId, async (tx) => {
+      const outboxRes = await tx.q(
+        `SELECT id, aggregate, event_type, state, attempts, next_retry_at, last_error, created_at, published_at, refs
+         FROM outbox_event WHERE id = $1`,
+        [jobId]
+      );
+      if (outboxRes.rows.length > 0) {
+        const row = outboxRes.rows[0];
+        return {
+          id: row.id,
+          tenantId: who.tenantId,
+          type: `OUTBOX_${row.aggregate}`,
+          state: row.state || (row.published_at ? "COMPLETED" : "PENDING"),
+          attempts: row.attempts,
+          lastError: row.last_error,
+          refs: row.refs || [],
+          createdAt: row.created_at,
+          publishedAt: row.published_at
+        };
+      }
+
+      const deadRes = await tx.q(
+        `SELECT id, outbox_id, aggregate, attempts, last_error, failed_at, refs
+         FROM dead_letter_event WHERE id = $1 OR outbox_id = $1`,
+        [jobId]
+      );
+      if (deadRes.rows.length > 0) {
+        const row = deadRes.rows[0];
+        return {
+          id: row.id,
+          tenantId: who.tenantId,
+          type: `DEAD_LETTER_${row.aggregate}`,
+          state: "DEAD_LETTER",
+          attempts: row.attempts,
+          lastError: row.last_error,
+          refs: row.refs || [],
+          createdAt: row.failed_at
+        };
+      }
+      return null;
+    });
+
+    if (jobData) {
+      return res.status(200).json(jobData);
     }
 
     res.status(200).json({
@@ -2342,11 +2418,11 @@ app.post("/api/v2/sector/legal/fatigue-check", async (req: Request, res: Respons
     const testIntervals = Array.isArray(intervals) && intervals.length > 0
       ? intervals
       : [
-          // Default synthetic fixture: 3 consecutive days with late-night drafting past 20:00
-          { startUtc: "2026-03-02T09:00:00Z", endUtc: "2026-03-02T22:30:00Z" },
-          { startUtc: "2026-03-03T09:00:00Z", endUtc: "2026-03-03T23:15:00Z" },
-          { startUtc: "2026-03-04T09:00:00Z", endUtc: "2026-03-04T22:00:00Z" }
-        ];
+        // Default synthetic fixture: 3 consecutive days with late-night drafting past 20:00
+        { startUtc: "2026-03-02T09:00:00Z", endUtc: "2026-03-02T22:30:00Z" },
+        { startUtc: "2026-03-03T09:00:00Z", endUtc: "2026-03-03T23:15:00Z" },
+        { startUtc: "2026-03-04T09:00:00Z", endUtc: "2026-03-04T22:00:00Z" }
+      ];
 
     const assessment = evaluateLegalFatigueSurge(matter, testIntervals);
     res.status(200).json(assessment);

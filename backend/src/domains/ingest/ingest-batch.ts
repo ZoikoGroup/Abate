@@ -62,15 +62,25 @@ export async function ingestBatch(args: {
       let accepted = 0;
       let duplicate = 0;
       let conflicted = 0;
+      let staleSnapshotsMarked = 0;
 
       // Tenant secret for HMAC pseudonym derivation
       const tenantSecret = `${cfg.authSecret}:${args.who.tenantId}`;
 
-      // Step 3: Process validated items into work_fact_revision
+      // Step 3: Process validated items into work_fact_revision and identity_map
       for (const item of ok) {
         const itemHash = computeRequestHash(item);
         const pseudonym = derivePseudonym(tenantSecret, item.subjectRef);
         const factId = crypto.randomUUID();
+
+        // Persist pseudonym mapping to isolated identity_map table (never accessible to abate_worker)
+        const identityMapId = crypto.randomUUID();
+        await tx.q(
+          `INSERT INTO identity_map (id, tenant_id, connection_id, source_subject_ref, subject_pseudonym)
+           VALUES ($1, $2, $3, $4, $5)
+           ON CONFLICT (tenant_id, connection_id, source_subject_ref) DO NOTHING`,
+          [identityMapId, tx.tenantId, conn.id, item.subjectRef, pseudonym]
+        );
 
         // A record purged by retention stays purged: re-delivery is a duplicate, never a resurrection
         const keyDigest = recordKeyDigest(tenantSecret, {
@@ -111,6 +121,16 @@ export async function ingestBatch(args: {
 
         if (insRes.rowCount === 1) {
           accepted++;
+
+          // Invalidation of overlapping metric snapshots on corrections / revisions > 1
+          if (item.revision > 1) {
+            const staleRes = await tx.q(
+              `UPDATE metric_snapshot SET is_stale = true
+               WHERE tenant_id = $1 AND period_start <= $3 AND period_end >= $2`,
+              [tx.tenantId, item.startUtc, item.endUtc]
+            );
+            staleSnapshotsMarked += (staleRes.rowCount ?? 0);
+          }
         } else {
           // Check if it's an exact duplicate or payload conflict
           const prevRows = await tx.q(
@@ -154,6 +174,7 @@ export async function ingestBatch(args: {
         duplicate,
         rejected,
         conflicted,
+        staleSnapshotsMarked,
         recordedAt: new Date().toISOString()
       };
 

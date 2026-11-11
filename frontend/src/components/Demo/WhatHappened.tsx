@@ -135,16 +135,15 @@ export const WhatHappened: React.FC<WhatHappenedProps> = ({ stepId, data }) => {
       {stepId === 6 && (
         <div className="explanation-content">
           <p>
-            The client issued a command to create a secondary division (<code>Dispute Resolution &amp; Advisory Division</code>)
-            using a fresh, cryptographically generated <code>Idempotency-Key</code>.
+            The client attempted to mutate the payload while reusing the identical <code>Idempotency-Key</code> from Step 4.
           </p>
           <p>
-            The backend successfully executed the <strong>4-way atomic state change</strong>: inserting the organization record,
-            persisting the idempotency payload hash, logging the immutable audit event, and queuing the outbox event.
+            The backend computed <code>sha256(canonicalJson(body))</code>, detected a mismatch with the existing idempotency
+            record&apos;s stored hash, and safely rejected the request with <strong>HTTP 409 Conflict</strong>.
           </p>
           <p className="note-text">
-            <strong>Key Guarantee:</strong> Every independent business unit receives its own atomic transaction and fresh key.
-            HTTP <strong>200 OK</strong> confirmed.
+            <strong>Key Guarantee:</strong> Idempotency keys bind the specific request payload. Payload tampering or key reuse
+            with altered bodies is strictly prevented.
           </p>
         </div>
       )}
@@ -152,16 +151,15 @@ export const WhatHappened: React.FC<WhatHappenedProps> = ({ stepId, data }) => {
       {stepId === 7 && (
         <div className="explanation-content">
           <p>
-            The client performed an authoritative direct resource query (<code>GET /api/v2/organizations/:id</code>)
-            using its tenant-bound JWT token.
+            The client submitted a state-changing mutation command without the required <code>Idempotency-Key</code> header.
           </p>
           <p>
-            The database verified tenant ownership under Row-Level Security (RLS) and returned the complete persisted
-            organization entity with status <strong>200 OK</strong>.
+            The API gateway and controller intercepted the request and rejected it immediately with <strong>HTTP 400 Bad Request</strong>{" "}
+            before reaching the database or executing any state modification.
           </p>
           <p className="note-text">
-            <strong>Key Guarantee:</strong> Authoritative data is instantly queryable by authorized tenant actors.
-            Read path fully verified.
+            <strong>Key Guarantee:</strong> Idempotency keys are mandatory for all mutating actions. Keyless state changes
+            fail fast at the gateway.
           </p>
         </div>
       )}
@@ -173,11 +171,11 @@ export const WhatHappened: React.FC<WhatHappenedProps> = ({ stepId, data }) => {
             <code>GET /api/v2/organizations</code>.
           </p>
           <p>
-            Because the query ran inside <code>SET LOCAL app.tenant_id = 'tenant-b-uuid'</code>, Row-Level Security (RLS)
+            Because the query ran inside <code>SET LOCAL app.tenant_id = &apos;tenant-b-uuid&apos;</code>, Row-Level Security (RLS)
             filtered the rows at the storage layer. Tenant B sees only their own data.
           </p>
           <p className="note-text">
-            <strong>Key Guarantee:</strong> Zero leakage across tenant boundaries. Tenant A's newly created organization
+            <strong>Key Guarantee:</strong> Zero leakage across tenant boundaries. Tenant A&apos;s newly created organization
             is completely invisible to Tenant B.
           </p>
         </div>
@@ -203,14 +201,49 @@ export const WhatHappened: React.FC<WhatHappenedProps> = ({ stepId, data }) => {
       {stepId === 10 && (
         <div className="explanation-content">
           <p>
-            Summary of system architecture and progressive delivery roadmap.
+            Loaded the authoritative platform release evidence dossier from <code>GET /api/v2/release/dossier</code>.
           </p>
           <p>
-            Phases 0 and 1 are <strong>fully verified, compiled, and operating live</strong>.
-            Subsequent phases are scheduled for sequential delivery under the same constitutional architecture.
+            The release dossier consolidates cryptographic evidence across all 8 automated test suites (110 automated cases),
+            confirms 0 failing P0 tests, drills 5 independent kill switches, and verifies backup restore reconciliation.
           </p>
           <p className="note-text">
-            <strong>Key Guarantee:</strong> We build verified foundations first. No fake endpoints or mock stubs.
+            <strong>Key Guarantee:</strong> Authoritative evidence is compiled directly from automated test runners and
+            cryptographically signed for stakeholder governance review.
+          </p>
+        </div>
+      )}
+
+      {stepId === 11 && (
+        <div className="explanation-content">
+          <p>
+            The client issued a command to create a secondary division (<code>Dispute Resolution &amp; Advisory Division</code>)
+            using a fresh, cryptographically generated <code>Idempotency-Key</code>.
+          </p>
+          <p>
+            The backend successfully executed the <strong>4-way atomic state change</strong>: inserting the organization record,
+            persisting the idempotency payload hash, logging the immutable audit event, and queuing the outbox event.
+          </p>
+          <p className="note-text">
+            <strong>Key Guarantee:</strong> Every independent business unit receives its own atomic transaction and fresh key.
+            HTTP <strong>200 OK</strong> confirmed via the atomic runCommand pipeline.
+          </p>
+        </div>
+      )}
+
+      {stepId === 12 && (
+        <div className="explanation-content">
+          <p>
+            The client performed an authoritative direct resource query (<code>GET /api/v2/organizations/:id</code>)
+            using its tenant-bound JWT token.
+          </p>
+          <p>
+            The database verified tenant ownership under Row-Level Security (RLS) and returned the complete persisted
+            organization entity with status <strong>200 OK</strong>.
+          </p>
+          <p className="note-text">
+            <strong>Key Guarantee:</strong> Authoritative data is instantly queryable by authorized tenant actors.
+            Read path fully verified with zero cross-tenant exposure.
           </p>
         </div>
       )}

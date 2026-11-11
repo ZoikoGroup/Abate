@@ -10,6 +10,8 @@ import {
   verifyDiagnosticReceipt,
   fetchKillSwitchesOps,
   setKillSwitch,
+  fetchOpsJobs,
+  type OpsJobsOverview,
   type SloReport,
   type SloStatus,
   type SafeErrorLogEntry,
@@ -46,6 +48,7 @@ export function OperationsTab({ currentTenant, token }: OperationsTabProps) {
   const [report, setReport] = useState<SloReport | null>(null);
   const [errors, setErrors] = useState<SafeErrorLogEntry[]>([]);
   const [killSwitches, setKillSwitches] = useState<KillSwitchRecord[]>([]);
+  const [opsJobs, setOpsJobs] = useState<OpsJobsOverview | null>(null);
   const [requestId, setRequestId] = useState("");
   const [requestRecord, setRequestRecord] = useState<OpsRequestRecord | null>(null);
   const [receiptText, setReceiptText] = useState("");
@@ -62,14 +65,16 @@ export function OperationsTab({ currentTenant, token }: OperationsTabProps) {
   };
 
   const refreshOps = async (t: string) => {
-    const [r, e, ks] = await Promise.all([
+    const [r, e, ks, oj] = await Promise.all([
       fetchSloReport(t),
       fetchOpsErrors(t),
-      fetchKillSwitchesOps(t).catch(() => [])
+      fetchKillSwitchesOps(t).catch(() => []),
+      fetchOpsJobs(t).catch(() => null)
     ]);
     setReport(r);
     setErrors(e);
     setKillSwitches(ks);
+    setOpsJobs(oj);
     return r;
   };
 
@@ -220,6 +225,72 @@ export function OperationsTab({ currentTenant, token }: OperationsTabProps) {
           </>
         )}
       </div>
+
+      {supportToken && (
+        <div className="card">
+          <div className="card-header">
+            <div>
+              <h3>Module 1: Worker Daemon &amp; Async Outbox Queue (/api/v2/ops/jobs)</h3>
+              <p className="card-desc">
+                Real-time outbox polling loop running with <code>FOR UPDATE SKIP LOCKED</code>, exponential retry backoff, and dead-letter isolation. References only stored in dead-letter rows.
+              </p>
+            </div>
+            <span className="badge badge-success">
+              {opsJobs?.workerState === "RUNNING" ? "● WORKER ACTIVE" : "WORKER STANDBY"}
+            </span>
+          </div>
+
+          <div className="stats-grid" style={{ display: "grid", gridTemplateColumns: "repeat(4, 1fr)", gap: "1rem", marginBottom: "1rem" }}>
+            <div className="stat-card" style={{ padding: "0.75rem", background: "rgba(255,255,255,0.04)", borderRadius: "4px" }}>
+              <div className="text-sm text-muted">Queue Depth</div>
+              <div className="text-xl font-bold monospace">{opsJobs?.queueDepth ?? 0} events</div>
+            </div>
+            <div className="stat-card" style={{ padding: "0.75rem", background: "rgba(255,255,255,0.04)", borderRadius: "4px" }}>
+              <div className="text-sm text-muted">Queue Lag</div>
+              <div className="text-xl font-bold monospace">{opsJobs?.queueLagMs ? `${opsJobs.queueLagMs} ms` : "0 ms"}</div>
+            </div>
+            <div className="stat-card" style={{ padding: "0.75rem", background: "rgba(255,255,255,0.04)", borderRadius: "4px" }}>
+              <div className="text-sm text-muted">Total Processed</div>
+              <div className="text-xl font-bold monospace text-success">{opsJobs?.totalProcessed ?? 0}</div>
+            </div>
+            <div className="stat-card" style={{ padding: "0.75rem", background: "rgba(255,255,255,0.04)", borderRadius: "4px" }}>
+              <div className="text-sm text-muted">Dead-Letter Queue</div>
+              <div className="text-xl font-bold monospace text-coral">{opsJobs?.totalDeadLetters ?? 0}</div>
+            </div>
+          </div>
+
+          {opsJobs?.items && opsJobs.items.length > 0 && (
+            <div className="table-responsive">
+              <table className="data-table">
+                <thead>
+                  <tr>
+                    <th>Job ID</th>
+                    <th>Type</th>
+                    <th>State</th>
+                    <th>Attempts</th>
+                    <th>Created</th>
+                  </tr>
+                </thead>
+                <tbody>
+                  {opsJobs.items.map((j) => (
+                    <tr key={j.id}>
+                      <td className="monospace text-sm">{j.id.slice(0, 16)}...</td>
+                      <td><strong>{j.type}</strong></td>
+                      <td>
+                        <span className={`badge ${j.state === "COMPLETED" || j.state === "PUBLISHED" ? "badge-success" : j.state === "DEAD_LETTER" ? "badge-coral" : "badge-dark"}`}>
+                          {j.state}
+                        </span>
+                      </td>
+                      <td className="monospace">{j.attempts ?? 0}</td>
+                      <td className="text-sm">{fmt(j.createdAt || null)}</td>
+                    </tr>
+                  ))}
+                </tbody>
+              </table>
+            </div>
+          )}
+        </div>
+      )}
 
       {supportToken && (
         <div className="card">
@@ -418,7 +489,7 @@ export function OperationsTab({ currentTenant, token }: OperationsTabProps) {
                 Constitutional and operational readiness criteria evaluated before release. A single P0 constitutional failure enforces an irrevocable NO-GO decision.
               </p>
             </div>
-            <span className="badge badge-success">DECISION: GO (0 P0 DEFECTS)</span>
+            <span className="badge badge-success">STATUS: READY FOR REVIEW (0 FAILING P0 TESTS)</span>
           </div>
           <div className="table-responsive">
             <table className="data-table">

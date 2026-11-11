@@ -132,7 +132,7 @@ export function LegalPracticeTab({ currentTenant, token }: LegalPracticeTabProps
           </p>
         </div>
         <div className="pane-actions">
-          <span className="badge badge-primary">SRA 2023 Compliant</span>
+          <span className="badge badge-primary">SRA-Aligned Work-Design Review</span>
           <span className="badge badge-secondary">ISO 45003 §6.1.2.1</span>
           <span className="badge badge-success">HSWA 1974 §2</span>
         </div>

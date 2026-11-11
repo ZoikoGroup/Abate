@@ -319,7 +319,7 @@ export function IngestionTab({ currentTenant, token, onRefresh }: IngestionTabPr
           data at the boundary, enforce tenant-scoped HMAC pseudonymization, evaluate source freshness
           over time, and maintain an append-only historical work ledger.
         </p>
-        <div className="tagline-quote">"Change the work. Not the worker."</div>
+        <div className="tagline-quote">&ldquo;Change the work. Not the worker.&rdquo;</div>
       </div>
 
       {/* Feedback Banner */}
@@ -346,7 +346,7 @@ export function IngestionTab({ currentTenant, token, onRefresh }: IngestionTabPr
           <div>
             <h3>Interactive Ingestion Testing Lab</h3>
             <p className="card-desc">
-              Execute live Phase 2 operational and adversarial scenarios against the active tenant's connection.
+              Execute live Phase 2 operational and adversarial scenarios against the active tenant&apos;s connection.
             </p>
           </div>
           <div className="badge badge-aubergine">Live Connector Suite</div>
@@ -438,7 +438,7 @@ export function IngestionTab({ currentTenant, token, onRefresh }: IngestionTabPr
             <h3>Source Connections & Cadence Health</h3>
             <p className="card-desc">
               Connection health is evaluated against wall-clock time. Missing data (&gt; 3x cadence) results in
-              STALE health, ensuring source outages are never misinterpreted as "zero work" or "reduced risk".
+              STALE health, ensuring source outages are never misinterpreted as &ldquo;zero work&rdquo; or &ldquo;reduced risk&rdquo;.
             </p>
           </div>
           <div className="badge badge-dark">{connections.length} Connections</div>

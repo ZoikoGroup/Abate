@@ -71,12 +71,12 @@ Part B: The HTTP 400 Bad Request Invariant
 - Architectural Requirement:
   To guarantee complete audit trails, mutating operations require an Idempotency-Key header. If the header is missing, the backend rejects with HTTP 400 Bad Request.
 - Complete Resolution Applied:
-  1. In the Live Demo Console: Step 7 was updated from a keyless failure test to "Verify Organization Record", which performs an authoritative GET /api/v2/organizations/:id lookup. It returns HTTP 200 OK with the verified record.
-  2. In UI forms: Added automatic key generation so that submitting an organization never encounters a missing key error.
-  3. Result: All 10 steps in the Live Demo Console execute with 100% green HTTP 200 OK responses.
-     - Step 6: "Create Secondary Division" executes with a fresh idempotency key returning HTTP 200 OK.
-     - Step 7: "Verify Organization Record" performs an authoritative GET lookup returning HTTP 200 OK.
-     - Step 10: "Ratify Platform Release Dossier" fetches the verified release dossier returning HTTP 200 OK with RATIFIED status.
+  1. In the Live Demo Console: Steps 6 and 7 verify that intentional conflict and validation gates work as intended:
+     - Step 6 ("Change Body, Same Key") sends an identical idempotency key with a mutated payload. The backend rejects with HTTP 409 Conflict, showing green PASS.
+     - Step 7 ("Skip the Key") omits the idempotency key. The backend rejects with HTTP 400 Bad Request, showing green PASS.
+  2. Extra Steps 11 and 12 verify successful secondary division creation and direct authoritative record lookup with HTTP 200 OK.
+  3. In UI forms: Added automatic key generation so that submitting an organization never encounters a missing key error.
+  4. Result: All steps in the Live Demo Console execute with 100% green PASS proofs, correctly distinguishing between successful creations and intentional boundary defense rejections.
 
 ================================================================================
 SECTION 3: TECHNICAL ARCHITECTURE & COMPONENT INTERACTION
@@ -186,7 +186,7 @@ Phase 8: Operations, SLO Manifest & Ratified Release Dossier
   - Standard reads P95 latency <= 500 ms (measured: 43 ms).
   - Peak concurrency of 150 simultaneous requests with zero privacy leaks.
 - Disaster recovery rehearsal (tools/reconcile-after-restore.ts): Proves RTO <= 4 hours and RPO <= 15 minutes.
-- Formal release evidence dossier (evidence/release-dossier.json): Aggregates all 8 automated test suites, confirms 0 open P0 defects, and ratifies the production GO release decision.
+- Formal release evidence dossier (evidence/release-dossier.json): Aggregates all 8 automated test suites, confirms 0 failing P0 tests, and outputs the status: READY FOR REVIEW.
 
 ================================================================================
 SECTION 5: DOMAIN S13: UK LEGAL SECTOR PACK & SRA 2023 FATIGUE DETECTION
@@ -263,19 +263,19 @@ Step 5: Resend Same Request (Replay)
 - Talking Point: "Under unstable mobile or enterprise networks, replayed requests return the cached response without creating duplicate database rows."
 - Status: 200 OK (Replay) | Proof: PASS
 
-Step 6: Create Secondary Division (Fresh Key Production Write)
-- Action: Click the "Create secondary division" button.
-- What Happens: Sends a distinct operational unit payload ("Dispute Resolution & Advisory Division") with a fresh, cryptographically generated idempotency key.
-- Wire Inspector Verification: The backend commits the secondary division atomically and returns HTTP 200 OK with the new division ID.
-- Talking Point: "Here we demonstrate multi-unit organizational hierarchy. Each distinct business unit executes through the atomic runCommand pipeline with a fresh idempotency key, completing four database mutations in a single transaction with zero collision."
-- Status: 200 OK | Proof: PASS (Clean Atomic Write)
+Step 6: Change Body, Same Key (Expected 409 Conflict Defense)
+- Action: Click the "Send changed body (expect 409)" button.
+- What Happens: Sends a tampered payload while reusing the active idempotency key from Step 4.
+- Wire Inspector Verification: The backend detects the payload hash mismatch and safely refuses the mutation with HTTP 409 Conflict.
+- Talking Point: "The idempotency key cryptographically binds the request hash. An attacker or buggy client cannot tamper with payload content under an existing key."
+- Status: 409 Conflict | Proof: PASS (Tamper Defended)
 
-Step 7: Verify Organization Record (Authoritative Read Path)
-- Action: Click the "Verify organization record" button.
-- What Happens: Performs an authoritative GET /api/v2/organizations/:id lookup for the created division.
-- Wire Inspector Verification: The server returns HTTP 200 OK containing the full entity record, tenant binding, and audit timestamps.
-- Talking Point: "This confirms the authoritative read path. Data written in Step 4 and Step 6 is immediately visible to authorized tenant roles, verifying zero-lag read-after-write consistency."
-- Status: 200 OK | Proof: PASS (Authoritative Read)
+Step 7: Skip the Key (Expected 400 Bad Request Defense)
+- Action: Click the "Omit key (expect 400)" button.
+- What Happens: Submits an organization mutation without the mandatory Idempotency-Key header.
+- Wire Inspector Verification: The gateway refuses the command with HTTP 400 Bad Request: "Header 'Idempotency-Key' is required for all state-changing commands."
+- Talking Point: "Abate requires complete auditability. Every mutation must present an idempotency key to prevent accidental duplicate actions."
+- Status: 400 Bad Request | Proof: PASS (Validation Gate Enforced)
 
 Step 8: Switch to Tenant B (Database RLS Verification)
 - Action: Click the "Switch to Tenant B" button.
@@ -291,12 +291,24 @@ Step 9: Test Evidence
 - Talking Point: "We back our architectural claims with machine-checkable test reports executed against restricted database roles."
 - Status: 200 OK | Proof: PASS
 
-Step 10: Ratify Platform Release Dossier
-- Action: Click the "Ratify release dossier" button.
+Step 10: Platform Release Dossier
+- Action: Click the "Inspect release dossier" button.
 - What Happens: Calls GET /api/v2/release/dossier and displays the consolidated audit summary modal.
-- Wire Inspector Verification: The response confirms 8 test suites passed, 0 P0 defects, status: RATIFIED, decision: GO.
-- Talking Point: "All phases 0 through 8 and sector packs are live, tested, and ratified. The consolidated audit matrix confirms every proof passed."
-- Status: 200 OK | Proof: PASS (Ratified GO)
+- Wire Inspector Verification: The response confirms 8 test suites passed, 0 failing P0 tests, status: READY FOR REVIEW.
+- Talking Point: "All phases 0 through 8 and sector packs are live, tested, and ready for stakeholder review."
+- Status: 200 OK | Proof: PASS (Ready for Review)
+
+Step 11: Create Secondary Division (Extra Step)
+- Action: Click the "Create secondary division" button.
+- What Happens: Sends a distinct operational unit payload ("Dispute Resolution & Advisory Division") with a fresh, cryptographically generated idempotency key.
+- Wire Inspector Verification: The backend commits the secondary division atomically and returns HTTP 200 OK with the new division ID.
+- Status: 200 OK | Proof: PASS (Clean Atomic Write)
+
+Step 12: Verify Organization Record (Extra Step)
+- Action: Click the "Verify organization record" button.
+- What Happens: Performs an authoritative GET /api/v2/organizations/:id lookup for the created division.
+- Wire Inspector Verification: The server returns HTTP 200 OK containing the full entity record, tenant binding, and audit timestamps.
+- Status: 200 OK | Proof: PASS (Authoritative Read)
 
 ================================================================================
 SECTION 7: WORKSPACE TABS STEP-BY-STEP OPERATOR GUIDE
@@ -417,9 +429,9 @@ Summary of Automated Test Suites:
 Release Dossier Aggregation:
 - Execution Command: npm --prefix backend run build-dossier
 - Aggregated Results: 8 test suites, 110 verified test cases, 0 failures.
-- P0 Open Defects: 0 (Irrevocable release requirement met).
-- Release Dossier Digest: SHA-256 7223e0f1f4d83c578e77fbd7fe3bd65fb6bbbf7a7aa7ec23d0517a452c2d9ae9
-- Release Decision: GO (Authorized for Scoped Pilot).
+- P0 Open Defects: 0 failing P0 tests.
+- Release Dossier Digest: SHA-256 041103d0c9d8847b85ae710bd24fa313ad775ff5522849c0289eeffdd79181b7
+- Release Decision: READY FOR REVIEW (Awaiting Named Steering Sign-Off).
 
 ================================================================================
 SECTION 9: COMPLETE IMPLEMENTATION GUIDE MAPPING & MASTER ARCHITECTURE
