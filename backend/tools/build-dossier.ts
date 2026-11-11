@@ -172,7 +172,7 @@ async function assembleDossier() {
     ],
     defects,
     decision: {
-      outcome: "GO",
+      outcome: "READY FOR REVIEW",
       approvedScope: "Tightly scoped design-partner pilot (UK Legal Sector)",
       signOffAuthority: "Zoiko Abate Engineering Steering Committee",
       signOffDate: "2026-11-07",
@@ -194,7 +194,7 @@ async function assembleDossier() {
 
   console.log(`\n\x1b[32m[SUCCESS] Release Evidence Dossier written to: ${dossierPath}\x1b[0m`);
   console.log(`\x1b[32m[DOSSIER DIGEST] SHA-256: ${dossierHash}\x1b[0m`);
-  console.log(`\x1b[32m[RELEASE DECISION] ${dossier.decision.outcome} (Authorized for Scoped Pilot)\x1b[0m\n`);
+  console.log(`\x1b[32m[RELEASE DECISION] ${dossier.decision.outcome} (Status: READY FOR REVIEW)\x1b[0m\n`);
 }
 
 assembleDossier().catch((err) => {

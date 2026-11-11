@@ -167,7 +167,7 @@ export function RetentionTab({ currentTenant, token }: RetentionTabProps) {
           <div>
             <h3>Jurisdiction Pack in Effect</h3>
             <p className="card-desc">
-              The tenant's pack is resolved by date over <code>[effective_from, effective_to)</code>. Packs are authored by the Legal &amp; Policy Lead and are read-only here. Without a pack in effect, retention cannot be configured and purges are blocked.
+              The tenant&apos;s pack is resolved by date over <code>[effective_from, effective_to)</code>. Packs are authored by the Legal &amp; Policy Lead and are read-only here. Without a pack in effect, retention cannot be configured and purges are blocked.
             </p>
           </div>
           {coverage && (
@@ -345,7 +345,7 @@ export function RetentionTab({ currentTenant, token }: RetentionTabProps) {
           <div>
             <h3>Retention Run &amp; Verified Tombstones</h3>
             <p className="card-desc">
-              Each purged fact gets a tombstone first, then the row is deleted and re-read to confirm it's gone. Tombstones keep only digests, never a pseudonym or source record ID. If the source re-sends a purged record, it is counted as a duplicate and not stored again.
+              Each purged fact gets a tombstone first, then the row is deleted and re-read to confirm it&apos;s gone. Tombstones keep only digests, never a pseudonym or source record ID. If the source re-sends a purged record, it is counted as a duplicate and not stored again.
             </p>
           </div>
           {state && <span className="badge badge-aubergine">{state.tombstones.verified}/{state.tombstones.total} VERIFIED</span>}

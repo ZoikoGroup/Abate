@@ -3,8 +3,8 @@
 **Document Reference**: `ZAB-REP-2026-003`  
 **Execution Timestamp**: 2026-11-07T04:22:00Z  
 **Governing Playbook**: Zoiko Abate Engineering Playbook `ZAB-ENG-001 v1.0` (Phases 0–8 Master Implementation Guide)  
-**Release Gate (BE-010)**: **GO (Authorized for Scoped Pilot)**  
-**P0 Constitutional Defects**: **0 (Zero)**
+**Release Gate (BE-010)**: **READY FOR REVIEW**  
+**Failing P0 Tests**: **0 (Zero)**
 
 ---
 
@@ -28,7 +28,7 @@ flowchart TD
     A11y -->|0 Critical Violations| Dossier
 
     Dossier --> Decision{"P0 === 0 ?"}
-    Decision -->|Yes: 0 P0| GO["RELEASE DECISION: GO"]
+    Decision -->|Yes: 0 failing P0| GO["STATUS: READY FOR REVIEW"]
     Decision -->|No: P0 > 0| NOGO["REFUSAL: NO-GO"]
 
     style Phase8_Gate fill:#F6F4EF,stroke:#2B1B38,stroke-width:2px
@@ -99,7 +99,7 @@ flowchart TD
 | **Constitutional & Isolation Boundaries** | `npm --prefix backend run test-boundaries` | 57 | **57 / 57 PASSED** |
 | **Decoy Minimization Lab** | `npm --prefix backend run test-minimization` | 5 | **5 / 5 PASSED** |
 | **Golden Demo Cycle (Phases 0–7 + B8)** | `npm --prefix backend run demo-cycle` | 17 | **17 / 17 PASSED** |
-| **Release Evidence Dossier Builder** | `npm --prefix backend run build-dossier` | 6 suites | **DECISION: GO** |
+| **Release Evidence Dossier Builder** | `npm --prefix backend run build-dossier` | 8 suites | **READY FOR REVIEW** |
 | **Backend TypeScript Compilation** | `npm --prefix backend run build` | Full AST | **0 Errors** |
 | **Frontend Production Build** | `npm --prefix frontend run build` | 39 modules | **0 Errors (679ms)** |
 

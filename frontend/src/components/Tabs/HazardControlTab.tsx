@@ -1319,7 +1319,7 @@ export function HazardControlTab({ currentTenant, token }: HazardControlTabProps
             className="lab-card-btn border-amber"
           >
             <div className="lab-btn-title" style={{ color: "#FCD34D" }}>
-              2. "v4 Cannot Approve v5"
+              2. &ldquo;v4 Cannot Approve v5&rdquo;
             </div>
             <div className="lab-btn-desc">
               Sends If-Match with stale target version. Rejects with 409 CONFLICT on version mismatch.

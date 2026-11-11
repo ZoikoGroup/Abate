@@ -67,6 +67,7 @@ class MemoryDatabase {
   public idempotency: Map<string, any> = new Map();
   public auditEvents: any[] = [];
   public outboxEvents: any[] = [];
+  public deadLetterEvents: any[] = [];
   public inboxEvents: Map<string, any> = new Map();
   
   // Phase 2 Ingestion & Work-State Ledger
@@ -75,6 +76,7 @@ class MemoryDatabase {
   public watermarks: Map<string, any> = new Map();
   public ingestReceipts: Map<string, any> = new Map();
   public workFactRevisions: Map<string, any> = new Map();
+  public identityMaps: Map<string, any> = new Map();
 
   // Phase 3 Deterministic Measurement & Privacy Release
   public metricDefinitions: Map<string, any> = new Map();
@@ -238,12 +240,14 @@ class MemoryDatabase {
     this.idempotency.clear();
     this.auditEvents = [];
     this.outboxEvents = [];
+    this.deadLetterEvents = [];
     this.inboxEvents.clear();
     this.sourceContracts.clear();
     this.connections.clear();
     this.watermarks.clear();
     this.ingestReceipts.clear();
     this.workFactRevisions.clear();
+    this.identityMaps.clear();
     this.metricDefinitions.clear();
     this.metricSnapshots.clear();
     this.privacyDecisions.clear();
@@ -316,6 +320,7 @@ class MemoryClient {
         idempotency: Array.from(memDb.idempotency.entries()),
         auditCount: memDb.auditEvents.length,
         outboxCount: memDb.outboxEvents.length,
+        deadLetterCount: memDb.deadLetterEvents.length,
         inbox: Array.from(memDb.inboxEvents.entries()),
         sourceContracts: Array.from(memDb.sourceContracts.entries()),
         connections: Array.from(memDb.connections.entries()),
@@ -377,6 +382,7 @@ class MemoryClient {
         memDb.idempotency = new Map(snap.idempotency);
         memDb.auditEvents = memDb.auditEvents.slice(0, snap.auditCount);
         memDb.outboxEvents = memDb.outboxEvents.slice(0, snap.outboxCount);
+        if (snap.deadLetterCount !== undefined) memDb.deadLetterEvents = memDb.deadLetterEvents.slice(0, snap.deadLetterCount);
         memDb.inboxEvents = new Map(snap.inbox);
         if (snap.sourceContracts) memDb.sourceContracts = new Map(snap.sourceContracts);
         if (snap.connections) memDb.connections = new Map(snap.connections);
@@ -445,8 +451,8 @@ class MemoryClient {
     }
 
     // Fail-Closed RLS Enforcement: If querying tenant-isolated tables without tenant context, return 0 rows
-    const isTenantTable = /FROM\s+(principal|organization|effective_membership|idempotency_record|audit_event|outbox_event|source_contract|connection|watermark|ingest_receipt|work_fact_revision|metric_snapshot|privacy_decision|privacy_release|released_artifact|disclosure_ledger|hazard|cause|intervention|approval|implementation_receipt|evaluation|retention_class|legal_hold|retention_run|deletion_tombstone|tenant_policy_binding|decision_envelope|evidence_package|evidence_item|rights_request|ai_run|action_attempt|outcome_evaluation|ai_change_profile|ai_workdesign_assessment)/i.test(trimmed);
-    const workerTable = this.workerMode && /FROM\s+(outbox_event|inbox_event)\b/i.test(trimmed);
+    const isTenantTable = /FROM\s+(principal|organization|effective_membership|idempotency_record|audit_event|outbox_event|dead_letter_event|source_contract|connection|watermark|ingest_receipt|work_fact_revision|identity_map|metric_snapshot|privacy_decision|privacy_release|released_artifact|disclosure_ledger|hazard|cause|intervention|approval|implementation_receipt|evaluation|retention_class|legal_hold|retention_run|deletion_tombstone|tenant_policy_binding|decision_envelope|evidence_package|evidence_item|rights_request|ai_run|action_attempt|outcome_evaluation|ai_change_profile|ai_workdesign_assessment)/i.test(trimmed);
+    const workerTable = this.workerMode && /FROM\s+(outbox_event|inbox_event|dead_letter_event)\b/i.test(trimmed);
     if (isTenantTable && !this.tenantContext && !workerTable) {
       return { rows: [], rowCount: 0, command: "SELECT", oid: 0, fields: [] };
     }
@@ -543,7 +549,11 @@ class MemoryClient {
         purpose,
         refs: refs || [],
         created_at: new Date().toISOString(),
-        published_at: null
+        published_at: null,
+        attempts: 0,
+        next_retry_at: new Date().toISOString(),
+        last_error: null,
+        state: "PENDING"
       };
       memDb.outboxEvents.push(event);
       return { rows: [event], rowCount: 1, command: "INSERT", oid: 0, fields: [] };
@@ -646,19 +656,121 @@ class MemoryClient {
       return { rows, rowCount: rows.length, command: "SELECT", oid: 0, fields: [] };
     }
 
-    // Outbox Drain: SELECT * FROM outbox_event WHERE published_at IS NULL
-    if (upper.includes("FROM OUTBOX_EVENT WHERE PUBLISHED_AT IS NULL")) {
-      let unpublished = memDb.outboxEvents.filter(e => !e.published_at && (this.workerMode || e.tenant_id === this.tenantContext));
-      if (upper.includes("LIMIT $1")) unpublished = unpublished.slice(0, Number(params[0]));
+    // Outbox Lookup by ID: SELECT * FROM outbox_event WHERE id = $1
+    if (upper.includes("FROM OUTBOX_EVENT") && upper.includes("WHERE ID =")) {
+      const id = params[0];
+      const ev = memDb.outboxEvents.find(e => e.id === id && (this.workerMode || e.tenant_id === this.tenantContext));
+      return { rows: ev ? [ev] : [], rowCount: ev ? 1 : 0, command: "SELECT", oid: 0, fields: [] };
+    }
+
+    // Outbox count
+    if (upper.includes("FROM OUTBOX_EVENT") && upper.includes("COUNT(")) {
+      const matching = memDb.outboxEvents.filter(e => {
+        if (upper.includes("PUBLISHED_AT IS NULL") && e.published_at) return false;
+        if (upper.includes("STATE != 'DEAD_LETTER'") && e.state === "DEAD_LETTER") return false;
+        return this.workerMode || e.tenant_id === this.tenantContext;
+      });
+      return { rows: [{ count: matching.length }], rowCount: 1, command: "SELECT", oid: 0, fields: [] };
+    }
+
+    // Dead-letter count
+    if (upper.includes("FROM DEAD_LETTER_EVENT") && upper.includes("COUNT(")) {
+      const matching = memDb.deadLetterEvents.filter(d => this.workerMode || d.tenant_id === this.tenantContext);
+      return { rows: [{ count: matching.length }], rowCount: 1, command: "SELECT", oid: 0, fields: [] };
+    }
+
+    // Outbox Worker Polling & Drain: SELECT * FROM outbox_event ...
+    if (upper.includes("FROM OUTBOX_EVENT")) {
+      const isSkipLocked = upper.includes("FOR UPDATE SKIP LOCKED");
+      let unpublished = memDb.outboxEvents.filter(e => {
+        if (e.published_at) return false;
+        if (e.state === "DEAD_LETTER" || e.state === "PUBLISHED") return false;
+        if (isSkipLocked && e.state === "PROCESSING") return false;
+        if (e.next_retry_at && new Date(e.next_retry_at).getTime() > Date.now()) return false;
+        return this.workerMode || e.tenant_id === this.tenantContext;
+      });
+      if (upper.includes("LIMIT $1") && params.length > 0) {
+        unpublished = unpublished.slice(0, Number(params[0]));
+      }
+      if (isSkipLocked) {
+        for (const m of unpublished) {
+          m.state = "PROCESSING";
+        }
+      }
       return { rows: unpublished, rowCount: unpublished.length, command: "SELECT", oid: 0, fields: [] };
     }
 
-    // Outbox mark published: UPDATE outbox_event SET published_at = now()
-    if (upper.includes("UPDATE OUTBOX_EVENT SET PUBLISHED_AT")) {
-      const id = params[0];
-      const ev = memDb.outboxEvents.find(e => e.id === id);
-      if (ev) ev.published_at = new Date().toISOString();
-      return { rows: ev ? [ev] : [], rowCount: ev ? 1 : 0, command: "UPDATE", oid: 0, fields: [] };
+    // Outbox state updates / mark published
+    if (upper.includes("UPDATE OUTBOX_EVENT")) {
+      if (upper.includes("SET PUBLISHED_AT")) {
+        const id = params[params.length - 1];
+        const ev = memDb.outboxEvents.find(e => e.id === id);
+        if (ev) {
+          ev.published_at = new Date().toISOString();
+          ev.state = "PUBLISHED";
+        }
+        return { rows: ev ? [ev] : [], rowCount: ev ? 1 : 0, command: "UPDATE", oid: 0, fields: [] };
+      }
+      if (upper.includes("STATE") || upper.includes("ATTEMPTS") || upper.includes("LAST_ERROR")) {
+        const id = params[params.length - 1];
+        const ev = memDb.outboxEvents.find(e => e.id === id);
+        if (ev) {
+          if (params.length === 5) {
+            ev.state = params[0];
+            ev.attempts = Number(params[1]);
+            ev.next_retry_at = params[2];
+            ev.last_error = params[3];
+          } else if (params.length === 4) {
+            // SET state = 'PENDING', attempts = $1, next_retry_at = $2, last_error = $3 WHERE id = $4
+            ev.state = "PENDING";
+            ev.attempts = Number(params[0]);
+            ev.next_retry_at = params[1];
+            ev.last_error = params[2];
+          } else if (params.length === 3) {
+            // SET state = 'DEAD_LETTER', attempts = $1, last_error = $2 WHERE id = $3
+            ev.state = "DEAD_LETTER";
+            ev.attempts = Number(params[0]);
+            ev.last_error = params[1];
+          } else if (params.length === 2) {
+            ev.state = params[0];
+          } else if (params.length === 1) {
+            if (upper.includes("STATE = 'PENDING'")) ev.state = "PENDING";
+            if (upper.includes("STATE = 'PROCESSING'")) ev.state = "PROCESSING";
+            if (upper.includes("STATE = 'PUBLISHED'")) ev.state = "PUBLISHED";
+            if (upper.includes("STATE = 'DEAD_LETTER'")) ev.state = "DEAD_LETTER";
+          }
+        }
+        return { rows: ev ? [ev] : [], rowCount: ev ? 1 : 0, command: "UPDATE", oid: 0, fields: [] };
+      }
+    }
+
+    // Dead-Letter Event Insert (references only, NEVER payloads)
+    if (upper.includes("INSERT INTO DEAD_LETTER_EVENT")) {
+      const [id, outboxId, tId, agg, aggId, schemaVer, purpose, refs, attempts, lastError] = params;
+      if (this.tenantContext && tId !== this.tenantContext) {
+        throw new Error("RLS WITH CHECK violation: cross-tenant dead_letter write rejected");
+      }
+      const dle = {
+        id,
+        outbox_id: outboxId,
+        tenant_id: tId,
+        aggregate: agg,
+        aggregate_id: aggId,
+        schema_version: schemaVer,
+        purpose,
+        refs: refs || [],
+        attempts: Number(attempts),
+        last_error: lastError,
+        failed_at: new Date().toISOString()
+      };
+      memDb.deadLetterEvents.push(dle);
+      return { rows: [dle], rowCount: 1, command: "INSERT", oid: 0, fields: [] };
+    }
+
+    // Dead-Letter Event Select
+    if (upper.includes("FROM DEAD_LETTER_EVENT")) {
+      const rows = memDb.deadLetterEvents.filter(d => this.workerMode || d.tenant_id === this.tenantContext);
+      return { rows, rowCount: rows.length, command: "SELECT", oid: 0, fields: [] };
     }
 
     // Inbox Event Insert: INSERT INTO inbox_event (consumer, event_id, tenant_id) ... ON CONFLICT DO NOTHING
@@ -942,6 +1054,13 @@ class MemoryClient {
     // Work Fact Revision Select All
     if (upper.includes("FROM WORK_FACT_REVISION")) {
       let rows = Array.from(memDb.workFactRevisions.values()).filter(r => r.tenant_id === this.tenantContext);
+      if (params.length > 0) {
+        if (upper.includes("RECEIPT_ID = $1") || upper.includes("RECEIPT_ID=$1")) {
+          rows = rows.filter(r => r.receipt_id === params[0]);
+        } else if (upper.includes("SOURCE_RECORD_ID = $1") || upper.includes("SOURCE_RECORD_ID=$1")) {
+          rows = rows.filter(r => r.source_record_id === params[0]);
+        }
+      }
       return { rows, rowCount: rows.length, command: "SELECT", oid: 0, fields: [] };
     }
 
@@ -969,6 +1088,9 @@ class MemoryClient {
     // Ingest Receipt Select
     if (upper.includes("FROM INGEST_RECEIPT")) {
       let rows = Array.from(memDb.ingestReceipts.values()).filter(r => r.tenant_id === this.tenantContext);
+      if (params.length > 0 && (upper.includes("ID = $1") || upper.includes("ID=$1"))) {
+        rows = rows.filter(r => r.id === params[0]);
+      }
       return { rows, rowCount: rows.length, command: "SELECT", oid: 0, fields: [] };
     }
 
@@ -1042,6 +1164,63 @@ class MemoryClient {
       let rows = Array.from(memDb.metricSnapshots.values()).filter(s => s.tenant_id === this.tenantContext);
       if (params.length > 0) {
         rows = rows.filter(s => s.id === params[0] || (params.length >= 3 && s.metric_id === params[0] && s.cohort_ref === params[1]));
+      }
+      return { rows, rowCount: rows.length, command: "SELECT", oid: 0, fields: [] };
+    }
+
+    // Metric Snapshot Update / Invalidation
+    if (upper.includes("UPDATE METRIC_SNAPSHOT") && upper.includes("IS_STALE = TRUE")) {
+      let count = 0;
+      for (const snap of memDb.metricSnapshots.values()) {
+        if (snap.tenant_id === this.tenantContext) {
+          if (params.length >= 3) {
+            const pStart = new Date(params[1]).getTime();
+            const pEnd = new Date(params[2]).getTime();
+            const snapStart = new Date(snap.period_start || 0).getTime();
+            const snapEnd = new Date(snap.period_end || 0).getTime();
+            if (snapStart <= pEnd && snapEnd >= pStart) {
+              snap.is_stale = true;
+              count++;
+            }
+          } else {
+            snap.is_stale = true;
+            count++;
+          }
+        }
+      }
+      return { rows: [], rowCount: count, command: "UPDATE", oid: 0, fields: [] };
+    }
+
+    // Identity Map Insert
+    if (upper.includes("INSERT INTO IDENTITY_MAP")) {
+      const [id, tId, connId, sourceRef, pseudonym] = params;
+      if (this.tenantContext && tId !== this.tenantContext) {
+        throw new Error("RLS WITH CHECK violation: cross-tenant identity_map write rejected");
+      }
+      const key = `${tId}:${connId}:${sourceRef}`;
+      if (memDb.identityMaps.has(key)) {
+        return { rows: [], rowCount: 0, command: "INSERT", oid: 0, fields: [] };
+      }
+      const rec = {
+        id,
+        tenant_id: tId,
+        connection_id: connId,
+        source_subject_ref: sourceRef,
+        subject_pseudonym: pseudonym,
+        created_at: new Date().toISOString()
+      };
+      memDb.identityMaps.set(key, rec);
+      return { rows: [rec], rowCount: 1, command: "INSERT", oid: 0, fields: [] };
+    }
+
+    // Identity Map Select
+    if (upper.includes("FROM IDENTITY_MAP")) {
+      if (this.workerMode) {
+        return { rows: [], rowCount: 0, command: "SELECT", oid: 0, fields: [] };
+      }
+      let rows = Array.from(memDb.identityMaps.values()).filter(m => m.tenant_id === this.tenantContext);
+      if (params.length > 0 && upper.includes("SUBJECT_PSEUDONYM = $1")) {
+        rows = rows.filter(m => m.subject_pseudonym === params[0]);
       }
       return { rows, rowCount: rows.length, command: "SELECT", oid: 0, fields: [] };
     }

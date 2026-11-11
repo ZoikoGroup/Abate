@@ -14,7 +14,8 @@ export default defineConfig({
       name: 'serve-release-dossier',
       configureServer(server) {
         server.middlewares.use((req, res, next) => {
-          if (req.url === '/api/v2/release/dossier') {
+          const rawUrl = req.url?.split('?')[0] || ''
+          if (rawUrl === '/api/v2/release/dossier' || rawUrl === '/api/v2/release/dossier/') {
             const dossierPath = path.resolve(__dirname, 'public/release-dossier.json')
             if (fs.existsSync(dossierPath)) {
               res.setHeader('Content-Type', 'application/json')

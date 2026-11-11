@@ -16,6 +16,10 @@
     "test-legal": "tsx tools/test-sector-legal.ts",
     "demo-cycle": "tsx tools/demo-cycle.ts",
     "build-dossier": "tsx tools/build-dossier.ts",
+    "check:endpoints": "tsx tools/endpoint-check.ts",
+    "worker": "tsx src/worker/daemon.ts",
+    "test-worker": "tsx tools/test-worker-crash-lab.ts",
+    "test-ingest": "tsx tools/test-phase2-ingestion.ts",
     "build": "tsc",
     "start": "node dist/index.js",
     "dev": "tsx watch src/index.ts"
