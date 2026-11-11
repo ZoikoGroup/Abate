@@ -379,15 +379,64 @@ async function main() {
         );
       });
 
-      // Process version 1: must be detected as out-of-order and fail
+      // Process version 1: strictly older than version 2 -> dropped, neither retried nor dead-lettered
       const drainV1 = await drainBatch({
         bus: testBus,
         consumerName: versionConsumer
       });
-      assert.strictEqual(drainV1.failures, 1, "Out-of-order version must fail processing");
+      assert.strictEqual(drainV1.skipped, 1, "Stale version must be skipped");
+      assert.strictEqual(drainV1.failures, 0, "Stale version must not count as a failure");
+      assert.strictEqual(drainV1.deadLetters, 0, "Stale version must not be dead-lettered");
 
       const ev1 = memDb.outboxEvents.find((e) => e.id === v1Id);
-      assert.ok(ev1?.last_error?.includes("Out-of-order event version detected"), "Error must cite out-of-order version");
+      assert.strictEqual(ev1?.state, "PUBLISHED", "Stale event is closed out, not left to retry");
+      assert.strictEqual(
+        memDb.deadLetterEvents.filter((d) => d.outbox_id === v1Id).length,
+        0,
+        "Stale event must not reach dead-letter"
+      );
+    }
+  );
+
+  await runTest(
+    "A retry of an already-consumed event version is not treated as stale",
+    async () => {
+      resetWorkerMetrics();
+      const testBus = new EventBus();
+      const consumerName = `consumer-retry-${crypto.randomUUID().slice(0, 8)}`;
+      const aggId = crypto.randomUUID();
+      const delivered: number[] = [];
+      testBus.subscribe(consumerName, "*", async (env) => {
+        delivered.push(env.aggregateVersion);
+      });
+
+      const ids: string[] = [];
+      for (const v of [1, 2]) {
+        const id = crypto.randomUUID();
+        ids.push(id);
+        await withTenant(tenantA, async (tx) => {
+          await tx.q(
+            `INSERT INTO outbox_event (
+               id, tenant_id, aggregate, aggregate_id, aggregate_version,
+               event_type, schema_version, purpose, refs
+             ) VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9)`,
+            [id, tenantA, "retried_doc", aggId, v, "DOC_UPDATED", "doc.v1", "Retry test", JSON.stringify([])]
+          );
+        });
+      }
+      const first = await drainBatch({ bus: testBus, consumerName });
+      assert.strictEqual(first.processed, 2);
+
+      // Version 2 is re-queued (e.g. its PUBLISHED mark was lost): the retry must be delivered, not flagged stale
+      const ev2 = memDb.outboxEvents.find((e) => e.id === ids[1])!;
+      ev2.state = "PENDING";
+      ev2.published_at = null;
+      const retry = await drainBatch({ bus: testBus, consumerName });
+      assert.strictEqual(retry.skipped, 0, "Same-version retry must not be skipped");
+      assert.strictEqual(retry.failures, 0, "Same-version retry must not fail");
+      assert.strictEqual(retry.processed, 1, "Same-version retry must be processed");
+      assert.strictEqual(ev2.state, "PUBLISHED");
+      assert.deepStrictEqual(delivered, [1, 2], "Inbox dedupe keeps the business effect single");
     }
   );
 

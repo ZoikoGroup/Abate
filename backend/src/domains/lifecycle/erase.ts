@@ -45,7 +45,8 @@ export async function requestErasure(args: {
     actor: args.actor,
     body: async (tx) => {
       const requestId = crypto.randomUUID();
-      const facts = (await tx.q("SELECT * FROM work_fact_revision")).rows
+      // Filter in SQL (was: load the tenant's entire fact ledger, then filter in JS); the JS check stays as a guard
+      const facts = (await tx.q("SELECT * FROM work_fact_revision WHERE subject_pseudonym = $1", [input.subjectPseudonym])).rows
         .filter((f: any) => f.subject_pseudonym === input.subjectPseudonym);
       const holds: HoldRow[] = (await tx.q("SELECT * FROM legal_hold WHERE released_at IS NULL")).rows;
 
@@ -55,7 +56,7 @@ export async function requestErasure(args: {
       const verified = await purgeWithTombstones(tx, toDelete, {
         runId: requestId,
         category: "WORK_FACT",
-        tenantSecret: `${cfg.authSecret}:${tx.tenantId}`
+        tenantSecret: `${cfg.pseudonymSecret}:${tx.tenantId}`
       });
 
       const completedAt = new Date().toISOString();

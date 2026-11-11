@@ -146,7 +146,7 @@ export async function runAiUseCase(
   assertNotProhibitedRequest(input.question);
 
   // 4. Retrieve only authorized released evidence and approved knowledge
-  const items = await retrieveContext(actor, input.contextRefs);
+  const items = await retrieveContext(actor, input.contextRefs, tx);
 
   // 5. Call model through provider gateway abstraction
   const prompt = buildPrompt(uc, items, input.question || "");

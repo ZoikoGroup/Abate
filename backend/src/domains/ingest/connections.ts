@@ -89,27 +89,36 @@ export async function setConnectionState(args: {
   });
 }
 
+// List endpoints are bounded: default 200, ceiling 1000 (these are the largest tables in the system)
+function clampLimit(n?: number): number {
+  return Number.isInteger(n) && (n as number) > 0 ? Math.min(n as number, 1000) : 200;
+}
+
 export async function listReceipts(args: {
   who: AuthenticatedIdentity;
   actor: Actor;
+  limit?: number;
 }) {
   authorize(args.actor, "receipt.read");
 
   return withTenant(args.who.tenantId, async (tx) => {
-    const res = await tx.q(`SELECT * FROM ingest_receipt ORDER BY received_at DESC`);
-    return res.rows;
+    const limit = clampLimit(args.limit);
+    const res = await tx.q(`SELECT * FROM ingest_receipt ORDER BY received_at DESC LIMIT ${limit}`);
+    return res.rows.slice(0, limit);
   });
 }
 
 export async function listWorkFacts(args: {
   who: AuthenticatedIdentity;
   actor: Actor;
+  limit?: number;
 }) {
   authorize(args.actor, "work_fact.read");
 
   return withTenant(args.who.tenantId, async (tx) => {
-    const res = await tx.q(`SELECT * FROM work_fact_revision ORDER BY recorded_at DESC`);
-    return res.rows;
+    const limit = clampLimit(args.limit);
+    const res = await tx.q(`SELECT * FROM work_fact_revision ORDER BY recorded_at DESC LIMIT ${limit}`);
+    return res.rows.slice(0, limit);
   });
 }
 

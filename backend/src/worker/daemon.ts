@@ -3,10 +3,17 @@
 // Exponential Backoff Retries, Dead-Letter Isolation, and Consumer Invariant Deduplication.
 // Role: abate_worker (cross-tenant access to outbox_event, inbox_event, and dead_letter_event).
 
-import crypto from "node:crypto";
-import { withWorker } from "../platform/db/with-tenant";
-import { EventEnvelopeType } from "../contracts/common";
-import { EventBus, defaultBus } from "./outbox-publisher";
+import {
+  EventBus,
+  defaultBus,
+  claimOutboxBatch,
+  toEnvelope,
+  markPublished,
+  releaseClaim,
+  recordFailure,
+  DEFAULT_MAX_ATTEMPTS,
+  DEFAULT_LEASE_SECONDS
+} from "./outbox-publisher";
 
 export interface WorkerMetrics {
   workerId: string;
@@ -27,6 +34,7 @@ export interface WorkerOptions {
   minIntervalMs?: number;
   maxIntervalMs?: number;
   maxAttempts?: number;
+  leaseSeconds?: number;
   bus?: EventBus;
   consumerName?: string;
   simulateCrashAfterPublish?: boolean;
@@ -46,8 +54,20 @@ const globalMetrics: WorkerMetrics = {
   lastRunAt: null
 };
 
-// In-memory consumer version map to detect out-of-order versions: aggregate_id -> last_version
+// In-memory (per-process) map to detect stale versions: `${consumer}:${aggregate_id}` -> highest version consumed
 const consumerVersionMap = new Map<string, number>();
+const MAX_TRACKED_AGGREGATES = 10_000;
+
+function rememberVersion(key: string, version: number): void {
+  const prev = consumerVersionMap.get(key);
+  if (prev !== undefined && prev >= version) return;
+  consumerVersionMap.delete(key); // re-insert so Map order approximates recency
+  consumerVersionMap.set(key, version);
+  if (consumerVersionMap.size > MAX_TRACKED_AGGREGATES) {
+    const oldest = consumerVersionMap.keys().next().value;
+    if (oldest !== undefined) consumerVersionMap.delete(oldest);
+  }
+}
 
 export function getWorkerMetrics(): WorkerMetrics {
   return { ...globalMetrics };
@@ -65,41 +85,33 @@ export function resetWorkerMetrics(): void {
 }
 
 /**
- * Single batch drain iteration with SKIP LOCKED, retries, and dead-letter protection.
+ * Single batch drain iteration: atomic claim (PROCESSING + lease), retries, and dead-letter protection.
  */
 export async function drainBatch(opts: WorkerOptions = {}): Promise<{
   processed: number;
   failures: number;
   deadLetters: number;
+  skipped: number;
   queueLagMs: number;
 }> {
   const batchSize = opts.batchSize || 25;
-  const maxAttempts = opts.maxAttempts || 5;
+  const maxAttempts = opts.maxAttempts || DEFAULT_MAX_ATTEMPTS;
+  const leaseSeconds = opts.leaseSeconds || DEFAULT_LEASE_SECONDS;
   const bus = opts.bus || defaultBus;
   const consumer = opts.consumerName || "abate_worker";
 
   globalMetrics.heartbeatAt = new Date().toISOString();
   globalMetrics.lastRunAt = new Date().toISOString();
 
-  // 1. Fetch unpublished events eligible for processing using FOR UPDATE SKIP LOCKED
-  const eligibleEvents = await withWorker(async (tx) => {
-    const res = await tx.q(
-      `SELECT * FROM outbox_event 
-       WHERE (published_at IS NULL)
-         AND (state = 'PENDING' OR state IS NULL)
-         AND (next_retry_at IS NULL OR next_retry_at <= now())
-       ORDER BY created_at ASC
-       LIMIT $1
-       FOR UPDATE SKIP LOCKED`,
-      [batchSize]
-    );
-    return res.rows;
-  });
+  // 1. Claim eligible events in a single statement (SELECT ... FOR UPDATE SKIP LOCKED inside UPDATE ... RETURNING).
+  //    The rows are durably PROCESSING when the claim commits, so no other worker can take them while we deliver.
+  const claimedAt = Date.now();
+  const eligibleEvents = await claimOutboxBatch(batchSize, leaseSeconds);
 
   if (eligibleEvents.length === 0) {
     globalMetrics.queueDepth = 0;
     globalMetrics.queueLagMs = 0;
-    return { processed: 0, failures: 0, deadLetters: 0, queueLagMs: 0 };
+    return { processed: 0, failures: 0, deadLetters: 0, skipped: 0, queueLagMs: 0 };
   }
 
   // Calculate queue lag: time since the oldest pending event was created
@@ -111,123 +123,75 @@ export async function drainBatch(opts: WorkerOptions = {}): Promise<{
   let processed = 0;
   let failures = 0;
   let deadLetters = 0;
+  let skipped = 0;
 
-  for (const event of eligibleEvents) {
-    const envelope: EventEnvelopeType = {
-      eventId: event.id,
-      tenantId: event.tenant_id,
-      aggregate: event.aggregate,
-      aggregateVersion: event.aggregate_version,
-      eventTime: new Date(event.created_at).toISOString(),
-      schemaVersion: event.schema_version,
-      purpose: event.purpose,
-      refs: event.refs || []
-    };
+  // Rows we still own; anything left here when the batch aborts is handed back instead of waiting out the lease
+  const unfinished = new Set<string>(eligibleEvents.map((e) => e.id));
 
-    try {
-      // Out-of-order version detection
-      const lastVer = consumerVersionMap.get(event.aggregate_id);
-      if (lastVer !== undefined && event.aggregate_version <= lastVer) {
-        // Out-of-order version detected
-        throw new Error(
-          `Out-of-order event version detected: received version ${event.aggregate_version} but aggregate ${event.aggregate_id} is already at version ${lastVer}`
-        );
-      }
+  try {
+    for (const event of eligibleEvents) {
+      // Our lease on the rest of the batch has run out: another worker may already have reclaimed them
+      if (Date.now() >= claimedAt + leaseSeconds * 1000) break;
 
-      // Step A: Publish to downstream consumer / event bus
-      await bus.publish(consumer, envelope);
+      const versionKey = `${consumer}:${event.aggregate_id}`;
 
-      // Simulated crash hook for testing at-least-once idempotency
-      if (opts.simulateCrashAfterPublish) {
-        throw new Error("SIMULATED_WORKER_CRASH_AFTER_PUBLISH");
-      }
-
-      // Record consumer version advancement only on un-crashed delivery
-      consumerVersionMap.set(event.aggregate_id, event.aggregate_version);
-
-      // Step B: Mark event as published in atomic worker transaction
-      await withWorker(async (tx) => {
-        await tx.q(
-          `UPDATE outbox_event 
-           SET published_at = now(), state = 'PUBLISHED' 
-           WHERE id = $1`,
-          [event.id]
-        );
-      });
-
-      processed++;
-      globalMetrics.totalProcessed++;
-    } catch (err: any) {
-      if (err.message === "SIMULATED_WORKER_CRASH_AFTER_PUBLISH") {
-        // Simulates PostgreSQL releasing transaction lock on worker crash
-        await withWorker(async (tx) => {
-          await tx.q(
-            `UPDATE outbox_event SET state = 'PENDING' WHERE id = $1`,
-            [event.id]
+      try {
+        // Stale-version detection: only an event STRICTLY older than a version this consumer already took for the
+        // same aggregate is stale. A retry of the same event (same id/version) is never stale.
+        const lastVer = consumerVersionMap.get(versionKey);
+        if (lastVer !== undefined && Number(event.aggregate_version) < lastVer) {
+          // Drop (do not retry, do not dead-letter): delivering it now would move the consumer backwards
+          await markPublished(
+            event.id,
+            `Skipped stale event version: received version ${event.aggregate_version} but aggregate ${event.aggregate_id} is already at version ${lastVer}`
           );
-        });
-        throw err;
+          unfinished.delete(event.id);
+          skipped++;
+          continue;
+        }
+
+        // Step A: Publish to downstream consumer / event bus
+        await bus.publish(consumer, toEnvelope(event));
+
+        // Simulated crash hook for testing at-least-once idempotency
+        if (opts.simulateCrashAfterPublish) {
+          throw new Error("SIMULATED_WORKER_CRASH_AFTER_PUBLISH");
+        }
+
+        // Record consumer version advancement only on un-crashed delivery
+        rememberVersion(versionKey, Number(event.aggregate_version));
+
+        // Step B: Mark event as published
+        await markPublished(event.id);
+        unfinished.delete(event.id);
+
+        processed++;
+        globalMetrics.totalProcessed++;
+      } catch (err: any) {
+        if (err.message === "SIMULATED_WORKER_CRASH_AFTER_PUBLISH") {
+          // Simulates a crash: lease is given back, batch aborts (remaining rows released in finally)
+          throw err;
+        }
+
+        failures++;
+        globalMetrics.totalFailures++;
+        globalMetrics.lastError = String(err.message || err);
+
+        const outcome = await recordFailure(event, err, maxAttempts);
+        unfinished.delete(event.id);
+        if (outcome === "DEAD_LETTER") {
+          deadLetters++;
+          globalMetrics.totalDeadLetters++;
+        }
       }
-
-      failures++;
-      globalMetrics.totalFailures++;
-      const currentAttempts = (event.attempts || 0) + 1;
-      const errorMsg = String(err.message || err);
-      globalMetrics.lastError = errorMsg;
-
-      if (currentAttempts >= maxAttempts) {
-        // Exceeded 5 attempts -> transition to DEAD_LETTER without blocking queue
-        deadLetters++;
-        globalMetrics.totalDeadLetters++;
-
-        await withWorker(async (tx) => {
-          // 1. Move to dead_letter_event storing REFERENCES ONLY, NEVER PAYLOAD
-          const deadLetterId = crypto.randomUUID();
-          await tx.q(
-            `INSERT INTO dead_letter_event (
-               id, outbox_id, tenant_id, aggregate, aggregate_id, schema_version,
-               purpose, refs, attempts, last_error
-             ) VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10)`,
-            [
-              deadLetterId,
-              event.id,
-              event.tenant_id,
-              event.aggregate,
-              event.aggregate_id,
-              event.schema_version,
-              event.purpose,
-              event.refs || [],
-              currentAttempts,
-              errorMsg
-            ]
-          );
-
-          // 2. Mark outbox_event as DEAD_LETTER
-          await tx.q(
-            `UPDATE outbox_event 
-             SET state = 'DEAD_LETTER', attempts = $1, last_error = $2 
-             WHERE id = $3`,
-            [currentAttempts, errorMsg, event.id]
-          );
-        });
-      } else {
-        // Exponential backoff for retry: 2^attempts seconds
-        const backoffSeconds = Math.pow(2, currentAttempts);
-        const nextRetry = new Date(Date.now() + backoffSeconds * 1000).toISOString();
-
-        await withWorker(async (tx) => {
-          await tx.q(
-            `UPDATE outbox_event 
-             SET state = 'PENDING', attempts = $1, next_retry_at = $2, last_error = $3 
-             WHERE id = $4`,
-            [currentAttempts, nextRetry, errorMsg, event.id]
-          );
-        });
-      }
+    }
+  } finally {
+    for (const id of unfinished) {
+      await releaseClaim(id).catch(() => {});
     }
   }
 
-  return { processed, failures, deadLetters, queueLagMs };
+  return { processed, failures, deadLetters, skipped, queueLagMs };
 }
 
 let daemonRunning = false;

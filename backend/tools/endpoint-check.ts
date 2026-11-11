@@ -430,13 +430,35 @@ async function runEndpointChecks() {
   }
 
   {
-    const resJob = await callApp("GET", "/api/v2/jobs/job-release-dossier-002", { token: tokenA });
+    // A job exists only if something created it: recalculate returns a real job id, and unknown ids are 404
+    // (this endpoint used to answer 200 COMPLETED/SUCCESS for any string)
+    const resRecalc = await callApp("POST", "/api/v2/metrics/BOUNDARY_INTRUSION_SHARE/recalculate", { token: tokenA });
+    const jobId = resRecalc.body?.jobId;
+    const resJob = await callApp("GET", `/api/v2/jobs/${jobId}`, { token: tokenA });
     addResult(
       "GET /api/v2/jobs/:id",
-      "Get Job By ID",
+      "Get Job By ID (real job)",
       "200 OK",
       `${resJob.status} ${resJob.body?.state || ""}`,
-      resJob.status === 200 ? "PASS" : "FAIL"
+      resJob.status === 200 && resJob.body?.state === "COMPLETED" ? "PASS" : "FAIL"
+    );
+
+    const resUnknown = await callApp("GET", "/api/v2/jobs/job-release-dossier-002", { token: tokenA });
+    addResult(
+      "GET /api/v2/jobs/:id",
+      "Unknown Job ID",
+      "404 Not Found",
+      `${resUnknown.status} ${resUnknown.body?.code || ""}`,
+      resUnknown.status === 404 ? "PASS" : "FAIL"
+    );
+
+    const resForeign = await callApp("GET", `/api/v2/jobs/${jobId}`, { token: tokenB });
+    addResult(
+      "GET /api/v2/jobs/:id",
+      "Foreign Tenant Job",
+      "404 Not Found",
+      `${resForeign.status} ${resForeign.body?.code || ""}`,
+      resForeign.status === 404 ? "PASS" : "FAIL"
     );
   }
 

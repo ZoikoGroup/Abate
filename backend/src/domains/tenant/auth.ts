@@ -50,6 +50,7 @@ export async function authenticate(authHeader: string | null | undefined): Promi
   const token = authHeader.slice(7);
   try {
     const decoded = jwt.verify(token, cfg.authSecret, {
+      algorithms: ["HS256"],
       issuer: cfg.authIssuer,
       audience: cfg.authAudience
     }) as any;
@@ -57,10 +58,11 @@ export async function authenticate(authHeader: string | null | undefined): Promi
     const tenantId = decoded.tenant_id as string;
     const subject = decoded.sub as string;
     const purpose = (decoded.purpose as string) || "WORKPLACE_RISK_ASSESSMENT";
-    const role = (decoded.role as string) || "RISK_OWNER";
+    // Fail closed: a token without a role claim used to be treated as RISK_OWNER (the most privileged control role)
+    const role = decoded.role as string;
 
-    if (!tenantId || !subject) {
-      throw new AppError("UNAUTHENTICATED", "Token payload missing mandatory claims (tenant_id, sub).");
+    if (!tenantId || !subject || !role) {
+      throw new AppError("UNAUTHENTICATED", "Token payload missing mandatory claims (tenant_id, sub, role).");
     }
 
     return { tenantId, subject, purpose, role };
@@ -73,7 +75,12 @@ export async function authenticate(authHeader: string | null | undefined): Promi
 /**
  * resolveActor: Resolves effective roles and memberships at a point in time.
  */
-export async function resolveActor(tenantId: string, subject: string, at: Date = new Date()): Promise<Actor> {
+export async function resolveActor(
+  tenantId: string,
+  subject: string,
+  at: Date = new Date(),
+  claimedRole?: string
+): Promise<Actor> {
   return withTenant(tenantId, async (tx) => {
     const r = await tx.q(
       `SELECT p.id, m.organization_id, m.domain_role
@@ -94,6 +101,14 @@ export async function resolveActor(tenantId: string, subject: string, at: Date =
       organization_id: row.organization_id,
       domain_role: row.domain_role
     }));
+
+    // The token's role is a *selection* among roles the principal actually holds. Dev tokens (local/test) may pick any
+    // role so the role switcher and demos work; elsewhere a role that is not backed by an effective membership is rejected.
+    if (claimedRole && cfg.appEnv !== "local" && cfg.appEnv !== "test") {
+      if (!memberships.some(m => m.domain_role === claimedRole)) {
+        throw new AppError("FORBIDDEN", "Token role is not granted by an effective membership.");
+      }
+    }
 
     return {
       principalId,
@@ -124,3 +139,14 @@ export function authorize(
   }
 }
 
+
+/**
+ * Separation of duties: the person who owns a control must not also approve it.
+ * Enforced outside local/test; the seeded demo has a single risk owner who walks the whole workflow.
+ */
+export function requireSeparationOfDuties(ownerPrincipalId: string | null | undefined, actorPrincipalId: string): void {
+  if (cfg.appEnv === "local" || cfg.appEnv === "test") return;
+  if (ownerPrincipalId && ownerPrincipalId === actorPrincipalId) {
+    throw new AppError("FORBIDDEN", "Separation of duties: the control owner cannot approve their own control.");
+  }
+}

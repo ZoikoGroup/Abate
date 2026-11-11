@@ -33,7 +33,9 @@ export async function ingestBatch(args: {
   const requestHash = computeRequestHash({
     connectionId: args.batch.connectionId,
     batchId: args.batch.batchId,
-    itemCount: args.batch.items.length
+    // The full item set, not just its length: the same key with different items used to replay the first
+    // batch's response (silently dropping the new data) instead of returning a conflict
+    items: args.batch.items
   });
 
   return runCommand({
@@ -65,22 +67,27 @@ export async function ingestBatch(args: {
       let staleSnapshotsMarked = 0;
 
       // Tenant secret for HMAC pseudonym derivation
-      const tenantSecret = `${cfg.authSecret}:${args.who.tenantId}`;
+      const tenantSecret = `${cfg.pseudonymSecret}:${args.who.tenantId}`;
 
       // Step 3: Process validated items into work_fact_revision and identity_map
+      const mappedSubjects = new Set<string>();
       for (const item of ok) {
         const itemHash = computeRequestHash(item);
         const pseudonym = derivePseudonym(tenantSecret, item.subjectRef);
         const factId = crypto.randomUUID();
 
-        // Persist pseudonym mapping to isolated identity_map table (never accessible to abate_worker)
-        const identityMapId = crypto.randomUUID();
-        await tx.q(
-          `INSERT INTO identity_map (id, tenant_id, connection_id, source_subject_ref, subject_pseudonym)
-           VALUES ($1, $2, $3, $4, $5)
-           ON CONFLICT (tenant_id, connection_id, source_subject_ref) DO NOTHING`,
-          [identityMapId, tx.tenantId, conn.id, item.subjectRef, pseudonym]
-        );
+        // Persist pseudonym mapping to isolated identity_map table (never accessible to abate_worker).
+        // One insert per distinct subject per batch: a 1000-item batch typically has far fewer people than items.
+        if (!mappedSubjects.has(item.subjectRef)) {
+          mappedSubjects.add(item.subjectRef);
+          const identityMapId = crypto.randomUUID();
+          await tx.q(
+            `INSERT INTO identity_map (id, tenant_id, connection_id, source_subject_ref, subject_pseudonym)
+             VALUES ($1, $2, $3, $4, $5)
+             ON CONFLICT (tenant_id, connection_id, source_subject_ref) DO NOTHING`,
+            [identityMapId, tx.tenantId, conn.id, item.subjectRef, pseudonym]
+          );
+        }
 
         // A record purged by retention stays purged: re-delivery is a duplicate, never a resurrection
         const keyDigest = recordKeyDigest(tenantSecret, {

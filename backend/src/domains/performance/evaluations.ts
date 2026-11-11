@@ -4,7 +4,7 @@ import crypto from "node:crypto";
 import { Tx } from "../../platform/db/with-tenant";
 import { AppError } from "../../platform/errors";
 import { Actor } from "../../platform/command";
-import { getRelease } from "../privacy/get-release";
+import { getReleaseTx } from "../privacy/get-release";
 import { requireFeatureFlag } from "./flags";
 import {
   EvaluateOutcomeInput,
@@ -66,7 +66,7 @@ export async function evaluateOutcome(
 
   // 4. Verify release exists (single read path)
   // Value comes from a Privacy Release; plane is 'B'
-  const release = await getRelease(actor, input.releaseId);
+  const release = await getReleaseTx(tx, input.releaseId);
   if (release.status !== "RELEASED") {
     throw new AppError("CONFLICT", `Release '${input.releaseId}' is '${release.status}'. Evaluation requires an approved RELEASED artifact.`);
   }
@@ -102,8 +102,8 @@ export async function evaluateOutcome(
       input.confounders,
       input.seriesBreak,
       input.outcomeConfidence,
-      input.permittedClaims,
-      input.evidenceRefs,
+      JSON.stringify(input.permittedClaims),
+      JSON.stringify(input.evidenceRefs ?? []),
       input.releaseId,
       "B", // Database constraint CHECK (plane = 'B')
       now

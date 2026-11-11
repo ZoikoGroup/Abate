@@ -17,7 +17,11 @@ try {
   appPool = new Pool({
     connectionString: cfg.databaseUrlApp,
     max: 20,
-    connectionTimeoutMillis: 1000
+    // 1s was too tight: a burst that queues for a connection turned into 500s instead of waiting briefly
+    connectionTimeoutMillis: 5000,
+    // Bound runaway queries and abandoned transactions so one bad request cannot pin a pooled connection
+    statement_timeout: 30000,
+    idle_in_transaction_session_timeout: 30000
   });
   // Prevent unhandled errors on idle clients
   appPool.on("error", () => {});
@@ -519,7 +523,7 @@ class MemoryClient {
         resource_id: resId,
         resource_version: resVer,
         result: res,
-        evidence_refs: evidence || [],
+        evidence_refs: typeof evidence === "string" ? JSON.parse(evidence) : (evidence || []),
         occurred_at: new Date().toISOString()
       };
       memDb.auditEvents.push(event);
@@ -547,7 +551,7 @@ class MemoryClient {
         event_type: evtType,
         schema_version: schemaVer,
         purpose,
-        refs: refs || [],
+        refs: typeof refs === "string" ? JSON.parse(refs) : (refs || []),
         created_at: new Date().toISOString(),
         published_at: null,
         attempts: 0,
@@ -758,7 +762,7 @@ class MemoryClient {
         aggregate_id: aggId,
         schema_version: schemaVer,
         purpose,
-        refs: refs || [],
+        refs: typeof refs === "string" ? JSON.parse(refs) : (refs || []),
         attempts: Number(attempts),
         last_error: lastError,
         failed_at: new Date().toISOString()
@@ -1444,7 +1448,9 @@ class MemoryClient {
     // Hazard Select
     if (upper.includes("FROM HAZARD")) {
       let rows = Array.from(memDb.hazards.values()).filter(h => h.tenant_id === this.tenantContext);
-      if (params.length > 0) {
+      // Only narrow by $1 when the SQL filters on id / originating_release_id; "WHERE tenant_id = $1" (the list query)
+      // would otherwise compare a tenant id against hazard ids and always return []
+      if (params.length > 0 && /\b(ID|ORIGINATING_RELEASE_ID)\s*=\s*\$1/.test(upper)) {
         rows = rows.filter(h => h.id === params[0] || h.originating_release_id === params[0]);
       }
       return { rows, rowCount: rows.length, command: "SELECT", oid: 0, fields: [] };
@@ -1491,7 +1497,8 @@ class MemoryClient {
     // Cause Select
     if (upper.includes("FROM CAUSE")) {
       let rows = Array.from(memDb.causes.values()).filter(c => c.tenant_id === this.tenantContext);
-      if (params.length > 0) {
+      // Narrow by $1 only when the SQL filters on id / hazard_id (a tenant-wide "WHERE tenant_id = $1" must keep every row)
+      if (params.length > 0 && /\b(ID|HAZARD_ID)\s*=\s*\$1/.test(upper)) {
         rows = rows.filter(c => c.hazard_id === params[0] || c.id === params[0]);
       }
       return { rows, rowCount: rows.length, command: "SELECT", oid: 0, fields: [] };
@@ -1576,7 +1583,7 @@ class MemoryClient {
     // Intervention Select
     if (upper.includes("FROM INTERVENTION")) {
       let rows = Array.from(memDb.interventions.values()).filter(i => i.tenant_id === this.tenantContext);
-      if (params.length > 0) {
+      if (params.length > 0 && /\b(ID|HAZARD_ID)\s*=\s*\$1/.test(upper)) {
         rows = rows.filter(i => i.id === params[0] || i.hazard_id === params[0]);
       }
       return { rows, rowCount: rows.length, command: "SELECT", oid: 0, fields: [] };
@@ -2038,7 +2045,8 @@ class MemoryClient {
     // AI Run Select
     if (upper.includes("FROM AI_RUN")) {
       let rows = Array.from(memDb.aiRuns.values()).filter(r => r.tenant_id === this.tenantContext);
-      if (params.length > 0) {
+      // "WHERE tenant_id = $1" (the list query) must keep every row; only id lookups narrow
+      if (params.length > 0 && /\bID\s*=\s*\$1/.test(upper)) {
         rows = rows.filter(r => r.id === params[0]);
       }
       return { rows, rowCount: rows.length, command: "SELECT", oid: 0, fields: [] };
@@ -2397,11 +2405,23 @@ class MemoryClient {
 }
 
 let isPgHealthy: boolean | null = null;
+let lastPgProbeAt = 0;
+
+// staging/production must never silently serve from the in-memory store: that would accept writes that vanish on restart
+const REQUIRE_PG = cfg.appEnv === "staging" || cfg.appEnv === "production";
 
 async function checkPgHealth(): Promise<boolean> {
-  if (isPgHealthy !== null) return isPgHealthy;
+  if (isPgHealthy === true) return true;
+  // local/test: the first probe decides and sticks. Flipping engines mid-run would drop the seeded in-memory state.
+  if (isPgHealthy === false && !REQUIRE_PG) return false;
+  // strict mode: re-probe (at most every 5s) so a slow first connect or a restart of Postgres recovers on its own
+  if (REQUIRE_PG && isPgHealthy === false && Date.now() - lastPgProbeAt < 5000) {
+    throw new AppError("UNAVAILABLE", "Database unavailable.");
+  }
+  lastPgProbeAt = Date.now();
   if (!appPool) {
     isPgHealthy = false;
+    if (REQUIRE_PG) throw new AppError("UNAVAILABLE", "Database unavailable.");
     return false;
   }
   try {
@@ -2411,6 +2431,8 @@ async function checkPgHealth(): Promise<boolean> {
     isPgHealthy = true;
   } catch {
     isPgHealthy = false;
+    if (REQUIRE_PG) throw new AppError("UNAVAILABLE", "Database unavailable.");
+    console.warn("[DB] PostgreSQL is unreachable: using the in-memory store. Data is NOT persisted and resets on restart.");
   }
   return isPgHealthy;
 }
@@ -2436,8 +2458,8 @@ export async function withTenant<T>(
     try {
       await client.query("BEGIN");
       // Set transaction-local setting; third parameter 'true' means local to this transaction only
-      await client.query("SELECT set_config('app.tenant_id', $1, true)", [tenantId]);
-      await client.query("SELECT set_config('app.write_plane', $1, true)", [writePlane]);
+      // One round trip for both settings (was two)
+      await client.query("SELECT set_config('app.tenant_id', $1, true), set_config('app.write_plane', $2, true)", [tenantId, writePlane]);
       const out = await fn({ q: client.query.bind(client) as QueryFn, tenantId });
       await client.query("COMMIT");
       return out;

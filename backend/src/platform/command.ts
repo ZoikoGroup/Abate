@@ -2,6 +2,7 @@
 import crypto from "node:crypto";
 import { withTenant, Tx } from "./db/with-tenant";
 import { AppError } from "./errors";
+import { canonicalJson } from "./canonical";
 
 export interface Actor {
   principalId: string;
@@ -33,7 +34,9 @@ export interface OutboxInput {
 }
 
 export function computeRequestHash(payload: any): string {
-  const normalized = JSON.stringify(payload, Object.keys(payload || {}).sort());
+  // canonicalJson sorts keys at every depth; a JSON.stringify replacer array would silently drop nested keys
+  // and make {a:{x:1}} and {a:{x:2}} hash identically (idempotency replay instead of 409)
+  const normalized = canonicalJson(payload ?? null);
   return crypto.createHash("sha256").update(normalized).digest("hex");
 }
 
@@ -50,7 +53,7 @@ async function writeAudit(tx: Tx, actor: Actor, audit: AuditInput): Promise<void
       audit.resourceId,
       audit.resourceVersion || 1,
       audit.result,
-      audit.evidenceRefs || []
+      JSON.stringify(audit.evidenceRefs || [])
     ]
   );
 }
@@ -69,7 +72,7 @@ async function writeOutbox(tx: Tx, event: OutboxInput): Promise<void> {
       event.eventType,
       event.schemaVersion,
       event.purpose,
-      event.refs || []
+      JSON.stringify(event.refs || [])
     ]
   );
 }

@@ -422,7 +422,7 @@ export async function runRetention(args: {
 }) {
   requireRetentionAdmin(args.actor, "retention.run");
   const now = args.now ?? new Date();
-  const tenantSecret = `${cfg.authSecret}:${args.who.tenantId}`;
+  const tenantSecret = `${cfg.pseudonymSecret}:${args.who.tenantId}`;
 
   return runCommand<RetentionRunReceipt>({
     tenantId: args.who.tenantId,

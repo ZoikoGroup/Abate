@@ -1,17 +1,19 @@
 // backend/src/index.ts
 import express, { Request, Response, NextFunction } from "express";
 import cors from "cors";
+import compression from "compression";
+import { z } from "zod";
 import fs from "node:fs";
 import path from "node:path";
 import { loadConfig } from "./platform/config";
 import { toErrorResponse, AppError } from "./platform/errors";
 import { openApiSpec, CreateOrganizationBody, TokenRequestBody, ZoikoTimeBatchV1, SemanticQueryV1 } from "./contracts";
 import { GOLDEN_01 } from "./fixtures/golden01";
-import { authenticate, resolveActor, createDevToken, authorize } from "./domains/tenant/auth";
+import { authenticate, resolveActor, createDevToken, authorize, requireSeparationOfDuties } from "./domains/tenant/auth";
 import { RightsRequestInputSchema, CorrectionInputSchema, AcknowledgeCorrectionInputSchema } from "./contracts/governance";
 import { createOrganization, getOrganization, listOrganizations, getTenant } from "./domains/tenant/commands";
 import { ingestBatch, listConnections, getConnection, setConnectionState, listReceipts, listWorkFacts } from "./domains/ingest";
-import { compileRelease, getRelease } from "./domains/privacy";
+import { compileRelease, getRelease, getReleaseTx } from "./domains/privacy";
 import {
   ExplainReleaseInput,
   DraftCauseInput,
@@ -125,18 +127,72 @@ const app = express();
 // B8: per-request id, latency and status for SLOs (route templates only, no content)
 app.use(telemetryMiddleware);
 
+app.disable("x-powered-by");
+if (process.env.TRUST_PROXY) app.set("trust proxy", Number(process.env.TRUST_PROXY) || process.env.TRUST_PROXY);
+
+// Baseline hardening headers (JSON API; the Swagger page is the only HTML and loads pinned, integrity-checked assets)
+app.use((_req: Request, res: Response, next: NextFunction) => {
+  res.setHeader("X-Content-Type-Options", "nosniff");
+  res.setHeader("X-Frame-Options", "DENY");
+  res.setHeader("Referrer-Policy", "no-referrer");
+  res.setHeader("Cross-Origin-Resource-Policy", "same-site");
+  next();
+});
+
+// Fixed-window per-IP limiter. Off in local/test unless RATE_LIMIT_PER_MIN is set (load tests and demos hammer the app);
+// defaults to 600/min elsewhere. Responses use the safe error envelope.
+const rateLimitPerMin = Number(process.env.RATE_LIMIT_PER_MIN) || ((cfg.appEnv === "local" || cfg.appEnv === "test") ? 0 : 600);
+if (rateLimitPerMin > 0) {
+  const windows = new Map<string, { start: number; count: number }>();
+  setInterval(() => {
+    const cutoff = Date.now() - 60_000;
+    for (const [k, w] of windows) if (w.start < cutoff) windows.delete(k);
+  }, 60_000).unref();
+  app.use((req: Request, res: Response, next: NextFunction) => {
+    const now = Date.now();
+    const key = req.ip || "unknown";
+    let w = windows.get(key);
+    if (!w || now - w.start >= 60_000) {
+      w = { start: now, count: 0 };
+      windows.set(key, w);
+    }
+    if (++w.count > rateLimitPerMin) {
+      res.setHeader("Retry-After", String(Math.ceil((w.start + 60_000 - now) / 1000)));
+      return res.status(429).json({ code: "RATE_LIMITED", message: "Too many requests. Slow down and retry.", requestId: res.locals?.requestId });
+    }
+    next();
+  });
+}
+
 app.use(cors({
   origin: cfg.clientUrl,
   credentials: true
 }));
 
-app.use(express.json());
+app.use(compression());
+// A schema-max ingest batch (1000 items) is larger than express's 100kb default
+app.use(express.json({ limit: "2mb" }));
 
 // Initialize fixtures for development environment
 if (cfg.appEnv === "local" || cfg.appEnv === "test") {
   seedTwoTenants({ clock: new Date(cfg.fixedClock) }).catch(err => {
     console.warn("[Init] Local fixture seeding notice:", err.message);
   });
+}
+
+// Recalculation runs inline, so a "job" is complete when the endpoint returns; remember it briefly so /jobs/:id can
+// answer truthfully (bounded, per process). Unknown ids are 404, not a fabricated COMPLETED/SUCCESS.
+const completedJobs = new Map<string, any>();
+function rememberJob(job: { id: string; tenantId: string; type: string; result: any }) {
+  const now = new Date().toISOString();
+  completedJobs.set(job.id, { ...job, state: "COMPLETED", progress: 100, error: null, createdAt: now, updatedAt: now });
+  while (completedJobs.size > 1000) completedJobs.delete(completedJobs.keys().next().value as string);
+}
+
+// Bounded list size: ?limit=N, default and ceiling per endpoint (unbounded SELECT * on large tables was a memory/latency hazard)
+function parseLimit(req: Request, def: number, max: number): number {
+  const raw = Number(req.query.limit);
+  return Number.isInteger(raw) && raw > 0 ? Math.min(raw, max) : def;
 }
 
 function getHeader(req: Request, name: string): string | null {
@@ -191,8 +247,10 @@ app.get("/api/info", (_req: Request, res: Response) => {
 });
 
 // Canonical Contract Registry (OpenAPI 3.1)
+// The spec is static: serialize once instead of on every request
+const openApiBody = JSON.stringify(openApiSpec);
 app.get("/api/v2/contracts/openapi.json", (_req: Request, res: Response) => {
-  res.status(200).json(openApiSpec);
+  res.status(200).type("application/json").send(openApiBody);
 });
 
 // Interactive Swagger UI Documentation Explorer
@@ -202,7 +260,7 @@ const swaggerHtml = `<!DOCTYPE html>
   <meta charset="utf-8" />
   <meta name="viewport" content="width=device-width, initial-scale=1" />
   <title>Zoiko Abate API Contract Explorer (OpenAPI 3.1)</title>
-  <link rel="stylesheet" href="https://unpkg.com/swagger-ui-dist@5/swagger-ui.css" />
+  <link rel="stylesheet" href="https://unpkg.com/swagger-ui-dist@5.17.14/swagger-ui.css" integrity="sha384-wxLW6kwyHktdDGr6Pv1zgm/VGJh99lfUbzSn6HNHBENZlCN7W602k9VkGdxuFvPn" crossorigin="anonymous" />
   <style>
     body { margin: 0; padding: 0; background: #FAFAFA; font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, sans-serif; }
     .abate-header {
@@ -230,7 +288,7 @@ const swaggerHtml = `<!DOCTYPE html>
     </div>
   </div>
   <div id="swagger-ui"></div>
-  <script src="https://unpkg.com/swagger-ui-dist@5/swagger-ui-bundle.js" crossorigin></script>
+  <script src="https://unpkg.com/swagger-ui-dist@5.17.14/swagger-ui-bundle.js" integrity="sha384-wmyclcVGX/WhUkdkATwhaK1X1JtiNrr2EoYJ+diV3vj4v6OC5yCeSu+yW13SYJep" crossorigin="anonymous"></script>
   <script>
     window.onload = () => {
       window.ui = SwaggerUIBundle({
@@ -256,8 +314,12 @@ app.get(["/docs", "/swagger", "/api-docs"], (_req: Request, res: Response) => {
 // Authentication Endpoints (/api/v2/auth)
 // -------------------------------------------------------------
 
+// Dev-only issuance (like /auth/support-token): minting tokens for arbitrary tenant/subject/role must never be reachable in staging/production
 app.post("/api/v2/auth/token", (req: Request, res: Response) => {
   try {
+    if (cfg.appEnv !== "local" && cfg.appEnv !== "test") {
+      throw new AppError("NOT_FOUND", "Not found.");
+    }
     const body = TokenRequestBody.parse(req.body);
     const token = createDevToken(body);
     res.status(200).json({
@@ -277,6 +339,7 @@ app.post("/api/v2/auth/token", (req: Request, res: Response) => {
 app.post("/api/v2/auth/refresh", async (req: Request, res: Response) => {
   try {
     const who = await authenticate(getHeader(req, "authorization"));
+    await resolveActor(who.tenantId, who.subject, new Date(), who.role);
     const token = createDevToken({
       tenantId: who.tenantId,
       subject: who.subject,
@@ -305,7 +368,7 @@ app.post("/api/v2/auth/logout", (_req: Request, res: Response) => {
 app.get("/api/v2/me", async (req: Request, res: Response) => {
   try {
     const who = await authenticate(getHeader(req, "authorization"));
-    const actor = await resolveActor(who.tenantId, who.subject, new Date());
+    const actor = await resolveActor(who.tenantId, who.subject, new Date(), who.role);
     const tenant = await getTenant({ who, actor });
 
     res.status(200).json({
@@ -342,7 +405,13 @@ app.get("/api/v2/me", async (req: Request, res: Response) => {
 // List active tenants for workspace switching (Guide §D.1)
 app.get("/api/v2/tenants", async (req: Request, res: Response) => {
   try {
-    await authenticate(getHeader(req, "authorization"));
+    const who = await authenticate(getHeader(req, "authorization"));
+    const actor = await resolveActor(who.tenantId, who.subject, new Date(), who.role);
+    if (cfg.appEnv !== "local" && cfg.appEnv !== "test") {
+      // Only the caller's own tenant: the fixture list below names a second tenant and its cohort size
+      const own = await getTenant({ who, actor });
+      return res.status(200).json({ items: [{ id: own.id, tenantId: own.id, name: own.name, region: own.region, state: "ACTIVE" }] });
+    }
     const items = [
       {
         id: GOLDEN_01.tenantA.id,
@@ -370,7 +439,7 @@ app.get("/api/v2/tenants", async (req: Request, res: Response) => {
 app.get("/api/v2/tenants/current", async (req: Request, res: Response) => {
   try {
     const who = await authenticate(getHeader(req, "authorization"));
-    const actor = await resolveActor(who.tenantId, who.subject, new Date());
+    const actor = await resolveActor(who.tenantId, who.subject, new Date(), who.role);
     const tenant = await getTenant({ who, actor });
     res.status(200).json(tenant);
   } catch (err) {
@@ -385,7 +454,7 @@ app.get("/api/v2/tenants/:id", async (req: Request, res: Response) => {
     if (req.params.id !== who.tenantId) {
       throw new AppError("FORBIDDEN", "Tenant boundary violation: access to foreign tenant profile is prohibited.");
     }
-    const actor = await resolveActor(who.tenantId, who.subject, new Date());
+    const actor = await resolveActor(who.tenantId, who.subject, new Date(), who.role);
     const tenant = await getTenant({ who, actor });
     res.status(200).json(tenant);
   } catch (err) {
@@ -397,7 +466,7 @@ app.get("/api/v2/tenants/:id", async (req: Request, res: Response) => {
 app.post("/api/v2/organizations", async (req: Request, res: Response) => {
   try {
     const who = await authenticate(getHeader(req, "authorization"));
-    const actor = await resolveActor(who.tenantId, who.subject, new Date());
+    const actor = await resolveActor(who.tenantId, who.subject, new Date(), who.role);
 
     // Strict schema validation: rejects unknown or prohibited fields immediately
     const body = CreateOrganizationBody.parse(req.body);
@@ -423,7 +492,7 @@ app.post("/api/v2/organizations", async (req: Request, res: Response) => {
 app.get("/api/v2/organizations", async (req: Request, res: Response) => {
   try {
     const who = await authenticate(getHeader(req, "authorization"));
-    const actor = await resolveActor(who.tenantId, who.subject, new Date());
+    const actor = await resolveActor(who.tenantId, who.subject, new Date(), who.role);
 
     const orgs = await listOrganizations({ who, actor });
     res.status(200).json(orgs);
@@ -435,7 +504,7 @@ app.get("/api/v2/organizations", async (req: Request, res: Response) => {
 app.get("/api/v2/organizations/:id", async (req: Request, res: Response) => {
   try {
     const who = await authenticate(getHeader(req, "authorization"));
-    const actor = await resolveActor(who.tenantId, who.subject, new Date());
+    const actor = await resolveActor(who.tenantId, who.subject, new Date(), who.role);
     const orgId = String(req.params.id);
 
     const org = await getOrganization({ who, actor, orgId });
@@ -450,11 +519,12 @@ app.get("/api/v2/organizations/:id", async (req: Request, res: Response) => {
 app.get("/api/v2/audit-events", async (req: Request, res: Response) => {
   try {
     const who = await authenticate(getHeader(req, "authorization"));
-    await resolveActor(who.tenantId, who.subject, new Date());
+    await resolveActor(who.tenantId, who.subject, new Date(), who.role);
 
     // RLS scopes the audit trail to the authenticated tenant
+    const auditLimit = parseLimit(req, 200, 1000);
     const events = await withTenant(who.tenantId, async (tx) =>
-      (await tx.q("SELECT * FROM audit_event ORDER BY occurred_at DESC")).rows
+      (await tx.q(`SELECT * FROM audit_event ORDER BY occurred_at DESC LIMIT ${auditLimit}`)).rows.slice(0, auditLimit)
     );
     res.status(200).json(events);
   } catch (err) {
@@ -463,8 +533,10 @@ app.get("/api/v2/audit-events", async (req: Request, res: Response) => {
 });
 
 // Worker Outbox Drainage Endpoint
-app.post("/api/v2/outbox/drain", async (_req: Request, res: Response) => {
+app.post("/api/v2/outbox/drain", async (req: Request, res: Response) => {
   try {
+    const who = await authenticate(getHeader(req, "authorization"));
+    await resolveActor(who.tenantId, who.subject, new Date(), who.role);
     const report = await drainOnce();
     res.status(200).json({
       status: "ok",
@@ -484,7 +556,7 @@ app.post("/api/v2/outbox/drain", async (_req: Request, res: Response) => {
 app.post("/api/v2/connectors/zoikotime/batches", async (req: Request, res: Response) => {
   try {
     const who = await authenticate(getHeader(req, "authorization"));
-    const actor = await resolveActor(who.tenantId, who.subject, new Date());
+    const actor = await resolveActor(who.tenantId, who.subject, new Date(), who.role);
 
     // Strict schema parse: unknown or prohibited top-level fields rejected immediately
     const batch = ZoikoTimeBatchV1.parse(req.body);
@@ -507,7 +579,7 @@ app.post("/api/v2/connectors/zoikotime/batches", async (req: Request, res: Respo
 app.get("/api/v2/connections", async (req: Request, res: Response) => {
   try {
     const who = await authenticate(getHeader(req, "authorization"));
-    const actor = await resolveActor(who.tenantId, who.subject, new Date());
+    const actor = await resolveActor(who.tenantId, who.subject, new Date(), who.role);
 
     const conns = await listConnections({ who, actor });
     res.status(200).json(conns);
@@ -519,7 +591,7 @@ app.get("/api/v2/connections", async (req: Request, res: Response) => {
 app.get("/api/v2/connections/:id", async (req: Request, res: Response) => {
   try {
     const who = await authenticate(getHeader(req, "authorization"));
-    const actor = await resolveActor(who.tenantId, who.subject, new Date());
+    const actor = await resolveActor(who.tenantId, who.subject, new Date(), who.role);
 
     const conn = await getConnection({ who, actor, connectionId: String(req.params.id) });
     res.status(200).json(conn);
@@ -532,7 +604,7 @@ app.get("/api/v2/connections/:id", async (req: Request, res: Response) => {
 app.post("/api/v2/connections/:id/pause", async (req: Request, res: Response) => {
   try {
     const who = await authenticate(getHeader(req, "authorization"));
-    const actor = await resolveActor(who.tenantId, who.subject, new Date());
+    const actor = await resolveActor(who.tenantId, who.subject, new Date(), who.role);
 
     const conn = await setConnectionState({
       who,
@@ -549,7 +621,7 @@ app.post("/api/v2/connections/:id/pause", async (req: Request, res: Response) =>
 app.post("/api/v2/connections/:id/resume", async (req: Request, res: Response) => {
   try {
     const who = await authenticate(getHeader(req, "authorization"));
-    const actor = await resolveActor(who.tenantId, who.subject, new Date());
+    const actor = await resolveActor(who.tenantId, who.subject, new Date(), who.role);
 
     const conn = await setConnectionState({
       who,
@@ -566,7 +638,7 @@ app.post("/api/v2/connections/:id/resume", async (req: Request, res: Response) =
 app.post("/api/v2/connections/:id/revoke", async (req: Request, res: Response) => {
   try {
     const who = await authenticate(getHeader(req, "authorization"));
-    const actor = await resolveActor(who.tenantId, who.subject, new Date());
+    const actor = await resolveActor(who.tenantId, who.subject, new Date(), who.role);
 
     const conn = await setConnectionState({
       who,
@@ -584,9 +656,9 @@ app.post("/api/v2/connections/:id/revoke", async (req: Request, res: Response) =
 app.get("/api/v2/receipts", async (req: Request, res: Response) => {
   try {
     const who = await authenticate(getHeader(req, "authorization"));
-    const actor = await resolveActor(who.tenantId, who.subject, new Date());
+    const actor = await resolveActor(who.tenantId, who.subject, new Date(), who.role);
 
-    const receipts = await listReceipts({ who, actor });
+    const receipts = await listReceipts({ who, actor, limit: parseLimit(req, 200, 1000) });
     res.status(200).json(receipts);
   } catch (err) {
     toErrorResponse(err, res);
@@ -597,9 +669,9 @@ app.get("/api/v2/receipts", async (req: Request, res: Response) => {
 app.get("/api/v2/work-facts", async (req: Request, res: Response) => {
   try {
     const who = await authenticate(getHeader(req, "authorization"));
-    const actor = await resolveActor(who.tenantId, who.subject, new Date());
+    const actor = await resolveActor(who.tenantId, who.subject, new Date(), who.role);
 
-    const facts = await listWorkFacts({ who, actor });
+    const facts = await listWorkFacts({ who, actor, limit: parseLimit(req, 200, 1000) });
     res.status(200).json(facts);
   } catch (err) {
     toErrorResponse(err, res);
@@ -614,7 +686,7 @@ app.get("/api/v2/work-facts", async (req: Request, res: Response) => {
 app.get("/api/v2/metrics/definitions", async (req: Request, res: Response) => {
   try {
     const who = await authenticate(getHeader(req, "authorization"));
-    await resolveActor(who.tenantId, who.subject, new Date());
+    await resolveActor(who.tenantId, who.subject, new Date(), who.role);
     let rawDefs: any[] = await withTenant(who.tenantId, async (tx) => (await tx.q("SELECT * FROM metric_definition")).rows);
     if (rawDefs.length === 0) {
       rawDefs = [{
@@ -656,11 +728,13 @@ app.get("/api/v2/metrics/definitions", async (req: Request, res: Response) => {
 app.post("/api/v2/releases/query", async (req: Request, res: Response) => {
   try {
     const who = await authenticate(getHeader(req, "authorization"));
-    const actor = await resolveActor(who.tenantId, who.subject, new Date());
+    const actor = await resolveActor(who.tenantId, who.subject, new Date(), who.role);
 
     // Extract query and optional custom cohort members (used by Reconstruction Lab)
     const rawQuery = (req.body && req.body.query) ? req.body.query : req.body;
-    const customCohortMembers = (req.body && Array.isArray(req.body.customCohortMembers))
+    // Caller-supplied cohorts bypass the n>=10 privacy floor, so they are a Reconstruction Lab feature for local/test only
+    const customCohortMembers = (cfg.appEnv === "local" || cfg.appEnv === "test")
+      && req.body && Array.isArray(req.body.customCohortMembers)
       ? req.body.customCohortMembers
       : undefined;
 
@@ -696,7 +770,7 @@ app.post("/api/v2/releases/query", async (req: Request, res: Response) => {
 app.get("/api/v2/releases/:id", async (req: Request, res: Response) => {
   try {
     const who = await authenticate(getHeader(req, "authorization"));
-    const actor = await resolveActor(who.tenantId, who.subject, new Date());
+    const actor = await resolveActor(who.tenantId, who.subject, new Date(), who.role);
 
     // Phase 7: The API refuses to return a Plane-B release from an assurance endpoint
     const release = await getRelease(actor, String(req.params.id), "A");
@@ -710,7 +784,7 @@ app.get("/api/v2/releases/:id", async (req: Request, res: Response) => {
 app.get("/api/v2/releases/:id/export.csv", async (req: Request, res: Response) => {
   try {
     const who = await authenticate(getHeader(req, "authorization"));
-    const actor = await resolveActor(who.tenantId, who.subject, new Date());
+    const actor = await resolveActor(who.tenantId, who.subject, new Date(), who.role);
 
     const release = await getRelease(actor, String(req.params.id));
     if (release.status !== "RELEASED") {
@@ -735,7 +809,7 @@ app.get("/api/v2/releases/:id/export.csv", async (req: Request, res: Response) =
 app.post("/api/v2/metrics/:id/recalculate", async (req: Request, res: Response) => {
   try {
     const who = await authenticate(getHeader(req, "authorization"));
-    await resolveActor(who.tenantId, who.subject, new Date());
+    await resolveActor(who.tenantId, who.subject, new Date(), who.role);
 
     const jobId = crypto.randomUUID();
     let recalculatedCount = 0;
@@ -748,6 +822,8 @@ app.post("/api/v2/metrics/:id/recalculate", async (req: Request, res: Response) 
         recalculatedCount++;
       }
     });
+
+    rememberJob({ id: jobId, tenantId: who.tenantId, type: "METRIC_RECALCULATION", result: { status: "SUCCESS", count: recalculatedCount } });
 
     res.status(200).json({
       jobId,
@@ -772,7 +848,7 @@ async function loadControl(tx: { q: QueryFn }, controlId: string): Promise<any> 
 
 // Helper to assemble full ControlDetailView
 async function buildControlDetailView(tx: any, control: any, role: string, isOwner: boolean): Promise<ControlDetailView> {
-  const aRes = await tx.q("SELECT * FROM approval WHERE intervention_id = $1", [control.id]);
+  const aRes = await tx.q("SELECT * FROM approval WHERE intervention_id = $1 ORDER BY approved_at DESC LIMIT 1", [control.id]);
   const latestApproval = aRes.rows[0] || null;
 
   const rRes = await tx.q("SELECT * FROM implementation_receipt WHERE intervention_id = $1", [control.id]);
@@ -843,7 +919,7 @@ async function buildControlDetailView(tx: any, control: any, role: string, isOwn
 app.post("/api/v2/hazards", async (req: Request, res: Response) => {
   try {
     const who = await authenticate(getHeader(req, "authorization"));
-    const actor = await resolveActor(who.tenantId, who.subject, new Date());
+    const actor = await resolveActor(who.tenantId, who.subject, new Date(), who.role);
     const input = CreateHazardInput.parse(req.body);
     const resolvedReleaseId = input.originatingReleaseId === "rel-baseline-1"
       ? "00000000-0000-4000-a003-000000000001"
@@ -883,18 +959,27 @@ app.post("/api/v2/hazards", async (req: Request, res: Response) => {
 app.get("/api/v2/hazards", async (req: Request, res: Response) => {
   try {
     const who = await authenticate(getHeader(req, "authorization"));
-    await resolveActor(who.tenantId, who.subject, new Date());
+    await resolveActor(who.tenantId, who.subject, new Date(), who.role);
 
     const out = await withTenant(who.tenantId, async (tx) => {
-      const hRes = await tx.q("SELECT * FROM hazard WHERE tenant_id = $1", [who.tenantId]);
+      // Three queries total regardless of hazard count (was 1 + 2 per hazard); counts are tallied in memory.
+      const limit = parseLimit(req, 200, 500);
+      const hRes = await tx.q("SELECT * FROM hazard WHERE tenant_id = $1 ORDER BY created_at DESC, id LIMIT $2", [who.tenantId, limit]);
+      const hazardRows = hRes.rows.slice(0, limit);
+      const causeCounts = new Map<string, number>();
+      for (const c of (await tx.q("SELECT hazard_id FROM cause WHERE tenant_id = $1", [who.tenantId])).rows) {
+        causeCounts.set(c.hazard_id, (causeCounts.get(c.hazard_id) || 0) + 1);
+      }
+      const controlCounts = new Map<string, number>();
+      for (const i of (await tx.q("SELECT hazard_id FROM intervention WHERE tenant_id = $1", [who.tenantId])).rows) {
+        controlCounts.set(i.hazard_id, (controlCounts.get(i.hazard_id) || 0) + 1);
+      }
       const list = [];
-      for (const h of hRes.rows) {
-        const cRes = await tx.q("SELECT count(*) as count FROM cause WHERE hazard_id = $1", [h.id]);
-        const iRes = await tx.q("SELECT count(*) as count FROM intervention WHERE hazard_id = $1", [h.id]);
+      for (const h of hazardRows) {
         list.push({
           ...h,
-          causesCount: Number(cRes.rows[0]?.count || 0),
-          controlsCount: Number(iRes.rows[0]?.count || 0),
+          causesCount: causeCounts.get(h.id) || 0,
+          controlsCount: controlCounts.get(h.id) || 0,
           allowedActions: ["propose_cause", "draft_control", "set_disposition", "export_evidence"]
         });
       }
@@ -911,7 +996,7 @@ app.get("/api/v2/hazards", async (req: Request, res: Response) => {
 app.get("/api/v2/hazards/:id", async (req: Request, res: Response) => {
   try {
     const who = await authenticate(getHeader(req, "authorization"));
-    const actor = await resolveActor(who.tenantId, who.subject, new Date());
+    const actor = await resolveActor(who.tenantId, who.subject, new Date(), who.role);
     const hazardId = String(req.params.id);
 
     const out = await withTenant(who.tenantId, async (tx) => {
@@ -923,7 +1008,7 @@ app.get("/api/v2/hazards/:id", async (req: Request, res: Response) => {
 
       const cRes = await tx.q("SELECT * FROM cause WHERE hazard_id = $1", [hazard.id]);
       const iRes = await tx.q("SELECT * FROM intervention WHERE hazard_id = $1", [hazard.id]);
-      const rel = await getRelease(actor, hazard.originating_release_id);
+      const rel = await getReleaseTx(tx, hazard.originating_release_id);
 
       return {
         hazard,
@@ -943,7 +1028,7 @@ app.get("/api/v2/hazards/:id", async (req: Request, res: Response) => {
 app.post("/api/v2/hazards/:id/causes", async (req: Request, res: Response) => {
   try {
     const who = await authenticate(getHeader(req, "authorization"));
-    await resolveActor(who.tenantId, who.subject, new Date());
+    await resolveActor(who.tenantId, who.subject, new Date(), who.role);
     const hazardId = String(req.params.id);
     const input = ProposeCauseInput.parse(req.body);
 
@@ -978,15 +1063,27 @@ app.post("/api/v2/hazards/:id/causes", async (req: Request, res: Response) => {
 app.post("/api/v2/hazards/:id/causes/:causeId/review", async (req: Request, res: Response) => {
   try {
     const who = await authenticate(getHeader(req, "authorization"));
-    const actor = await resolveActor(who.tenantId, who.subject, new Date());
+    const actor = await resolveActor(who.tenantId, who.subject, new Date(), who.role);
+    const hazardId = String(req.params.id);
     const causeId = String(req.params.causeId);
     const input = ReviewCauseInput.parse(req.body);
 
     const out = await withTenant(who.tenantId, async (tx) => {
+      // The cause must exist in this tenant, belong to the hazard in the URL, and still be awaiting review;
+      // previously any id (or another tenant's) returned 200 "reviewed" and a decided cause could be flipped
+      const cRes = await tx.q("SELECT * FROM cause WHERE id = $1 AND tenant_id = $2 FOR UPDATE", [causeId, who.tenantId]);
+      const cause = cRes.rows.find((c: any) => c.id === causeId);
+      if (!cause || cause.hazard_id !== hazardId) {
+        throw new AppError("NOT_FOUND", "Cause not found.");
+      }
+      if (cause.status !== "PROPOSED") {
+        throw new AppError("CONFLICT", `Cause has already been reviewed (status ${cause.status}).`);
+      }
+
       const now = new Date().toISOString();
       await tx.q(
-        "UPDATE cause SET status = $1, reviewed_by = $2, reviewed_at = $3 WHERE id = $4",
-        [input.status, actor.principalId, now, causeId]
+        "UPDATE cause SET status = $1, reviewed_by = $2, reviewed_at = $3 WHERE id = $4 AND tenant_id = $5",
+        [input.status, actor.principalId, now, causeId, who.tenantId]
       );
 
       return {
@@ -1007,7 +1104,7 @@ app.post("/api/v2/hazards/:id/causes/:causeId/review", async (req: Request, res:
 app.post("/api/v2/controls", async (req: Request, res: Response) => {
   try {
     const who = await authenticate(getHeader(req, "authorization"));
-    const actor = await resolveActor(who.tenantId, who.subject, new Date());
+    const actor = await resolveActor(who.tenantId, who.subject, new Date(), who.role);
     const role = who.role || actor.memberships[0]?.domain_role || "RISK_OWNER";
     const input = CreateControlInput.parse(req.body);
 
@@ -1051,7 +1148,7 @@ app.post("/api/v2/controls", async (req: Request, res: Response) => {
 app.get("/api/v2/controls/:id", async (req: Request, res: Response) => {
   try {
     const who = await authenticate(getHeader(req, "authorization"));
-    const actor = await resolveActor(who.tenantId, who.subject, new Date());
+    const actor = await resolveActor(who.tenantId, who.subject, new Date(), who.role);
     const role = who.role || actor.memberships[0]?.domain_role || "RISK_OWNER";
     const controlId = String(req.params.id);
 
@@ -1075,14 +1172,14 @@ app.get("/api/v2/controls/:id", async (req: Request, res: Response) => {
 app.patch("/api/v2/controls/:id", async (req: Request, res: Response) => {
   try {
     const who = await authenticate(getHeader(req, "authorization"));
-    const actor = await resolveActor(who.tenantId, who.subject, new Date());
+    const actor = await resolveActor(who.tenantId, who.subject, new Date(), who.role);
     const role = who.role || actor.memberships[0]?.domain_role || "RISK_OWNER";
     const controlId = String(req.params.id);
     const ifMatch = getHeader(req, "if-match");
     const input = UpdateControlInput.parse(req.body);
 
     const out = await withTenant(who.tenantId, async (tx) => {
-      const iRes = await tx.q("SELECT * FROM intervention WHERE id = $1 AND tenant_id = $2", [controlId, who.tenantId]);
+      const iRes = await tx.q("SELECT * FROM intervention WHERE id = $1 AND tenant_id = $2 FOR UPDATE", [controlId, who.tenantId]);
       if (!iRes.rowCount || iRes.rowCount === 0) {
         throw new AppError("NOT_FOUND", "Control not found.");
       }
@@ -1130,13 +1227,13 @@ app.patch("/api/v2/controls/:id", async (req: Request, res: Response) => {
 app.post("/api/v2/controls/:id/approve", async (req: Request, res: Response) => {
   try {
     const who = await authenticate(getHeader(req, "authorization"));
-    const actor = await resolveActor(who.tenantId, who.subject, new Date());
+    const actor = await resolveActor(who.tenantId, who.subject, new Date(), who.role);
     const role = who.role || actor.memberships[0]?.domain_role || "RISK_OWNER";
     const controlId = String(req.params.id);
     const ifMatch = getHeader(req, "if-match");
 
     const out = await withTenant(who.tenantId, async (tx) => {
-      const iRes = await tx.q("SELECT * FROM intervention WHERE id = $1 AND tenant_id = $2", [controlId, who.tenantId]);
+      const iRes = await tx.q("SELECT * FROM intervention WHERE id = $1 AND tenant_id = $2 FOR UPDATE", [controlId, who.tenantId]);
       if (!iRes.rowCount || iRes.rowCount === 0) {
         throw new AppError("NOT_FOUND", "Control not found.");
       }
@@ -1155,6 +1252,7 @@ app.post("/api/v2/controls/:id/approve", async (req: Request, res: Response) => 
       if (role !== "APPROVER" && role !== "RISK_OWNER") {
         throw new AppError("FORBIDDEN", "Actor lacks approval authority for this intervention.");
       }
+      requireSeparationOfDuties(control.owner_principal_id, actor.principalId);
 
       // Phase 5 Policy Resolution and Decision Envelope binding
       const polRes = await resolvePolicy(tx, {
@@ -1191,13 +1289,13 @@ app.post("/api/v2/controls/:id/approve", async (req: Request, res: Response) => 
 app.post("/api/v2/controls/:id/implementation", async (req: Request, res: Response) => {
   try {
     const who = await authenticate(getHeader(req, "authorization"));
-    const actor = await resolveActor(who.tenantId, who.subject, new Date());
+    const actor = await resolveActor(who.tenantId, who.subject, new Date(), who.role);
     const role = who.role || actor.memberships[0]?.domain_role || "RISK_OWNER";
     const controlId = String(req.params.id);
     const input = ImplementationReceiptInput.parse(req.body);
 
     const out = await withTenant(who.tenantId, async (tx) => {
-      const iRes = await tx.q("SELECT * FROM intervention WHERE id = $1 AND tenant_id = $2", [controlId, who.tenantId]);
+      const iRes = await tx.q("SELECT * FROM intervention WHERE id = $1 AND tenant_id = $2 FOR UPDATE", [controlId, who.tenantId]);
       if (!iRes.rowCount || iRes.rowCount === 0) {
         throw new AppError("NOT_FOUND", "Control not found.");
       }
@@ -1208,7 +1306,7 @@ app.post("/api/v2/controls/:id/implementation", async (req: Request, res: Respon
       }
 
       // Verify that current approval matches current version
-      const aRes = await tx.q("SELECT * FROM approval WHERE intervention_id = $1", [control.id]);
+      const aRes = await tx.q("SELECT * FROM approval WHERE intervention_id = $1 ORDER BY approved_at DESC LIMIT 1", [control.id]);
       const latest = aRes.rows[0];
       if (!latest || latest.approved_version !== control.version || latest.approved_material_hash !== control.material_hash) {
         throw new AppError("CONFLICT", "Approval does not match current version. Stale or missing approval.");
@@ -1217,7 +1315,7 @@ app.post("/api/v2/controls/:id/implementation", async (req: Request, res: Respon
       const receiptId = crypto.randomUUID();
       await tx.q(
         "INSERT INTO implementation_receipt (id, tenant_id, intervention_id, intervention_version, kind, recorded_by, completed_on, evidence_refs) VALUES ($1, $2, $3, $4, $5, $6, $7, $8)",
-        [receiptId, who.tenantId, control.id, control.version, input.kind, actor.principalId, input.completedOn, input.evidenceRefs]
+        [receiptId, who.tenantId, control.id, control.version, input.kind, actor.principalId, input.completedOn, JSON.stringify(input.evidenceRefs ?? [])]
       );
 
       await tx.q("UPDATE intervention SET state = $1 WHERE id = $2", ["IMPLEMENTED", control.id]);
@@ -1236,13 +1334,13 @@ app.post("/api/v2/controls/:id/implementation", async (req: Request, res: Respon
 app.post("/api/v2/controls/:id/verification/pin", async (req: Request, res: Response) => {
   try {
     const who = await authenticate(getHeader(req, "authorization"));
-    const actor = await resolveActor(who.tenantId, who.subject, new Date());
+    const actor = await resolveActor(who.tenantId, who.subject, new Date(), who.role);
     const role = who.role || actor.memberships[0]?.domain_role || "RISK_OWNER";
     const controlId = String(req.params.id);
     const input = PinVerificationPlanInput.parse(req.body);
 
     const out = await withTenant(who.tenantId, async (tx) => {
-      const iRes = await tx.q("SELECT * FROM intervention WHERE id = $1 AND tenant_id = $2", [controlId, who.tenantId]);
+      const iRes = await tx.q("SELECT * FROM intervention WHERE id = $1 AND tenant_id = $2 FOR UPDATE", [controlId, who.tenantId]);
       if (!iRes.rowCount || iRes.rowCount === 0) {
         throw new AppError("NOT_FOUND", "Control not found.");
       }
@@ -1274,13 +1372,13 @@ app.post("/api/v2/controls/:id/verification/pin", async (req: Request, res: Resp
 app.post("/api/v2/controls/:id/verification/conclude", async (req: Request, res: Response) => {
   try {
     const who = await authenticate(getHeader(req, "authorization"));
-    const actor = await resolveActor(who.tenantId, who.subject, new Date());
+    const actor = await resolveActor(who.tenantId, who.subject, new Date(), who.role);
     const role = who.role || actor.memberships[0]?.domain_role || "RISK_OWNER";
     const controlId = String(req.params.id);
     const input = ConcludeVerificationInput.parse(req.body);
 
     const out = await withTenant(who.tenantId, async (tx) => {
-      const iRes = await tx.q("SELECT * FROM intervention WHERE id = $1 AND tenant_id = $2", [controlId, who.tenantId]);
+      const iRes = await tx.q("SELECT * FROM intervention WHERE id = $1 AND tenant_id = $2 FOR UPDATE", [controlId, who.tenantId]);
       if (!iRes.rowCount || iRes.rowCount === 0) {
         throw new AppError("NOT_FOUND", "Control not found.");
       }
@@ -1318,7 +1416,7 @@ app.post("/api/v2/controls/:id/verification/conclude", async (req: Request, res:
 app.post("/api/v2/hazards/:id/disposition", async (req: Request, res: Response) => {
   try {
     const who = await authenticate(getHeader(req, "authorization"));
-    await resolveActor(who.tenantId, who.subject, new Date());
+    await resolveActor(who.tenantId, who.subject, new Date(), who.role);
     const hazardId = String(req.params.id);
     const input = SetDispositionInput.parse(req.body);
 
@@ -1352,7 +1450,7 @@ app.post("/api/v2/hazards/:id/disposition", async (req: Request, res: Response) 
 app.post("/api/v2/hazards/:id/evidence-package", async (req: Request, res: Response) => {
   try {
     const who = await authenticate(getHeader(req, "authorization"));
-    const actor = await resolveActor(who.tenantId, who.subject, new Date());
+    const actor = await resolveActor(who.tenantId, who.subject, new Date(), who.role);
     const hazardId = String(req.params.id);
 
     const out = await withTenant(who.tenantId, async (tx) => {
@@ -1382,7 +1480,7 @@ function parseAt(raw: unknown): Date | undefined {
 app.get("/api/v2/jurisdiction/coverage", async (req: Request, res: Response) => {
   try {
     const who = await authenticate(getHeader(req, "authorization"));
-    const actor = await resolveActor(who.tenantId, who.subject, new Date());
+    const actor = await resolveActor(who.tenantId, who.subject, new Date(), who.role);
     const at = parseAt(req.query.at);
     const coverage = await getJurisdictionCoverage({ who, actor, ...(at ? { at } : {}) });
     res.status(200).json(coverage);
@@ -1395,7 +1493,7 @@ app.get("/api/v2/jurisdiction/coverage", async (req: Request, res: Response) => 
 app.get("/api/v2/jurisdiction/pack-versions", async (req: Request, res: Response) => {
   try {
     const who = await authenticate(getHeader(req, "authorization"));
-    const actor = await resolveActor(who.tenantId, who.subject, new Date());
+    const actor = await resolveActor(who.tenantId, who.subject, new Date(), who.role);
     res.status(200).json(await listJurisdictionPackVersions({ who, actor }));
   } catch (err) {
     toErrorResponse(err, res);
@@ -1406,7 +1504,7 @@ app.get("/api/v2/jurisdiction/pack-versions", async (req: Request, res: Response
 app.get("/api/v2/retention", async (req: Request, res: Response) => {
   try {
     const who = await authenticate(getHeader(req, "authorization"));
-    const actor = await resolveActor(who.tenantId, who.subject, new Date());
+    const actor = await resolveActor(who.tenantId, who.subject, new Date(), who.role);
     res.status(200).json(await getRetentionState({ who, actor }));
   } catch (err) {
     toErrorResponse(err, res);
@@ -1417,7 +1515,7 @@ app.get("/api/v2/retention", async (req: Request, res: Response) => {
 app.get("/api/v2/retention/preview", async (req: Request, res: Response) => {
   try {
     const who = await authenticate(getHeader(req, "authorization"));
-    const actor = await resolveActor(who.tenantId, who.subject, new Date());
+    const actor = await resolveActor(who.tenantId, who.subject, new Date(), who.role);
     const { dataCategory } = RunRetentionInput.parse({ dataCategory: req.query.dataCategory ?? "WORK_FACT" });
     res.status(200).json(await previewRetention({ who, actor, dataCategory }));
   } catch (err) {
@@ -1428,7 +1526,7 @@ app.get("/api/v2/retention/preview", async (req: Request, res: Response) => {
 app.post("/api/v2/retention/classes", async (req: Request, res: Response) => {
   try {
     const who = await authenticate(getHeader(req, "authorization"));
-    const actor = await resolveActor(who.tenantId, who.subject, new Date());
+    const actor = await resolveActor(who.tenantId, who.subject, new Date(), who.role);
     const result = await setRetentionClass({
       who,
       actor,
@@ -1444,7 +1542,7 @@ app.post("/api/v2/retention/classes", async (req: Request, res: Response) => {
 app.post("/api/v2/retention/runs", async (req: Request, res: Response) => {
   try {
     const who = await authenticate(getHeader(req, "authorization"));
-    const actor = await resolveActor(who.tenantId, who.subject, new Date());
+    const actor = await resolveActor(who.tenantId, who.subject, new Date(), who.role);
     const { dataCategory } = RunRetentionInput.parse(req.body);
     const result = await runRetention({
       who,
@@ -1461,7 +1559,7 @@ app.post("/api/v2/retention/runs", async (req: Request, res: Response) => {
 app.post(["/api/v2/legal-holds", "/api/v2/lifecycle/holds"], async (req: Request, res: Response) => {
   try {
     const who = await authenticate(getHeader(req, "authorization"));
-    const actor = await resolveActor(who.tenantId, who.subject, new Date());
+    const actor = await resolveActor(who.tenantId, who.subject, new Date(), who.role);
     const result = await placeLegalHold({
       who,
       actor,
@@ -1477,7 +1575,7 @@ app.post(["/api/v2/legal-holds", "/api/v2/lifecycle/holds"], async (req: Request
 app.post(["/api/v2/legal-holds/:id/release", "/api/v2/lifecycle/holds/:id/release"], async (req: Request, res: Response) => {
   try {
     const who = await authenticate(getHeader(req, "authorization"));
-    const actor = await resolveActor(who.tenantId, who.subject, new Date());
+    const actor = await resolveActor(who.tenantId, who.subject, new Date(), who.role);
     const result = await releaseLegalHold({
       who,
       actor,
@@ -1554,7 +1652,7 @@ app.post("/api/v2/ops/diagnostic-receipts/verify", (req: Request, res: Response)
 app.post("/api/v2/support/diagnostic-receipts", async (req: Request, res: Response) => {
   try {
     const who = await authenticate(getHeader(req, "authorization"));
-    const actor = await resolveActor(who.tenantId, who.subject, new Date());
+    const actor = await resolveActor(who.tenantId, who.subject, new Date(), who.role);
     const result = await generateDiagnosticReceipt({
       who,
       actor,
@@ -1574,7 +1672,7 @@ app.post("/api/v2/support/diagnostic-receipts", async (req: Request, res: Respon
 app.get("/api/v2/entitlements", async (req: Request, res: Response) => {
   try {
     const who = await authenticate(getHeader(req, "authorization"));
-    authorize(await resolveActor(who.tenantId, who.subject, new Date()), "entitlements.read");
+    authorize(await resolveActor(who.tenantId, who.subject, new Date(), who.role), "entitlements.read");
     const entitlements = getDefaultEntitlements(who.tenantId);
     res.status(200).json({
       tenantId: who.tenantId,
@@ -1589,7 +1687,7 @@ app.get("/api/v2/entitlements", async (req: Request, res: Response) => {
 app.get("/api/v2/policy/resolution", async (req: Request, res: Response) => {
   try {
     const who = await authenticate(getHeader(req, "authorization"));
-    authorize(await resolveActor(who.tenantId, who.subject, new Date()), "policy.read");
+    authorize(await resolveActor(who.tenantId, who.subject, new Date(), who.role), "policy.read");
     const feature = String(req.query.feature || "INTERVENTION_APPROVAL");
 
     const out = await withTenant(who.tenantId, async (tx) => {
@@ -1606,7 +1704,7 @@ app.get("/api/v2/policy/resolution", async (req: Request, res: Response) => {
 app.post("/api/v2/evidence-packages", async (req: Request, res: Response) => {
   try {
     const who = await authenticate(getHeader(req, "authorization"));
-    await resolveActor(who.tenantId, who.subject, new Date());
+    await resolveActor(who.tenantId, who.subject, new Date(), who.role);
 
     const periodStart = req.body.periodStart || new Date(Date.now() - 28 * 24 * 3600 * 1000).toISOString();
     const periodEnd = req.body.periodEnd || new Date().toISOString();
@@ -1633,8 +1731,9 @@ app.post("/api/v2/evidence-packages", async (req: Request, res: Response) => {
 app.get("/api/v2/evidence-packages", async (req: Request, res: Response) => {
   try {
     const who = await authenticate(getHeader(req, "authorization"));
+    await resolveActor(who.tenantId, who.subject, new Date(), who.role);
     const out = await withTenant(who.tenantId, async (tx) => {
-      const res = await tx.q("SELECT * FROM evidence_package WHERE tenant_id = $1", [who.tenantId]);
+      const res = await tx.q(`SELECT * FROM evidence_package WHERE tenant_id = $1 ORDER BY issued_at DESC LIMIT ${parseLimit(req, 100, 500)}`, [who.tenantId]);
       return res.rows;
     });
     res.status(200).json(out);
@@ -1647,7 +1746,7 @@ app.get("/api/v2/evidence-packages", async (req: Request, res: Response) => {
 app.get("/api/v2/evidence-packages/:id", async (req: Request, res: Response) => {
   try {
     const who = await authenticate(getHeader(req, "authorization"));
-    authorize(await resolveActor(who.tenantId, who.subject, new Date()), "evidence_package.read");
+    authorize(await resolveActor(who.tenantId, who.subject, new Date(), who.role), "evidence_package.read");
     const out = await withTenant(who.tenantId, async (tx) => {
       return await getEvidencePackage(tx, String(req.params.id));
     });
@@ -1664,7 +1763,7 @@ app.get("/api/v2/evidence-packages/:id", async (req: Request, res: Response) => 
 app.post("/api/v2/corrections/ingest", async (req: Request, res: Response) => {
   try {
     const who = await authenticate(getHeader(req, "authorization"));
-    const actor = await resolveActor(who.tenantId, who.subject, new Date());
+    const actor = await resolveActor(who.tenantId, who.subject, new Date(), who.role);
     const result = await recordCorrection({
       who,
       actor,
@@ -1681,7 +1780,7 @@ app.post("/api/v2/corrections/ingest", async (req: Request, res: Response) => {
 app.post("/api/v2/corrections/:id/acknowledge", async (req: Request, res: Response) => {
   try {
     const who = await authenticate(getHeader(req, "authorization"));
-    const actor = await resolveActor(who.tenantId, who.subject, new Date());
+    const actor = await resolveActor(who.tenantId, who.subject, new Date(), who.role);
     const result = await acknowledgeCorrection({
       who,
       actor,
@@ -1699,7 +1798,7 @@ app.post("/api/v2/corrections/:id/acknowledge", async (req: Request, res: Respon
 app.post("/api/v2/lifecycle/rights-requests", async (req: Request, res: Response) => {
   try {
     const who = await authenticate(getHeader(req, "authorization"));
-    const actor = await resolveActor(who.tenantId, who.subject, new Date());
+    const actor = await resolveActor(who.tenantId, who.subject, new Date(), who.role);
     const result = await requestErasure({
       who,
       actor,
@@ -1720,7 +1819,7 @@ app.post("/api/v2/lifecycle/rights-requests", async (req: Request, res: Response
 app.post("/api/v2/ai/explain-release", async (req: Request, res: Response) => {
   try {
     const who = await authenticate(getHeader(req, "authorization"));
-    const actor = await resolveActor(who.tenantId, who.subject, new Date());
+    const actor = await resolveActor(who.tenantId, who.subject, new Date(), who.role);
     const input = ExplainReleaseInput.parse(req.body);
 
     const out = await withTenant(who.tenantId, async (tx) => {
@@ -1740,7 +1839,7 @@ app.post("/api/v2/ai/explain-release", async (req: Request, res: Response) => {
 app.post("/api/v2/ai/draft-cause", async (req: Request, res: Response) => {
   try {
     const who = await authenticate(getHeader(req, "authorization"));
-    const actor = await resolveActor(who.tenantId, who.subject, new Date());
+    const actor = await resolveActor(who.tenantId, who.subject, new Date(), who.role);
     const input = DraftCauseInput.parse(req.body);
 
     const out = await withTenant(who.tenantId, async (tx) => {
@@ -1765,7 +1864,7 @@ app.post("/api/v2/ai/draft-cause", async (req: Request, res: Response) => {
 app.post("/api/v2/ai/draft-control", async (req: Request, res: Response) => {
   try {
     const who = await authenticate(getHeader(req, "authorization"));
-    const actor = await resolveActor(who.tenantId, who.subject, new Date());
+    const actor = await resolveActor(who.tenantId, who.subject, new Date(), who.role);
     const input = DraftControlInput.parse(req.body);
 
     const out = await withTenant(who.tenantId, async (tx) => {
@@ -1790,7 +1889,7 @@ app.post("/api/v2/ai/draft-control", async (req: Request, res: Response) => {
 app.post("/api/v2/ai/runs/:id/accept", async (req: Request, res: Response) => {
   try {
     const who = await authenticate(getHeader(req, "authorization"));
-    const actor = await resolveActor(who.tenantId, who.subject, new Date());
+    const actor = await resolveActor(who.tenantId, who.subject, new Date(), who.role);
 
     const out = await withTenant(who.tenantId, async (tx) => {
       return await acceptAiRun(tx, actor, String(req.params.id), req.body);
@@ -1806,7 +1905,7 @@ app.post("/api/v2/ai/runs/:id/accept", async (req: Request, res: Response) => {
 app.post("/api/v2/ai/runs/:id/discard", async (req: Request, res: Response) => {
   try {
     const who = await authenticate(getHeader(req, "authorization"));
-    const actor = await resolveActor(who.tenantId, who.subject, new Date());
+    const actor = await resolveActor(who.tenantId, who.subject, new Date(), who.role);
 
     const out = await withTenant(who.tenantId, async (tx) => {
       return await discardAiRun(tx, actor, String(req.params.id));
@@ -1822,9 +1921,9 @@ app.post("/api/v2/ai/runs/:id/discard", async (req: Request, res: Response) => {
 app.get("/api/v2/ai/runs", async (req: Request, res: Response) => {
   try {
     const who = await authenticate(getHeader(req, "authorization"));
-    authorize(await resolveActor(who.tenantId, who.subject, new Date()), "ai.run.read");
+    authorize(await resolveActor(who.tenantId, who.subject, new Date(), who.role), "ai.run.read");
     const out = await withTenant(who.tenantId, async (tx) => {
-      const res = await tx.q("SELECT * FROM ai_run WHERE tenant_id = $1 ORDER BY created_at DESC", [who.tenantId]);
+      const res = await tx.q(`SELECT * FROM ai_run WHERE tenant_id = $1 ORDER BY created_at DESC LIMIT ${parseLimit(req, 100, 500)}`, [who.tenantId]);
       return res.rows;
     });
     res.status(200).json(out);
@@ -1880,6 +1979,8 @@ app.get("/api/v2/ops/release-readiness", async (req: Request, res: Response) => 
   }
 });
 
+let dossierCache: { path: string; mtimeMs: number; data: any } | null = null;
+
 // Phase 8 / Dossier: Ratified Release Evidence Dossier
 app.get(["/api/v2/release/dossier", "/api/v2/release/dossier/", "/api/v2/release-dossier"], async (_req: Request, res: Response) => {
   try {
@@ -1893,10 +1994,14 @@ app.get(["/api/v2/release/dossier", "/api/v2/release/dossier/", "/api/v2/release
     ];
 
     for (const p of candidatePaths) {
-      if (fs.existsSync(p)) {
-        const data = JSON.parse(fs.readFileSync(p, "utf8"));
-        return res.status(200).json(data);
+      let mtimeMs: number;
+      try { mtimeMs = fs.statSync(p).mtimeMs; } catch { continue; }
+      if (dossierCache && dossierCache.path === p && dossierCache.mtimeMs === mtimeMs) {
+        return res.status(200).json(dossierCache.data);
       }
+      const data = JSON.parse(await fs.promises.readFile(p, "utf8"));
+      dossierCache = { path: p, mtimeMs, data };
+      return res.status(200).json(data);
     }
 
     return res.status(200).json({
@@ -2003,10 +2108,15 @@ app.get("/api/v2/ops/jobs", async (req: Request, res: Response) => {
 app.get("/api/v2/jobs/:id", async (req: Request, res: Response) => {
   try {
     const who = await authenticate(getHeader(req, "authorization"));
+    await resolveActor(who.tenantId, who.subject, new Date(), who.role);
     const jobId = req.params.id;
 
     if (!jobId || jobId === "undefined") {
       throw new AppError("VALIDATION", "Job ID parameter is required.");
+    }
+    // Job ids are UUIDs; anything else cannot exist (and Postgres would 500 on the uuid cast)
+    if (!/^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i.test(String(jobId))) {
+      throw new AppError("NOT_FOUND", "Job not found.");
     }
 
     // Try finding job in outbox_event or dead_letter_event for this tenant
@@ -2056,20 +2166,11 @@ app.get("/api/v2/jobs/:id", async (req: Request, res: Response) => {
       return res.status(200).json(jobData);
     }
 
-    res.status(200).json({
-      id: jobId,
-      tenantId: who.tenantId,
-      type: jobId.includes("metric") ? "METRIC_RECALCULATION" : jobId.includes("dossier") ? "EXPORT_DOSSIER" : "BATCH_PROCESSING",
-      state: "COMPLETED",
-      progress: 100,
-      result: {
-        status: "SUCCESS",
-        details: "Background task completed and verified against constitutional boundaries."
-      },
-      error: null,
-      createdAt: new Date(Date.now() - 10000).toISOString(),
-      updatedAt: new Date().toISOString()
-    });
+    const remembered = completedJobs.get(String(jobId));
+    if (remembered && remembered.tenantId === who.tenantId) {
+      return res.status(200).json(remembered);
+    }
+    throw new AppError("NOT_FOUND", "Job not found.");
   } catch (err) {
     toErrorResponse(err, res);
   }
@@ -2079,7 +2180,7 @@ app.get("/api/v2/jobs/:id", async (req: Request, res: Response) => {
 app.get("/api/v2/ai/kill-switches", async (req: Request, res: Response) => {
   try {
     const who = await authenticate(getHeader(req, "authorization"));
-    authorize(await resolveActor(who.tenantId, who.subject, new Date()), "ai.kill_switch.read");
+    authorize(await resolveActor(who.tenantId, who.subject, new Date(), who.role), "ai.kill_switch.read");
     res.status(200).json(await withPlatform(tx => getKillSwitches(tx)));
   } catch (err) {
     toErrorResponse(err, res);
@@ -2090,7 +2191,7 @@ app.get("/api/v2/ai/kill-switches", async (req: Request, res: Response) => {
 app.post("/api/v2/actions/proposals", async (req: Request, res: Response) => {
   try {
     const who = await authenticate(getHeader(req, "authorization"));
-    const actor = await resolveActor(who.tenantId, who.subject, new Date());
+    const actor = await resolveActor(who.tenantId, who.subject, new Date(), who.role);
     res.status(201).json(await proposeAction({ who, actor, input: ActionProposalInput.parse(req.body) }));
   } catch (err) {
     toErrorResponse(err, res);
@@ -2101,7 +2202,7 @@ app.post("/api/v2/actions/proposals", async (req: Request, res: Response) => {
 app.post("/api/v2/actions/:id/dispatch", async (req: Request, res: Response) => {
   try {
     const who = await authenticate(getHeader(req, "authorization"));
-    const actor = await resolveActor(who.tenantId, who.subject, new Date());
+    const actor = await resolveActor(who.tenantId, who.subject, new Date(), who.role);
     const out = await dispatchAction({
       who,
       actor,
@@ -2122,6 +2223,7 @@ app.post("/api/v2/actions/:id/dispatch", async (req: Request, res: Response) => 
 app.get("/api/v2/flags", async (req: Request, res: Response) => {
   try {
     const who = await authenticate(getHeader(req, "authorization"));
+    await resolveActor(who.tenantId, who.subject, new Date(), who.role);
     const flags = await withTenant(who.tenantId, async (tx) => {
       return await listFeatureFlags(tx, who.tenantId);
     });
@@ -2134,10 +2236,13 @@ app.get("/api/v2/flags", async (req: Request, res: Response) => {
 app.post("/api/v2/flags", async (req: Request, res: Response) => {
   try {
     const who = await authenticate(getHeader(req, "authorization"));
-    const actor = await resolveActor(who.tenantId, who.subject, new Date());
+    const actor = await resolveActor(who.tenantId, who.subject, new Date(), who.role);
     const input = ToggleFeatureFlagInput.parse(req.body);
+    if (input.tenantId && input.tenantId !== who.tenantId) {
+      throw new AppError("FORBIDDEN", "Feature flags can only be changed for the authenticated tenant.");
+    }
     const out = await withTenant(who.tenantId, async (tx) => {
-      return await setFeatureFlag(tx, input.flag, input.enabled, actor.principalId, input.tenantId || who.tenantId);
+      return await setFeatureFlag(tx, input.flag, input.enabled, actor.principalId, who.tenantId);
     });
     res.status(200).json(out);
   } catch (err) {
@@ -2149,7 +2254,7 @@ app.post("/api/v2/flags", async (req: Request, res: Response) => {
 app.post("/api/v2/outcomes/definitions", async (req: Request, res: Response) => {
   try {
     const who = await authenticate(getHeader(req, "authorization"));
-    const actor = await resolveActor(who.tenantId, who.subject, new Date());
+    const actor = await resolveActor(who.tenantId, who.subject, new Date(), who.role);
     const input = CreateOutcomeDefinitionInput.parse(req.body);
     const out = await withTenant(who.tenantId, async (tx) => {
       await requireFeatureFlag(tx, who.tenantId, "outcomes_plane_b");
@@ -2164,6 +2269,7 @@ app.post("/api/v2/outcomes/definitions", async (req: Request, res: Response) => 
 app.post("/api/v2/outcomes/definitions/:id/approve", async (req: Request, res: Response) => {
   try {
     const who = await authenticate(getHeader(req, "authorization"));
+    await resolveActor(who.tenantId, who.subject, new Date(), who.role);
     const out = await withTenant(who.tenantId, async (tx) => {
       await requireFeatureFlag(tx, who.tenantId, "outcomes_plane_b");
       return await approveOutcomeDefinition(tx, String(req.params.id), Number(req.query.version) || 1);
@@ -2177,6 +2283,7 @@ app.post("/api/v2/outcomes/definitions/:id/approve", async (req: Request, res: R
 app.get("/api/v2/outcomes/definitions", async (req: Request, res: Response) => {
   try {
     const who = await authenticate(getHeader(req, "authorization"));
+    await resolveActor(who.tenantId, who.subject, new Date(), who.role);
     const out = await withTenant(who.tenantId, async (tx) => {
       return await listOutcomeDefinitions(tx);
     });
@@ -2189,6 +2296,7 @@ app.get("/api/v2/outcomes/definitions", async (req: Request, res: Response) => {
 app.get("/api/v2/outcomes/definitions/:id", async (req: Request, res: Response) => {
   try {
     const who = await authenticate(getHeader(req, "authorization"));
+    await resolveActor(who.tenantId, who.subject, new Date(), who.role);
     const out = await withTenant(who.tenantId, async (tx) => {
       return await getOutcomeDefinition(tx, String(req.params.id), Number(req.query.version) || 1);
     });
@@ -2202,7 +2310,7 @@ app.get("/api/v2/outcomes/definitions/:id", async (req: Request, res: Response) 
 app.post("/api/v2/outcomes/evaluations", async (req: Request, res: Response) => {
   try {
     const who = await authenticate(getHeader(req, "authorization"));
-    const actor = await resolveActor(who.tenantId, who.subject, new Date());
+    const actor = await resolveActor(who.tenantId, who.subject, new Date(), who.role);
     const input = EvaluateOutcomeInput.parse(req.body);
     const out = await withTenant(
       who.tenantId,
@@ -2220,6 +2328,7 @@ app.post("/api/v2/outcomes/evaluations", async (req: Request, res: Response) => 
 app.get("/api/v2/outcomes/evaluations", async (req: Request, res: Response) => {
   try {
     const who = await authenticate(getHeader(req, "authorization"));
+    await resolveActor(who.tenantId, who.subject, new Date(), who.role);
     const out = await withTenant(who.tenantId, async (tx) => {
       return await listOutcomeEvaluations(tx, who.tenantId);
     });
@@ -2232,6 +2341,7 @@ app.get("/api/v2/outcomes/evaluations", async (req: Request, res: Response) => {
 app.get("/api/v2/outcomes/evaluations/:id", async (req: Request, res: Response) => {
   try {
     const who = await authenticate(getHeader(req, "authorization"));
+    await resolveActor(who.tenantId, who.subject, new Date(), who.role);
     const out = await withTenant(who.tenantId, async (tx) => {
       return await getOutcomeEvaluation(tx, who.tenantId, String(req.params.id));
     });
@@ -2245,7 +2355,7 @@ app.get("/api/v2/outcomes/evaluations/:id", async (req: Request, res: Response) 
 app.get("/api/v2/outcomes/releases/:id", async (req: Request, res: Response) => {
   try {
     const who = await authenticate(getHeader(req, "authorization"));
-    const actor = await resolveActor(who.tenantId, who.subject, new Date());
+    const actor = await resolveActor(who.tenantId, who.subject, new Date(), who.role);
     const release = await getRelease(actor, String(req.params.id), "B");
     res.status(200).json(release);
   } catch (err) {
@@ -2257,7 +2367,7 @@ app.get("/api/v2/outcomes/releases/:id", async (req: Request, res: Response) => 
 app.post("/api/v2/ai-changes", async (req: Request, res: Response) => {
   try {
     const who = await authenticate(getHeader(req, "authorization"));
-    const actor = await resolveActor(who.tenantId, who.subject, new Date());
+    const actor = await resolveActor(who.tenantId, who.subject, new Date(), who.role);
     const input = CreateAiChangeProfileInput.parse(req.body);
     const out = await withTenant(who.tenantId, async (tx) => {
       const profile = await registerAiChangeProfile(tx, actor, input);
@@ -2273,6 +2383,7 @@ app.post("/api/v2/ai-changes", async (req: Request, res: Response) => {
 app.get("/api/v2/ai-changes", async (req: Request, res: Response) => {
   try {
     const who = await authenticate(getHeader(req, "authorization"));
+    await resolveActor(who.tenantId, who.subject, new Date(), who.role);
     const out = await withTenant(who.tenantId, async (tx) => {
       return await listAssessments(tx, who.tenantId);
     });
@@ -2285,6 +2396,7 @@ app.get("/api/v2/ai-changes", async (req: Request, res: Response) => {
 app.get("/api/v2/ai-changes/:id", async (req: Request, res: Response) => {
   try {
     const who = await authenticate(getHeader(req, "authorization"));
+    await resolveActor(who.tenantId, who.subject, new Date(), who.role);
     const out = await withTenant(who.tenantId, async (tx) => {
       return await getAssessment(tx, who.tenantId, String(req.params.id));
     });
@@ -2297,7 +2409,7 @@ app.get("/api/v2/ai-changes/:id", async (req: Request, res: Response) => {
 app.post("/api/v2/ai-changes/:id/advance", async (req: Request, res: Response) => {
   try {
     const who = await authenticate(getHeader(req, "authorization"));
-    const actor = await resolveActor(who.tenantId, who.subject, new Date());
+    const actor = await resolveActor(who.tenantId, who.subject, new Date(), who.role);
     const ifMatchHeader = getHeader(req, "if-match");
     const ifMatch = ifMatchHeader ? parseInt(ifMatchHeader.replace(/"/g, ""), 10) : Number(req.body?.version);
     if (!ifMatch || isNaN(ifMatch)) {
@@ -2366,6 +2478,7 @@ const SEEDED_LEGAL_MATTERS: Record<string, LegalMatter[]> = {
 app.get("/api/v2/sector/legal/matters", async (req: Request, res: Response) => {
   try {
     const who = await authenticate(getHeader(req, "authorization"));
+    await resolveActor(who.tenantId, who.subject, new Date(), who.role);
     const matters = SEEDED_LEGAL_MATTERS[who.tenantId] || [];
     res.status(200).json({ items: matters });
   } catch (err) {
@@ -2377,7 +2490,7 @@ app.get("/api/v2/sector/legal/matters", async (req: Request, res: Response) => {
 app.post("/api/v2/sector/legal/matters/map", async (req: Request, res: Response) => {
   try {
     const who = await authenticate(getHeader(req, "authorization"));
-    const actor = await resolveActor(who.tenantId, who.subject, new Date());
+    const actor = await resolveActor(who.tenantId, who.subject, new Date(), who.role);
     authorize(actor, "org.create"); // Risk owners and practice heads
 
     // 1. Constitutional boundary check: reject forbidden surveillance/billing/privileged fields
@@ -2401,13 +2514,19 @@ app.post("/api/v2/sector/legal/matters/map", async (req: Request, res: Response)
 });
 
 // Evaluate fatigue & unbuffered evening drafting against SRA 2023 & ISO 45003 thresholds
+const FatigueCheckBody = z.object({
+  matterId: z.string().min(1).max(128),
+  intervals: z.array(
+    z.object({ startUtc: z.string().datetime(), endUtc: z.string().datetime() })
+      .refine(i => Date.parse(i.endUtc) > Date.parse(i.startUtc), { message: "endUtc must be after startUtc" })
+  ).max(500).optional()
+}).strict();
+
 app.post("/api/v2/sector/legal/fatigue-check", async (req: Request, res: Response) => {
   try {
     const who = await authenticate(getHeader(req, "authorization"));
-    const { matterId, intervals } = req.body;
-    if (!matterId) {
-      throw new AppError("VALIDATION", "Missing required field: matterId");
-    }
+    await resolveActor(who.tenantId, who.subject, new Date(), who.role);
+    const { matterId, intervals } = FatigueCheckBody.parse(req.body ?? {});
 
     const tenantMatters = SEEDED_LEGAL_MATTERS[who.tenantId] || [];
     const matter = tenantMatters.find(m => m.matterId === matterId);

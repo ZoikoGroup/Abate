@@ -35,6 +35,7 @@ export function authenticateSupport(authHeader: string | null | undefined): Supp
   let decoded: any;
   try {
     decoded = jwt.verify(authHeader.slice(7), cfg.supportAuthSecret, {
+      algorithms: ["HS256"],
       issuer: cfg.authIssuer,
       audience: SUPPORT_AUDIENCE
     });
