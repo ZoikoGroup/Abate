@@ -645,7 +645,7 @@ export function HazardControlTab({ currentTenant, token }: HazardControlTabProps
           <p className="text-muted" style={{ fontStyle: "italic" }}>No active legal matters registered for this tenant.</p>
         ) : (
           <div>
-            <div style={{ display: "grid", gridTemplateColumns: "repeat(auto-fit, minmax(280px, 1fr))", gap: "1rem", marginBottom: "1rem" }}>
+            <div style={{ display: "grid", gridTemplateColumns: "repeat(auto-fit, minmax(min(280px, 100%), 1fr))", gap: "1rem", marginBottom: "1rem" }}>
               {legalMatters.map(m => {
                 const isSelected = m.matterId === selectedMatterId;
                 return (
