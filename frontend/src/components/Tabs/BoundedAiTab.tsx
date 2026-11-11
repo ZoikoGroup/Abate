@@ -237,7 +237,7 @@ export function BoundedAiTab({ currentTenant, token }: BoundedAiTabProps) {
           Verify the non-negotiable AI invariants: prompt injection immunity, citation validation, numeric fidelity, refusal of individual scoring, parameter-hash binding, and lease fencing.
         </p>
 
-        <div className="lab-grid" style={{ gridTemplateColumns: "repeat(auto-fit, minmax(280px, 1fr))" }}>
+        <div className="lab-grid" style={{ gridTemplateColumns: "repeat(auto-fit, minmax(min(280px, 100%), 1fr))" }}>
           <button
             type="button"
             onClick={() => runLabTest("PROMPT_INJECTION")}
@@ -358,7 +358,7 @@ export function BoundedAiTab({ currentTenant, token }: BoundedAiTabProps) {
           <span className="badge badge-coral">OPERATIONS LEVEL</span>
         </div>
 
-        <div style={{ display: "grid", gridTemplateColumns: "repeat(auto-fit, minmax(260px, 1fr))", gap: "1rem", marginTop: "1rem" }}>
+        <div style={{ display: "grid", gridTemplateColumns: "repeat(auto-fit, minmax(min(260px, 100%), 1fr))", gap: "1rem", marginTop: "1rem" }}>
           {[
             { scope: "all_ai", title: "Global AI Master Switch", desc: "Instantly shuts down all AI endpoints across all tenants." },
             { scope: "use_case:explain_release", title: "Explain Release Use-Case", desc: "Disables explanation generation while leaving other features active." },

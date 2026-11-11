@@ -184,7 +184,8 @@
 /* Workspace Layout */
 .demo-workspace-layout {
   display: grid;
-  grid-template-columns: 280px 1fr;
+  /* minmax(0, 1fr): lets the column shrink instead of being stretched by long unbreakable content (e.g. JWTs) */
+  grid-template-columns: 280px minmax(0, 1fr);
   gap: 24px;
   padding: 24px;
   max-width: 1600px;
@@ -1208,4 +1209,216 @@
 
 .monospace {
   font-family: monospace;
+}
+
+/* =============================================================
+   Responsive layout
+   ============================================================= */
+
+/* Never let a child force the page wider than the viewport */
+.live-demo-console {
+  overflow-x: hidden;
+}
+
+.demo-active-panel,
+.demo-card,
+.what-happened-panel,
+.inspector-card {
+  min-width: 0;
+}
+
+.demo-topbar {
+  flex-wrap: wrap;
+  gap: 12px;
+}
+
+.brand-section {
+  flex-wrap: wrap;
+  min-width: 0;
+}
+
+.presenter-controls {
+  flex-wrap: wrap;
+}
+
+.demo-auth-pills {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 6px;
+}
+
+.auth-status-tag {
+  font-size: 0.7rem;
+  font-weight: 700;
+  padding: 2px 8px;
+  border-radius: 10px;
+  background-color: rgba(255, 255, 255, 0.14);
+  white-space: nowrap;
+}
+
+.step-form-grid {
+  flex-wrap: wrap;
+}
+
+.inspector-header,
+.inspector-subbar {
+  flex-wrap: wrap;
+  gap: 8px;
+}
+
+.inspector-main-meta {
+  flex-wrap: wrap;
+  min-width: 0;
+}
+
+.url-badge {
+  overflow-wrap: anywhere;
+}
+
+.json-display,
+.curl-display {
+  max-width: 100%;
+  box-sizing: border-box;
+}
+
+.contract-table-scroll,
+.test-items-scroll {
+  overflow-x: auto;
+}
+
+/* Tablet and below: single column, stepper becomes a horizontal strip */
+@media (max-width: 1024px) {
+  .demo-workspace-layout {
+    grid-template-columns: minmax(0, 1fr);
+    gap: 16px;
+    padding: 16px;
+  }
+
+  .demo-stepper-panel {
+    position: static;
+  }
+
+  .stepper-list {
+    flex-direction: row;
+    overflow-x: auto;
+    gap: 8px;
+    padding-bottom: 6px;
+    -webkit-overflow-scrolling: touch;
+  }
+
+  .stepper-item {
+    flex: 0 0 220px;
+  }
+
+  .four-writes-grid {
+    grid-template-columns: repeat(2, minmax(0, 1fr));
+  }
+
+  .test-meta-banner {
+    grid-template-columns: repeat(2, minmax(0, 1fr));
+  }
+}
+
+/* Phones and small tablets */
+@media (max-width: 768px) {
+  .demo-topbar {
+    position: static;
+    padding: 12px 16px;
+  }
+
+  .presenter-controls {
+    width: 100%;
+  }
+
+  .progress-indicator {
+    width: 100%;
+    order: -1;
+  }
+
+  .ctrl-btn {
+    flex: 1 1 auto;
+    padding: 8px 10px;
+    font-size: 0.8rem;
+  }
+
+  .demo-card {
+    padding: 14px;
+  }
+
+  .what-showing-statement {
+    font-size: 1.1rem;
+  }
+
+  .action-row,
+  .action-left,
+  .action-right {
+    width: 100%;
+    flex-direction: column;
+    align-items: stretch;
+    gap: 10px;
+  }
+
+  .demo-run-button,
+  .demo-next-button {
+    width: 100%;
+    justify-content: center;
+  }
+
+  .proof-badge-container {
+    min-width: 0;
+    width: 100%;
+  }
+
+  .jwt-claims-box,
+  .comparison-grid,
+  .roadmap-grid {
+    grid-template-columns: minmax(0, 1fr);
+  }
+
+  .step-form-grid {
+    flex-direction: column;
+    align-items: stretch;
+  }
+
+  .demo-input {
+    width: 100%;
+    box-sizing: border-box;
+  }
+
+  .demo-modal-overlay {
+    padding: 8px;
+  }
+
+  .modal-body {
+    padding: 14px;
+    overflow-x: auto;
+  }
+
+  .modal-header,
+  .modal-footer {
+    padding: 12px 16px;
+  }
+}
+
+@media (max-width: 480px) {
+  .demo-workspace-layout {
+    padding: 10px;
+  }
+
+  .four-writes-grid,
+  .test-meta-banner {
+    grid-template-columns: minmax(0, 1fr);
+  }
+
+  .stepper-item {
+    flex-basis: 190px;
+  }
+
+  .brand-name {
+    font-size: 1rem;
+  }
+
+  .demo-header-title {
+    font-size: 1rem;
+  }
 }

@@ -352,7 +352,7 @@ export function IngestionTab({ currentTenant, token, onRefresh }: IngestionTabPr
           <div className="badge badge-aubergine">Live Connector Suite</div>
         </div>
 
-        <div style={{ display: "grid", gridTemplateColumns: "repeat(auto-fit, minmax(260px, 1fr))", gap: "1rem" }}>
+        <div style={{ display: "grid", gridTemplateColumns: "repeat(auto-fit, minmax(min(260px, 100%), 1fr))", gap: "1rem" }}>
           {/* Action 1 */}
           <div style={{ padding: "1rem", border: "1px solid var(--card-border)", borderRadius: "8px", background: "#FFFFFF" }}>
             <h4 style={{ margin: "0 0 0.5rem 0", color: "var(--aubergine)", fontSize: "0.95rem" }}>
@@ -523,7 +523,7 @@ export function IngestionTab({ currentTenant, token, onRefresh }: IngestionTabPr
                     </div>
                   </div>
 
-                  <div style={{ display: "grid", gridTemplateColumns: "repeat(auto-fit, minmax(200px, 1fr))", gap: "0.75rem", fontSize: "0.85rem", color: "var(--graphite)" }}>
+                  <div style={{ display: "grid", gridTemplateColumns: "repeat(auto-fit, minmax(min(200px, 100%), 1fr))", gap: "0.75rem", fontSize: "0.85rem", color: "var(--graphite)" }}>
                     <div>
                       <span style={{ color: "var(--muted-text)" }}>Connection ID:</span>{" "}
                       <code>{conn.id.slice(0, 16)}...</code>
