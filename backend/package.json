@@ -20,6 +20,11 @@
     "worker": "tsx src/worker/daemon.ts",
     "test-worker": "tsx tools/test-worker-crash-lab.ts",
     "test-ingest": "tsx tools/test-phase2-ingestion.ts",
+    "test-privacy": "tsx tools/test-reconstruction.ts",
+    "test-control": "tsx tools/test-phase4-control.ts",
+    "test-retention": "tsx tools/test-phase5-retention.ts",
+    "test-ai": "tsx tools/test-phase6-ai.ts",
+    "test-planes": "tsx tools/test-phase7-planes.ts",
     "build": "tsc",
     "start": "node dist/index.js",
     "dev": "tsx watch src/index.ts"

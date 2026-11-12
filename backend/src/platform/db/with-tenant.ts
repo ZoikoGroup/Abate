@@ -1161,6 +1161,9 @@ class MemoryClient {
 
     // Metric Snapshot Select
     if (upper.includes("FROM METRIC_SNAPSHOT")) {
+      if (this.workerMode) {
+        return { rows: [], rowCount: 0, command: "SELECT", oid: 0, fields: [] };
+      }
       let rows = Array.from(memDb.metricSnapshots.values()).filter(s => s.tenant_id === this.tenantContext);
       if (params.length > 0) {
         rows = rows.filter(s => s.id === params[0] || (params.length >= 3 && s.metric_id === params[0] && s.cohort_ref === params[1]));
@@ -1227,7 +1230,18 @@ class MemoryClient {
 
     // Privacy Decision Insert
     if (upper.includes("INSERT INTO PRIVACY_DECISION")) {
-      const [id, tId, queryHash, outcome, reasonCode, policyVersion] = params;
+      let outcome = "RELEASED";
+      let reasonCode = "APPROVED";
+      let policyVersion = "v1.0";
+      if (upper.includes("'SUPPRESSED'")) {
+        outcome = "SUPPRESSED";
+        reasonCode = params[3] || "SUPPRESSED";
+      } else if (params.length >= 6) {
+        outcome = params[3];
+        reasonCode = params[4];
+        policyVersion = params[5];
+      }
+      const [id, tId, queryHash] = params;
       if (this.tenantContext && tId !== this.tenantContext) {
         throw new Error("RLS WITH CHECK violation: cross-tenant privacy_decision write rejected");
       }
@@ -1297,15 +1311,24 @@ class MemoryClient {
 
     // Privacy Decision Select
     if (upper.includes("FROM PRIVACY_DECISION")) {
+      if (this.workerMode) {
+        return { rows: [], rowCount: 0, command: "SELECT", oid: 0, fields: [] };
+      }
       let rows = Array.from(memDb.privacyDecisions.values()).filter(d => d.tenant_id === this.tenantContext);
-      if (params.length > 0) {
+      if (params.length > 0 && !upper.includes("TENANT_ID = $1") && !upper.includes("TENANT_ID=$1")) {
         rows = rows.filter(d => d.id === params[0] || d.semantic_query_hash === params[0]);
+      }
+      if (upper.includes("ORDER BY DECIDED_AT DESC")) {
+        rows.reverse();
       }
       return { rows, rowCount: rows.length, command: "SELECT", oid: 0, fields: [] };
     }
 
     // Privacy Release Select
     if (upper.includes("FROM PRIVACY_RELEASE") && !upper.includes("JOIN RELEASED_ARTIFACT")) {
+      if (this.workerMode) {
+        return { rows: [], rowCount: 0, command: "SELECT", oid: 0, fields: [] };
+      }
       let rows = Array.from(memDb.privacyReleases.values()).filter(r => r.tenant_id === this.tenantContext);
       if (params.length > 0) {
         rows = rows.filter(r => r.id === params[0]);
@@ -1388,6 +1411,9 @@ class MemoryClient {
 
     // Disclosure Ledger Select
     if (upper.includes("FROM DISCLOSURE_LEDGER")) {
+      if (this.workerMode) {
+        return { rows: [], rowCount: 0, command: "SELECT", oid: 0, fields: [] };
+      }
       let rows = memDb.disclosureLedger.filter(d => d.tenant_id === this.tenantContext);
       if (params.length >= 2) {
         rows = rows.filter(d => d.metric_id === params[1]);
@@ -1607,6 +1633,12 @@ class MemoryClient {
       let rows = Array.from(memDb.approvals.values()).filter(a => a.tenant_id === this.tenantContext);
       if (params.length > 0) {
         rows = rows.filter(a => a.intervention_id === params[0] || a.id === params[0]);
+      }
+      if (params.length >= 2 && (upper.includes("APPROVED_VERSION = $2") || upper.includes("APPROVED_VERSION=$2"))) {
+        rows = rows.filter(a => a.approved_version === Number(params[1]));
+      }
+      if (params.length >= 3 && (upper.includes("APPROVED_MATERIAL_HASH = $3") || upper.includes("APPROVED_MATERIAL_HASH=$3"))) {
+        rows = rows.filter(a => a.approved_material_hash === params[2]);
       }
       // Sort newest first
       rows.sort((a, b) => new Date(b.approved_at).getTime() - new Date(a.approved_at).getTime());
