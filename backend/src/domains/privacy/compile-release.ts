@@ -162,13 +162,7 @@ export async function compileRelease(
       }
       const priorSet = new Set(priorMembers);
 
-      // (a) Symmetric Difference Check: |(A \ B) U (B \ A)| must not be 1..4
-      const symDiff = symmetricDifference(memberSet, priorSet);
-      if (symDiff.size > 0 && symDiff.size < profile.overlapMin) {
-        return suppress("OVERLAP");
-      }
-
-      // (b) Parent-Child Residual Check: e.g. Parent 14, Child 10 -> residual 4
+      // (a) Parent-Child Residual Check: e.g. Parent 14, Child 10 -> residual 4
       if (isSubset(priorSet, memberSet)) {
         const residual = memberSet.size - priorSet.size;
         if (residual > 0 && residual < profile.residualMin) {
@@ -180,6 +174,12 @@ export async function compileRelease(
         if (residual > 0 && residual < profile.residualMin) {
           return suppress("RESIDUAL");
         }
+      }
+
+      // (b) Symmetric Difference Check: |(A \ B) U (B \ A)| must not be 1..4
+      const symDiff = symmetricDifference(memberSet, priorSet);
+      if (symDiff.size > 0 && symDiff.size < profile.overlapMin) {
+        return suppress("OVERLAP");
       }
     }
 
