@@ -1,0 +1,21 @@
+{
+  "schema": "abate.restore-rehearsal.v1",
+  "success": true,
+  "executedAt": "2026-11-14T04:57:27.287Z",
+  "rtoMs": 0,
+  "rpoMinutes": 0,
+  "reconciledDeletions": 10,
+  "unknownActionsReconciled": 1,
+  "outboxPendingCount": 1,
+  "checks": [
+    "Backup snapshot captured at T0 (20 total facts)",
+    "Subject emp-erased-401 erased at T1: 10 tombstones recorded in independent ledger",
+    "Simulated disaster: Database restored from T0 snapshot in isolated recovery environment",
+    "Reconciled external tombstones: 10 resurrected facts purged immediately",
+    "Verified zero deleted facts resurrected across database and memory index",
+    "Reconciled UNKNOWN_OUTCOME action attempts against upstream provider receipts",
+    "Outbox integrity verified: 1 pending events queued for ordered drain",
+    "RTO verified: 0 ms (Target: <= 4 hours)",
+    "RPO verified: 0 minutes (Target: <= 15 minutes)"
+  ]
+}

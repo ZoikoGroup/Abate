@@ -12,7 +12,6 @@ import {
   PlaceLegalHoldInput,
   ReleaseLegalHoldInput,
   RetentionRunReceipt,
-  JurisdictionCoverage,
   RetentionClassView,
   LegalHoldView,
   RetentionRunView,

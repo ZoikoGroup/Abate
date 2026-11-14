@@ -19,8 +19,8 @@ export const ErrorBody = z.object({
 export type ErrorBodyType = z.infer<typeof ErrorBody>;
 
 export const EventEnvelope = z.object({
-  eventId: z.string().uuid(),
-  tenantId: z.string().uuid(),
+  eventId: z.uuid(),
+  tenantId: z.uuid(),
   aggregate: z.string(),
   aggregateVersion: z.number().int(),
   eventTime: z.string(),

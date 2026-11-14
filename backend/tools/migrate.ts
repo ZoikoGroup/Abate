@@ -72,6 +72,11 @@ async function runMigrations() {
 }
 
 runMigrations().catch(err => {
-  console.error("\x1b[31m[MIGRATION ERROR]\x1b[0m", err instanceof Error ? err.message : err);
+  const msg = err instanceof Error ? err.message : String(err);
+  if (msg.includes("ECONNREFUSED") || (err as any)?.code === "ECONNREFUSED") {
+    console.error("\x1b[31m[MIGRATION ERROR]\x1b[0m PostgreSQL is not reachable on 5432. Run: docker compose up -d postgres");
+  } else {
+    console.error("\x1b[31m[MIGRATION ERROR]\x1b[0m", msg);
+  }
   process.exit(1);
 });

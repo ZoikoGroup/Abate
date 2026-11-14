@@ -1,0 +1,78 @@
+{
+  "schema": "abate.simulation-30d.v1",
+  "mode": "SCRIPTED_REAL_HTTP",
+  "generatedAt": "2026-11-14T04:57:27.275Z",
+  "baseUrl": "express://in-process",
+  "summary": {
+    "totalSteps": 9,
+    "passedSteps": 9,
+    "failedSteps": 0,
+    "passed": true,
+    "durationMs": 285
+  },
+  "steps": [
+    {
+      "dayRange": "Day 01",
+      "phase": "Auth & Support Tokens",
+      "endpoint": "POST /api/v2/auth/*",
+      "passed": true,
+      "detail": "Issued tenant A/B JWTs and operator support token"
+    },
+    {
+      "dayRange": "Day 02",
+      "phase": "Org Idempotency & Cross-Tenant 404",
+      "endpoint": "POST/GET /api/v2/organizations",
+      "passed": true,
+      "detail": "Created org 7a5ae7c9, verified replay, 409 conflict, and cross-tenant 404"
+    },
+    {
+      "dayRange": "Days 03-05",
+      "phase": "ZoikoTime Clean Batch & Replay Dedupe",
+      "endpoint": "POST /api/v2/connectors/zoikotime/batches",
+      "passed": true,
+      "detail": "Accepted 12 facts; exact replay kept count constant (12)"
+    },
+    {
+      "dayRange": "Day 06",
+      "phase": "Decoy Surveillance Field Rejection & Zero Trace",
+      "endpoint": "POST /api/v2/connectors/zoikotime/batches",
+      "passed": true,
+      "detail": "Rejected decoy payload with 400; zero persistence/log trace across receipts, ledger & audit"
+    },
+    {
+      "dayRange": "Days 07-10",
+      "phase": "Revision Correction Append, Pause Guard & STALE Outage",
+      "endpoint": "POST /api/v2/connections/* & /api/v2/ops/connectors",
+      "passed": true,
+      "detail": "Revision 2 appended, paused connector refused (403), STALE connector health verified"
+    },
+    {
+      "dayRange": "Days 11-16",
+      "phase": "Privacy Release (Class B 28d Valid vs Short Window Blocked)",
+      "endpoint": "POST /api/v2/releases/query",
+      "passed": true,
+      "detail": "Short Class B window suppressed (NOT_AVAILABLE); 29d release issued (2d5dd521)"
+    },
+    {
+      "dayRange": "Days 17-25",
+      "phase": "BE-007 Hazard -> Control -> Re-Approval -> Evidence Pack",
+      "endpoint": "POST /api/v2/hazards & /controls & /evidence-packages",
+      "passed": true,
+      "detail": "Closed hazard ee2c3960 via v2 re-approval; evidence pack 962d4891"
+    },
+    {
+      "dayRange": "Days 26-28",
+      "phase": "AI Kill Switch Fail-Closed & Manual Fallback",
+      "endpoint": "POST /api/v2/ops/kill-switches & /ai/explain-release",
+      "passed": true,
+      "detail": "all_ai blocked /ai/explain-release (503) while manual hazards remained 200 OK"
+    },
+    {
+      "dayRange": "Days 29-30",
+      "phase": "Plane B Isolation & Release Dossier Verification",
+      "endpoint": "GET /api/v2/outcomes/releases/:id & /release/dossier",
+      "passed": true,
+      "detail": "Plane B cross-read blocked (404); Plane B definition registered; dossier verified (READY FOR REVIEW)"
+    }
+  ]
+}

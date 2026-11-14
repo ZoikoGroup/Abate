@@ -13,6 +13,7 @@ import fs from "node:fs";
 import path from "node:path";
 import crypto from "node:crypto";
 import http from "node:http";
+import type { Socket } from "node:net";
 import { PassThrough } from "node:stream";
 import { app } from "../src/index";
 import { GOLDEN_01 } from "../src/fixtures/golden01";
@@ -72,7 +73,7 @@ function callApp(
       reqHeaders["idempotency-key"] = options.idempotencyKey;
     }
 
-    const req = new http.IncomingMessage(new PassThrough());
+    const req = new http.IncomingMessage(new PassThrough() as unknown as Socket);
     req.method = method.toUpperCase();
     req.url = urlPath;
     req.headers = reqHeaders;
@@ -84,7 +85,7 @@ function callApp(
 
     const socket = new PassThrough();
     const res = new http.ServerResponse(req);
-    res.assignSocket(socket);
+    res.assignSocket(socket as unknown as Socket);
 
     const resChunks: Buffer[] = [];
     socket.on("data", (chunk) => resChunks.push(chunk));
@@ -245,7 +246,7 @@ async function runEndpointChecks() {
       "POST /api/v2/auth/refresh",
       "Happy Path (Refresh)",
       "200 OK",
-      `${resRefreshHappy.status} ${Boolean(resRefreshHappy.body?.token) ? "OK" : "NoToken"}`,
+      `${resRefreshHappy.status} ${resRefreshHappy.body?.token ? "OK" : "NoToken"}`,
       resRefreshHappy.status === 200 && Boolean(resRefreshHappy.body?.token) ? "PASS" : "FAIL"
     );
   }

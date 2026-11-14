@@ -8,6 +8,7 @@ import { partition } from "./validate";
 import { derivePseudonym } from "../work/pseudonym";
 import { recordKeyDigest } from "../work/record-key";
 import { loadConfig } from "../../platform/config";
+import { isKillSwitchActive } from "../ai/kill-switch";
 
 const cfg = loadConfig();
 
@@ -43,9 +44,9 @@ export async function ingestBatch(args: {
     requestHash,
     actor: args.actor,
     body: async (tx) => {
-      // Step 2: Validate Connection exists and is ACTIVE
+      // Step 2: Validate Connection exists, kill switch is inactive, and connection is ACTIVE
       const connRes = await tx.q(
-        `SELECT id, state FROM connection WHERE id = $1`,
+        `SELECT id, state, source FROM connection WHERE id = $1`,
         [args.batch.connectionId]
       );
 
@@ -54,6 +55,10 @@ export async function ingestBatch(args: {
       }
 
       const conn = connRes.rows[0];
+      const connectorScope = `connector:${String(conn.source || "zoikotime").toLowerCase()}`;
+      if (await isKillSwitchActive(tx, connectorScope)) {
+        throw new AppError("UNAVAILABLE", `Ingestion disabled by kill switch (${connectorScope}).`);
+      }
       if (conn.state !== "ACTIVE") {
         throw new AppError("FORBIDDEN", `Connection is ${conn.state}; further data collection is blocked.`);
       }

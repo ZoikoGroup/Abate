@@ -1,18 +1,18 @@
 {
   "suite": "Constitutional & Isolation Boundary Verification (ZAB-ENG-001)",
   "command": "npm run test-boundaries",
-  "timestamp": "2026-11-12T11:17:55.857Z",
+  "timestamp": "2026-11-14T04:57:02.598Z",
   "role": "AUDITOR / BOUNDARY_VERIFIER",
   "total": 57,
   "passed": 57,
   "failed": 0,
-  "durationMs": 287,
+  "durationMs": 266,
   "tests": [
     {
       "id": 1,
       "name": "Foreign tenant ID returns zero rows (Row-Level Security hides existence)",
       "status": "PASSED",
-      "durationMs": 39
+      "durationMs": 31
     },
     {
       "id": 2,
@@ -24,7 +24,7 @@
       "id": 3,
       "name": "Pooled connection reuse does not leak tenant context across requests",
       "status": "PASSED",
-      "durationMs": 0
+      "durationMs": 1
     },
     {
       "id": 4,
@@ -42,31 +42,31 @@
       "id": 6,
       "name": "Outbox publisher handles crashes and consumer inbox deduplicates duplicate deliveries",
       "status": "PASSED",
-      "durationMs": 1
+      "durationMs": 2
     },
     {
       "id": 7,
       "name": "Decoy Lab: Prohibited fields (screenshots, sick reason) are rejected with zero persistence trace",
       "status": "PASSED",
-      "durationMs": 30
+      "durationMs": 33
     },
     {
       "id": 8,
       "name": "Duplicate batch delivery returns previous receipt and adds zero work facts",
       "status": "PASSED",
-      "durationMs": 5
+      "durationMs": 4
     },
     {
       "id": 9,
       "name": "Higher revision appends new record without destroying historical revision 1",
       "status": "PASSED",
-      "durationMs": 3
+      "durationMs": 4
     },
     {
       "id": 10,
       "name": "Paused connector refuses ingestion immediately with 403 FORBIDDEN",
       "status": "PASSED",
-      "durationMs": 2
+      "durationMs": 3
     },
     {
       "id": 11,
@@ -84,13 +84,13 @@
       "id": 13,
       "name": "Contributor floor gate: n=9 contributors are suppressed with safe UNAVAILABLE; n=10 releases",
       "status": "PASSED",
-      "durationMs": 3
+      "durationMs": 2
     },
     {
       "id": 14,
       "name": "Overlap differencing gate: Two cohorts differing by 1 person (symmetric difference < 5) are blocked",
       "status": "PASSED",
-      "durationMs": 1
+      "durationMs": 2
     },
     {
       "id": 15,
@@ -102,7 +102,7 @@
       "id": 16,
       "name": "Concurrent requests are serialized by tenant disclosure lock; single read path has zero contributor counts",
       "status": "PASSED",
-      "durationMs": 1
+      "durationMs": 3
     },
     {
       "id": 17,
@@ -126,13 +126,13 @@
       "id": 20,
       "name": "Phase 4 Verification Suggestion: Clean improvement without adjacent worsening suggests EFFECTIVE",
       "status": "PASSED",
-      "durationMs": 1
+      "durationMs": 0
     },
     {
       "id": 21,
       "name": "Phase 4 Evidence Package: Exports complete vertical slice with verifiable SHA-256 manifest",
       "status": "PASSED",
-      "durationMs": 1
+      "durationMs": 3
     },
     {
       "id": 22,
@@ -150,19 +150,19 @@
       "id": 24,
       "name": "Phase 5 Retention: With no configured class a run deletes nothing (no invented default)",
       "status": "PASSED",
-      "durationMs": 2
+      "durationMs": 1
     },
     {
       "id": 25,
       "name": "Phase 5 Retention: Durations outside the pack floor/ceiling, or without pack coverage, are refused",
       "status": "PASSED",
-      "durationMs": 6
+      "durationMs": 8
     },
     {
       "id": 26,
       "name": "Phase 5 Legal Hold: Held facts survive purge; eligible = purged + held; tombstones are verified and content-free",
       "status": "PASSED",
-      "durationMs": 4
+      "durationMs": 5
     },
     {
       "id": 27,
@@ -174,43 +174,43 @@
       "id": 28,
       "name": "Phase 5 Tombstone: A purged record re-delivered by the source is counted duplicate, not resurrected",
       "status": "PASSED",
-      "durationMs": 6
+      "durationMs": 2
     },
     {
       "id": 29,
       "name": "Phase 5 Purge Guard: Deleting a work fact without a tombstone, or under legal hold, is refused by storage",
       "status": "PASSED",
-      "durationMs": 5
+      "durationMs": 6
     },
     {
       "id": 30,
       "name": "Phase 5 Isolation: Tenant B sees none of Tenant A's classes, holds, runs or tombstones and cannot release A's hold",
       "status": "PASSED",
-      "durationMs": 3
+      "durationMs": 1
     },
     {
       "id": 31,
       "name": "Phase 5 Authority: MEMBER and CONTROL_OWNER cannot place legal holds or run retention (FORBIDDEN)",
       "status": "PASSED",
-      "durationMs": 0
+      "durationMs": 1
     },
     {
       "id": 32,
       "name": "Phase 5 Fail Closed: A class outside a newer pack version's floor blocks the run instead of deleting",
       "status": "PASSED",
-      "durationMs": 2
+      "durationMs": 1
     },
     {
       "id": 33,
       "name": "B8 Diagnostic Receipt: content-free, tenant-scoped and verifiable after transport",
       "status": "PASSED",
-      "durationMs": 4
+      "durationMs": 2
     },
     {
       "id": 34,
       "name": "B8 Diagnostic Receipt: any edit after issue, or a forged receipt, fails verification",
       "status": "PASSED",
-      "durationMs": 2
+      "durationMs": 1
     },
     {
       "id": 35,
@@ -222,7 +222,7 @@
       "id": 36,
       "name": "Phase 6 AI Lab 2: Fabricated citation rejected by validator (no hallucinations)",
       "status": "PASSED",
-      "durationMs": 2
+      "durationMs": 1
     },
     {
       "id": 37,
@@ -234,25 +234,25 @@
       "id": 38,
       "name": "Phase 6 AI Lab 4: Request to infer an individual is refused before any model call",
       "status": "PASSED",
-      "durationMs": 0
+      "durationMs": 1
     },
     {
       "id": 39,
       "name": "Phase 6 Action Lab 5: Mutated action parameters fail grant verification (FORBIDDEN)",
       "status": "PASSED",
-      "durationMs": 3
+      "durationMs": 2
     },
     {
       "id": 40,
       "name": "Phase 6 Action Lab 6: Timeout after provider dispatch records UNKNOWN_OUTCOME",
       "status": "PASSED",
-      "durationMs": 4
+      "durationMs": 3
     },
     {
       "id": 41,
       "name": "Phase 6 Action Lab 7: Stale worker write blocked by fencing token mismatch",
       "status": "PASSED",
-      "durationMs": 2
+      "durationMs": 1
     },
     {
       "id": 42,
@@ -270,7 +270,7 @@
       "id": 44,
       "name": "Review fix: tenant policy bindings resolve to the bound packs for each tenant",
       "status": "PASSED",
-      "durationMs": 3
+      "durationMs": 2
     },
     {
       "id": 45,
@@ -282,13 +282,13 @@
       "id": 46,
       "name": "Review fix: a grant cannot dispatch a different attempt or another tenant's attempt",
       "status": "PASSED",
-      "durationMs": 4
+      "durationMs": 6
     },
     {
       "id": 47,
       "name": "Review fix: a live lease cannot be stolen while the provider call is in flight",
       "status": "PASSED",
-      "durationMs": 2
+      "durationMs": 4
     },
     {
       "id": 48,
@@ -300,37 +300,37 @@
       "id": 49,
       "name": "Catalog: retention coverage resolves the tenant's bound JURISDICTION pack and refuses ambiguity",
       "status": "PASSED",
-      "durationMs": 1
+      "durationMs": 2
     },
     {
       "id": 50,
       "name": "AI accept: an accepted cause draft is stored as PROPOSED (not with a user id as its status)",
       "status": "PASSED",
-      "durationMs": 3
+      "durationMs": 2
     },
     {
       "id": 51,
       "name": "Evidence & corrections: a correction marks only overlapping releases STALE and supersedes only packages containing them",
       "status": "PASSED",
-      "durationMs": 20
+      "durationMs": 23
     },
     {
       "id": 52,
       "name": "Outbox worker: crash after delivery leaves the event unpublished; redelivery is deduplicated",
       "status": "PASSED",
-      "durationMs": 28
+      "durationMs": 22
     },
     {
       "id": 53,
       "name": "Phase 7 Lab 1: Performance outcome write cannot close an open hazard (Plane B cannot mutate Plane A)",
       "status": "PASSED",
-      "durationMs": 5
+      "durationMs": 2
     },
     {
       "id": 54,
       "name": "Phase 7 Lab 2: Prohibited claims in outcome evaluation are strictly rejected",
       "status": "PASSED",
-      "durationMs": 2
+      "durationMs": 1
     },
     {
       "id": 55,
@@ -342,13 +342,13 @@
       "id": 56,
       "name": "Phase 7 Lab 4: Cross-plane release endpoint isolation (Plane B hidden from Plane A reader)",
       "status": "PASSED",
-      "durationMs": 2
+      "durationMs": 3
     },
     {
       "id": 57,
       "name": "Phase 7 Lab 5: AI Change assessment workflow enforces stage guards and blocks closure on open obligations",
       "status": "PASSED",
-      "durationMs": 16
+      "durationMs": 11
     }
   ]
 }

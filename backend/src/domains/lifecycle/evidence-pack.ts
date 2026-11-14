@@ -4,6 +4,7 @@ import { Tx } from "../../platform/db/with-tenant";
 import { AppError } from "../../platform/errors";
 import { EvidencePackageView } from "../../contracts/governance";
 import { canonicalJson, sha256Hex } from "../../platform/canonical";
+import { buildMerkleTree } from "../../platform/merkle";
 
 export interface StoredEvidenceItem {
   type: string;
@@ -130,12 +131,15 @@ export async function issuePackage(
     sha256: it.sha256
   }));
 
+  const merkleTree = buildMerkleTree(manifestItems.map(it => it.sha256));
+
   const manifest = {
     schema: "abate.evidence.v1",
     cutoff,
     issuer: args.issuerPrincipalId,
     classification,
-    items: manifestItems
+    items: manifestItems,
+    merkleRoot: merkleTree.root
   };
 
   const manifestBytes = canonicalJson(manifest);
@@ -192,6 +196,8 @@ export async function issuePackage(
     issuerPrincipalId: args.issuerPrincipalId,
     classification,
     manifestHash,
+    merkleRoot: merkleTree.root,
+    merkleProofs: merkleTree.leafProofs,
     supersedesId: args.supersedesId || null,
     supersededById: null,
     state: "ISSUED",

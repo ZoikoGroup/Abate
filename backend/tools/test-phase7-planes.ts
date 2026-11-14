@@ -14,7 +14,7 @@ import crypto from "node:crypto";
 import { GOLDEN_01 } from "../src/fixtures/golden01";
 import { seedTwoTenants } from "../src/fixtures/seed";
 import { createDevToken, authenticate, resolveActor } from "../src/domains/tenant/auth";
-import { withTenant, memDb } from "../src/platform/db/with-tenant";
+import { withTenant } from "../src/platform/db/with-tenant";
 import { setFeatureFlag, evaluateOutcome } from "../src/domains/performance";
 import { getRelease } from "../src/domains/privacy";
 import {

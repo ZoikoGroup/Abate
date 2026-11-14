@@ -30,14 +30,14 @@ export const PublishPackInput = z.object({
   packKey: z.string().regex(/^[a-z0-9-]{3,64}$/),
   version: z.number().int().positive(),
   kind: z.enum(["JURISDICTION", "SECTOR", "CUSTOMER"]),
-  effectiveFrom: z.string().datetime(),
+  effectiveFrom: z.iso.datetime(),
   sourceRefs: z.array(z.string().min(3)).min(1),
   accountableReviewer: z.string().min(3),
   reviewDate: z.string().regex(/^\d{4}-\d{2}-\d{2}$/),
-  content: z.object({
+  content: z.looseObject({
     title: z.string().min(3),
     retention: RetentionBounds.optional()
-  }).passthrough()
+  })
 }).strict();
 export type PublishPackInput = z.infer<typeof PublishPackInput>;
 
@@ -50,7 +50,7 @@ export type SetRetentionClassInput = z.infer<typeof SetRetentionClassInput>;
 
 export const PlaceLegalHoldInput = z.object({
   dataCategory: DataCategoryEnum,
-  scopeConnectionId: z.string().uuid().optional(),
+  scopeConnectionId: z.uuid().optional(),
   matterRef: z.string().min(2),
   reason: z.string().min(5)
 }).strict();

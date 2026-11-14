@@ -12,11 +12,10 @@
 // 7. Deterministic Arithmetic & Idempotent Query Replay
 
 import assert from "node:assert";
-import crypto from "node:crypto";
 import { GOLDEN_01 } from "../src/fixtures/golden01";
 import { seedTwoTenants } from "../src/fixtures/seed";
 import { compileRelease } from "../src/domains/privacy/compile-release";
-import { withTenant, withWorker, memDb } from "../src/platform/db/with-tenant";
+import { withTenant, withWorker } from "../src/platform/db/with-tenant";
 import { SemanticQuery } from "../src/contracts/release";
 
 console.log("\x1b[36m=== Abate Task Runner: test-reconstruction (Reconstruction Attack Lab) ===\x1b[0m\n");

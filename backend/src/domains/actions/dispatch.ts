@@ -17,7 +17,7 @@ export interface ToolSender {
 
 export const toolProviders: Record<string, ToolSender> = {
   "ticket_notification": {
-    async send(params, options) {
+    async send(params, _options) {
       if (params.simulateTimeout) {
         throw new Error("ETIMEDOUT: Provider connection timeout after dispatch");
       }
@@ -28,7 +28,7 @@ export const toolProviders: Record<string, ToolSender> = {
     }
   },
   "calendar_window": {
-    async send(params, options) {
+    async send(_params, _options) {
       return {
         messageId: `cal-evt-${crypto.randomUUID().slice(0, 8)}`,
         status: "CREATED"

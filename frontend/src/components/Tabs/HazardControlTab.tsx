@@ -73,26 +73,6 @@ export function HazardControlTab({ currentTenant, token }: HazardControlTabProps
     details: string;
   } | null>(null);
 
-  // Load Legal Sector Matters & Fatigue Assessment
-  const loadLegalMatters = async () => {
-    if (!token) return;
-    try {
-      const matters = await fetchLegalMatters(token);
-      setLegalMatters(matters);
-      if (matters.length > 0) {
-        const first = matters[0];
-        setSelectedMatterId(first.matterId);
-        const assessment = await checkLegalFatigue(first.matterId, token);
-        setFatigueAssessment(assessment);
-      } else {
-        setSelectedMatterId(null);
-        setFatigueAssessment(null);
-      }
-    } catch (err) {
-      console.warn("Could not load legal sector matters:", err);
-    }
-  };
-
   const handleSelectMatter = async (matterId: string) => {
     setSelectedMatterId(matterId);
     if (!token) return;
@@ -125,8 +105,39 @@ export function HazardControlTab({ currentTenant, token }: HazardControlTabProps
   };
 
   useEffect(() => {
-    loadHazards();
-    loadLegalMatters();
+    if (!token) return;
+    let cancelled = false;
+    void fetchHazards(token)
+      .then((list) => {
+        if (cancelled) return;
+        setHazards(list);
+        if (list.length > 0) {
+          setSelectedHazardId((prev) => prev || list[0].id);
+        }
+      })
+      .catch((err) => {
+        console.warn("Could not load hazards:", err);
+      });
+    void fetchLegalMatters(token)
+      .then(async (matters) => {
+        if (cancelled) return;
+        setLegalMatters(matters);
+        if (matters.length > 0) {
+          const first = matters[0];
+          setSelectedMatterId(first.matterId);
+          const assessment = await checkLegalFatigue(first.matterId, token);
+          if (!cancelled) setFatigueAssessment(assessment);
+        } else {
+          setSelectedMatterId(null);
+          setFatigueAssessment(null);
+        }
+      })
+      .catch((err) => {
+        console.warn("Could not load legal sector matters:", err);
+      });
+    return () => {
+      cancelled = true;
+    };
   }, [token, currentTenant.id]);
 
   // Load Hazard Detail when selection changes

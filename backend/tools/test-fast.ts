@@ -1,6 +1,6 @@
 // backend/tools/test-fast.ts
 import assert from "node:assert";
-import { CreateOrganizationBody, ErrorBody } from "../src/contracts";
+import { CreateOrganizationBody } from "../src/contracts";
 import { createDevToken, authenticate } from "../src/domains/tenant/auth";
 import { computeRequestHash } from "../src/platform/command";
 import { AppError } from "../src/platform/errors";

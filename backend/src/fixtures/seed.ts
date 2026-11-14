@@ -1,6 +1,6 @@
 // backend/src/fixtures/seed.ts
 import { GOLDEN_01 } from "./golden01";
-import { memDb, appPool } from "../platform/db/with-tenant";
+import { memDb } from "../platform/db/with-tenant";
 import { assertNotProduction } from "../platform/config";
 import crypto from "node:crypto";
 import { packContentHash } from "../domains/lifecycle/jurisdiction";

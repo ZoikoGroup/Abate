@@ -5,7 +5,6 @@
 
 import { z } from "zod";
 import { AppError } from "../../platform/errors";
-import { Interval } from "../measure/intervals";
 
 export const PracticeAreaEnum = z.enum([
   "COMMERCIAL_LITIGATION",
@@ -37,9 +36,9 @@ export const LegalMatterSchema = z.object({
   practiceArea: PracticeAreaEnum,
   currentPhase: DemandWindowEnum,
   jurisdiction: z.enum(["EWHC", "UK_TRIBUNAL", "LCIA_ARBITRATION", "COMPETITION_APPEAL_TRIBUNAL"]),
-  leadPartnerId: z.string().uuid(),
-  activeWindowStart: z.string().datetime({ offset: false }),
-  activeWindowEnd: z.string().datetime({ offset: false })
+  leadPartnerId: z.uuid(),
+  activeWindowStart: z.iso.datetime({ offset: false }),
+  activeWindowEnd: z.iso.datetime({ offset: false })
 }).strict(); // .strict() rejects any unauthorized or prohibited fields!
 
 export type LegalMatter = z.infer<typeof LegalMatterSchema>;

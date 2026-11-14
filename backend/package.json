@@ -25,6 +25,11 @@
     "test-retention": "tsx tools/test-phase5-retention.ts",
     "test-ai": "tsx tools/test-phase6-ai.ts",
     "test-planes": "tsx tools/test-phase7-planes.ts",
+    "verify-pg": "tsx tools/verify-pg-clean.ts",
+    "verify-evidence": "tsx tools/verify-evidence.ts --self-test",
+    "drill-kill-switches": "tsx tools/drill-kill-switches.ts",
+    "sign-dossier": "tsx tools/sign-dossier.ts",
+    "sim-30d": "tsx tools/simulate-30d-http.ts",
     "build": "tsc",
     "start": "node dist/index.js",
     "dev": "tsx watch src/index.ts"

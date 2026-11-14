@@ -18,9 +18,17 @@ interface CohortAnalyticsTabProps {
 }
 
 export function CohortAnalyticsTab({ currentTenant, token }: CohortAnalyticsTabProps) {
+  const defaultCohortRef = currentTenant.id.includes("-b000-")
+    ? "org:00000000-0000-4000-b001-000000000001"
+    : "org:00000000-0000-4000-a001-000000000001";
   const [metricDefs, setMetricDefs] = useState<MetricDefinition[]>([]);
   const [selectedMetricId, setSelectedMetricId] = useState("BOUNDARY_INTRUSION_SHARE");
-  const [cohortRef, setCohortRef] = useState("org:00000000-0000-4000-a001-000000000001");
+  const [cohortRef, setCohortRef] = useState(defaultCohortRef);
+  const [prevTenantId, setPrevTenantId] = useState(currentTenant.id);
+  if (prevTenantId !== currentTenant.id) {
+    setPrevTenantId(currentTenant.id);
+    setCohortRef(defaultCohortRef);
+  }
   const [periodStart, setPeriodStart] = useState("2026-03-02T00:00:00.000Z");
   const [periodEnd, setPeriodEnd] = useState("2026-03-30T00:00:00.000Z"); // 28 days
   const [releaseClass, setReleaseClass] = useState<"CLASS_A" | "CLASS_B">("CLASS_B");
@@ -82,15 +90,6 @@ export function CohortAnalyticsTab({ currentTenant, token }: CohortAnalyticsTabP
         setSelectedMetricId("BOUNDARY_INTRUSION_SHARE");
       });
   }, [token]);
-
-  // Adjust default cohortRef when switching tenant
-  useEffect(() => {
-    if (currentTenant.id.includes("-b000-")) {
-      setCohortRef("org:00000000-0000-4000-b001-000000000001");
-    } else {
-      setCohortRef("org:00000000-0000-4000-a001-000000000001");
-    }
-  }, [currentTenant.id]);
 
   // Attempt to load baseline release on mount
   useEffect(() => {

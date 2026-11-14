@@ -22,11 +22,9 @@ import {
   EvaluateOutcomeInput,
   ToggleFeatureFlagInput,
   CreateAiChangeProfileInput,
-  CreateAssessmentInput,
   AdvanceAssessmentInput
 } from "./contracts";
 import {
-  isFeatureFlagEnabled,
   setFeatureFlag,
   listFeatureFlags,
   requireFeatureFlag,
@@ -40,8 +38,6 @@ import {
 } from "./domains/performance";
 import {
   registerAiChangeProfile,
-  getAiChangeProfile,
-  listAiChangeProfiles,
   createAssessment,
   advanceAssessment,
   getAssessment,
@@ -63,7 +59,6 @@ import {
   getDefaultEntitlements,
   resolvePolicy,
   recordDecisionEnvelope,
-  getDecisionEnvelope,
   issuePackage,
   getEvidencePackage,
   requestErasure,
@@ -76,7 +71,6 @@ import {
   ReviewCauseInput,
   CreateControlInput,
   UpdateControlInput,
-  ApproveControlInput,
   ImplementationReceiptInput,
   PinVerificationPlanInput,
   ConcludeVerificationInput,
@@ -86,7 +80,6 @@ import {
 import {
   materialHash,
   computeAllowedActions,
-  evaluateSuggestion,
   exportEvidencePackage
 } from "./domains/control";
 import {
@@ -1608,9 +1601,6 @@ app.post("/api/v2/evidence-packages", async (req: Request, res: Response) => {
     const who = await authenticate(getHeader(req, "authorization"));
     await resolveActor(who.tenantId, who.subject, new Date());
 
-    const periodStart = req.body.periodStart || new Date(Date.now() - 28 * 24 * 3600 * 1000).toISOString();
-    const periodEnd = req.body.periodEnd || new Date().toISOString();
-
     const out = await withTenant(who.tenantId, async (tx) => {
       const hRes = await tx.q("SELECT * FROM hazard WHERE tenant_id = $1 LIMIT 1", [who.tenantId]);
       const hazardId = req.body.hazardId || (hRes.rows[0]?.id);
@@ -2149,7 +2139,7 @@ app.post("/api/v2/flags", async (req: Request, res: Response) => {
 app.post("/api/v2/outcomes/definitions", async (req: Request, res: Response) => {
   try {
     const who = await authenticate(getHeader(req, "authorization"));
-    const actor = await resolveActor(who.tenantId, who.subject, new Date());
+    await resolveActor(who.tenantId, who.subject, new Date());
     const input = CreateOutcomeDefinitionInput.parse(req.body);
     const out = await withTenant(who.tenantId, async (tx) => {
       await requireFeatureFlag(tx, who.tenantId, "outcomes_plane_b");

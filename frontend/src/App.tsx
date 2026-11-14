@@ -24,10 +24,11 @@ import { LegalPracticeTab } from "./components/Tabs/LegalPracticeTab";
 import { OperationsTab } from "./components/Tabs/OperationsTab";
 import { OutboxTab } from "./components/Tabs/OutboxTab";
 import { AuditTab } from "./components/Tabs/AuditTab";
+import { AuditVerifierTab } from "./components/Tabs/AuditVerifierTab";
 import { LiveDemoConsole } from "./components/Demo/LiveDemoConsole";
 import "./index.css";
 
-type TabKey = "constitutional" | "isolation" | "organizations" | "ingestion" | "analytics" | "hazards" | "retention" | "ai" | "outcomes" | "legal" | "operations" | "outbox" | "audit";
+type TabKey = "constitutional" | "isolation" | "organizations" | "ingestion" | "analytics" | "hazards" | "retention" | "ai" | "outcomes" | "legal" | "operations" | "outbox" | "audit" | "verifier";
 
 export default function App() {
   const [activeTenantId, setActiveTenantId] = useState(PRESET_TENANTS[0].id);
@@ -120,8 +121,15 @@ export default function App() {
 
   // Initial load
   useEffect(() => {
-    fetchSystemMetadata();
-    fetchTenantData(activeTenantId, activeRole);
+    let cancelled = false;
+    void Promise.resolve().then(() => {
+      if (cancelled) return;
+      void fetchSystemMetadata();
+      void fetchTenantData(activeTenantId, activeRole);
+    });
+    return () => {
+      cancelled = true;
+    };
   }, [fetchSystemMetadata, fetchTenantData, activeTenantId, activeRole]);
 
   const handleSelectTenant = (tenantId: string) => {
@@ -253,6 +261,13 @@ export default function App() {
         </button>
         <button
           type="button"
+          className={`tab-button ${activeTab === "verifier" ? "active" : ""}`}
+          onClick={() => setActiveTab("verifier")}
+        >
+          Audit Verifier &amp; Merkle
+        </button>
+        <button
+          type="button"
           className={`tab-button ${activeTab === "constitutional" ? "active" : ""}`}
           onClick={() => setActiveTab("constitutional")}
         >
@@ -359,6 +374,13 @@ export default function App() {
             currentTenant={currentTenant}
             auditEvents={auditEvents}
             onRefresh={() => fetchTenantData(activeTenantId, activeRole)}
+          />
+        )}
+
+        {activeTab === "verifier" && (
+          <AuditVerifierTab
+            currentTenant={currentTenant}
+            token={token}
           />
         )}
       </main>

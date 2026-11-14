@@ -1,0 +1,59 @@
+{
+  "schema": "abate.kill-switch-drill.v1",
+  "executedAt": "2026-11-14T04:57:27.340Z",
+  "totalSwitches": 5,
+  "passedSwitches": 5,
+  "allPassed": true,
+  "results": [
+    {
+      "scope": "connector:zoikotime",
+      "testedPath": "POST /api/v2/connectors/zoikotime/batches",
+      "unaffectedPath": "GET /api/v2/hazards",
+      "blockedStatus": 503,
+      "unaffectedStatus": 200,
+      "restored": true,
+      "passed": true,
+      "detail": "ZoikoTime ingestion blocked with 503 while hazards read stayed 200"
+    },
+    {
+      "scope": "release_path",
+      "testedPath": "POST /api/v2/releases/query",
+      "unaffectedPath": "GET /api/v2/organizations",
+      "blockedStatus": 503,
+      "unaffectedStatus": 200,
+      "restored": true,
+      "passed": true,
+      "detail": "Privacy release compiler blocked with 503 while organizations read stayed 200"
+    },
+    {
+      "scope": "pack:legal-uk-sra",
+      "testedPath": "GET /api/v2/policy/resolution + resolveTenantCoverage",
+      "unaffectedPath": "GET /api/v2/connections",
+      "blockedStatus": 503,
+      "unaffectedStatus": 200,
+      "restored": true,
+      "passed": true,
+      "detail": "legal-uk-sra marked restricted & NOT_COVERED while connections read stayed 200"
+    },
+    {
+      "scope": "all_ai",
+      "testedPath": "POST /api/v2/ai/explain-release",
+      "unaffectedPath": "GET /api/v2/hazards",
+      "blockedStatus": 503,
+      "unaffectedStatus": 200,
+      "restored": true,
+      "passed": true,
+      "detail": "AI endpoint failed closed (503) while manual hazard workflow stayed 200"
+    },
+    {
+      "scope": "tool:ticket_notification",
+      "testedPath": "POST /api/v2/actions/:id/dispatch",
+      "unaffectedPath": "GET /api/v2/ai/kill-switches",
+      "blockedStatus": 503,
+      "unaffectedStatus": 200,
+      "restored": true,
+      "passed": true,
+      "detail": "Action dispatch for tool:ticket_notification blocked with 503 while kill-switch read stayed 200"
+    }
+  ]
+}

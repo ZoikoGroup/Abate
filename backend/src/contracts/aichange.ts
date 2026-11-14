@@ -49,7 +49,7 @@ export interface AiChangeProfileView {
 }
 
 export const CreateAssessmentInput = z.object({
-  profileId: z.string().uuid(),
+  profileId: z.uuid(),
   profileVersion: z.number().int().min(1).default(1)
 }).strict();
 export type CreateAssessmentInput = z.infer<typeof CreateAssessmentInput>;

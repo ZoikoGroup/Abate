@@ -55,8 +55,26 @@ export function IngestionTab({ currentTenant, token, onRefresh }: IngestionTabPr
   }, [token]);
 
   useEffect(() => {
-    loadData();
-  }, [loadData, currentTenant.id]);
+    if (!token) return;
+    let cancelled = false;
+    void Promise.all([
+      fetchConnections(token),
+      fetchReceipts(token),
+      fetchWorkFacts(token)
+    ])
+      .then(([conns, recs, facts]) => {
+        if (cancelled) return;
+        setConnections(conns);
+        setReceipts(recs);
+        setWorkFacts(facts);
+      })
+      .catch((err) => {
+        console.error("Failed to load ingestion data:", err);
+      });
+    return () => {
+      cancelled = true;
+    };
+  }, [token, currentTenant.id]);
 
   // Connection State Controls
   const handleToggleState = async (conn: Connection, action: "pause" | "resume" | "revoke") => {

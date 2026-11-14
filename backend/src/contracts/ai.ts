@@ -50,8 +50,8 @@ export const ContextRefSchema = z.object({
 export type ContextRef = z.infer<typeof ContextRefSchema>;
 
 export const AiRunViewSchema = z.object({
-  id: z.string().uuid(),
-  tenantId: z.string().uuid(),
+  id: z.uuid(),
+  tenantId: z.uuid(),
   useCaseKey: z.string().min(1),
   useCaseVersion: z.number().int().positive(),
   actorId: z.string().min(1),
@@ -64,7 +64,7 @@ export const AiRunViewSchema = z.object({
   tokensIn: z.number().int().nonnegative().optional(),
   tokensOut: z.number().int().nonnegative().optional(),
   costMinor: z.number().int().nonnegative().optional(),
-  createdAt: z.string().datetime()
+  createdAt: z.iso.datetime()
 }).strict();
 export type AiRunView = z.infer<typeof AiRunViewSchema>;
 

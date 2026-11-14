@@ -5,8 +5,7 @@ import fs from "node:fs";
 import path from "node:path";
 import { GOLDEN_01 } from "../src/fixtures/golden01";
 import { seedTwoTenants } from "../src/fixtures/seed";
-import { withTenant, withTenantOn, memDb } from "../src/platform/db/with-tenant";
-import { runCommand, computeRequestHash } from "../src/platform/command";
+import { withTenant, memDb } from "../src/platform/db/with-tenant";
 import { createOrganization, getOrganization } from "../src/domains/tenant/commands";
 import { ingestBatch } from "../src/domains/ingest/ingest-batch";
 import { setConnectionState } from "../src/domains/ingest/connections";
@@ -30,8 +29,8 @@ import { generateDiagnosticReceipt, verifyDiagnosticReceipt } from "../src/domai
 import { requestErasure, resolvePolicy, resolveTenantCoverage, issuePackage, getEvidencePackage, recordCorrection, acknowledgeCorrection } from "../src/domains/lifecycle";
 import { runAiUseCase, acceptAiRun, setKillSwitch, seedApprovedKnowledge } from "../src/domains/ai";
 import { mintGrant, verifyGrant, paramHashOf, createActionAttempt, dispatchAttempt, proposeAction, dispatchAction, toolProviders } from "../src/domains/actions";
-import { setFeatureFlag, isFeatureFlagEnabled, evaluateOutcome } from "../src/domains/performance";
-import { registerAiChangeProfile, createAssessment, advanceAssessment, getAssessment } from "../src/domains/aichange";
+import { setFeatureFlag, evaluateOutcome } from "../src/domains/performance";
+import { registerAiChangeProfile, createAssessment, advanceAssessment } from "../src/domains/aichange";
 
 
 console.log("\x1b[36m=== Abate Task Runner: test-boundaries (Constitutional & Isolation Gates) ===\x1b[0m");
@@ -97,15 +96,8 @@ async function run() {
 
   // 2. Missing Tenant Context fails closed
   await test("Missing tenant context fails closed (0 rows accessible without tenant context)", async () => {
-    // When no set_config has occurred, queries against tenant-isolated tables return 0 rows
-    const client = {
-      tenantContext: null,
-      async q(sql: string) {
-        return withTenant(tenantAId, async () => { return { rowCount: 0, rows: [] }; });
-      }
-    };
     // Direct query without context
-    const res = await withTenant(tenantAId, async (tx) => {
+    const res = await withTenant(tenantAId, async (_tx) => {
       // Simulate missing tenant by evaluating empty string / null context
       return { rowCount: 0 };
     });

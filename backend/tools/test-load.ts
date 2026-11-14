@@ -8,7 +8,7 @@ import { GOLDEN_01 } from "../src/fixtures/golden01";
 import { seedTwoTenants } from "../src/fixtures/seed";
 import { withTenant } from "../src/platform/db/with-tenant";
 import { createOrganization } from "../src/domains/tenant/commands";
-import { compileRelease, getRelease } from "../src/domains/privacy";
+import { compileRelease } from "../src/domains/privacy";
 import { p95 } from "../src/platform/slo";
 import { Actor } from "../src/platform/command";
 
@@ -24,12 +24,6 @@ const actorA: Actor = {
   tenantId: tenantA,
   principalId: "00000000-0000-4000-a000-000000000001",
   memberships: [{ domain_role: "RISK_OWNER", organization_id: "org-1" }]
-};
-
-const actorB: Actor = {
-  tenantId: tenantB,
-  principalId: "00000000-0000-4000-b000-000000000001",
-  memberships: [{ domain_role: "RISK_OWNER", organization_id: "org-2" }]
 };
 
 async function runLoadTests() {

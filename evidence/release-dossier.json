@@ -1,1 +1,260 @@
-{"build":{"architecture":"Next.js App Router (UI) + Express Monolith (Backend) + PostgreSQL (Forced RLS)","commitSha":"eb5e7d064ceca1f0e1dd3a215c6bf83635f156a7","nodeVersion":"v24.15.0","rollbackTarget":"commit-baseline-001","sbomDigest":"2f66ab03bb7671447fec52099fc11d1030a082e295b9a1ea110d07f66fdac38c","sbomRef":"evidence/sbom.json"},"decision":{"approvedScope":"Tightly scoped design-partner pilot (UK Legal Sector)","conditions":["Operational pilot limited to Tenant A and Tenant B scoped synthetic and governed environments","Feature flags for Plane B outcomes default OFF until customer onboarding review","Continuous monitoring via 5 independent kill switches"],"outcome":"READY FOR REVIEW","signOffAuthority":"Zoiko Abate Engineering Steering Committee","signOffDate":"2026-11-07"},"defects":{"P0":0,"P1":0,"P2":0,"P3":0},"dossierId":"dossier-ec16a5ab-d0f3-49a0-a17b-0e0f4d77732b","generatedAt":"2026-11-12T11:35:18.121Z","killSwitches":[{"description":"Connector: Ingest Workload","scope":"connector:zoikotime","state":"DRILL_VERIFIED"},{"description":"Analytical Release Path","scope":"release_path","state":"DRILL_VERIFIED"},{"description":"Jurisdiction Policy Pack","scope":"pack:legal-uk-sra","state":"DRILL_VERIFIED"},{"description":"Artificial Intelligence Runtime","scope":"all_ai","state":"DRILL_VERIFIED"},{"description":"External Actions Tool Broker","scope":"tool:ticket_notification","state":"DRILL_VERIFIED"}],"recoveryRehearsal":{"isolatedVerification":"PASSED (NOBYPASSRLS verified)","measuredRpoMinutes":5,"measuredRtoHours":1.2,"scenario":"Core regional failure and backup restore","targetRpoMinutes":15,"targetRtoHours":4,"tombstoneReconciliation":"PASSED (0 resurrected facts)"},"schemaVersion":"abate.release-dossier.v1","scope":{"connectors":["ZoikoTime v1.0 (Allowlisted approved time intervals)"],"constitutionalInvariants":["Zero individual productivity scoring or employee ranking","Zero surveillance or screenshot capture","Forced Row-Level Security on all tenant tables (NOBYPASSRLS)","Minimum contributor floor n >= 10 for all Class B/C releases","Database trigger isolation blocking Plane B from mutating Plane A"],"environment":"sandbox-pilot","jurisdictionPacks":["legal-uk-sra v1.0 (Solicitors Regulation Authority)"],"namedTenants":[{"id":"00000000-0000-4000-a000-00000000000a","jurisdiction":"legal-uk-sra","name":"Apex Legal Partners (Tenant A)"},{"id":"00000000-0000-4000-b000-00000000000b","jurisdiction":"legal-uk-bar","name":"Beacon Chambers (Tenant B)"}],"valuePlanes":{"planeA":"Risk Assurance (Hazards, Causes, Version-Bound Controls, Verification)","planeB":"Work-Design Outcomes (Four Families: Workload, Role Clarity, Coordination, AI Quality)"}},"sloManifest":{"digest":"ca06612b7563e36a42b0f27ff515aca096946d0f7ec9536533268812a8d55dde","ref":"ops/slo-manifest.v1.yaml","targets":{"availability":"99.9% monthly","mutationsP95Ms":800,"ordinaryReadsP95Ms":500,"releasedAnalyticsP95Ms":1500,"rpoMinutes":15,"rtoHours":4}},"status":"RATIFIED","testSuites":[{"cases":9,"name":"Unit & Policy Invariants (test-fast)","status":"PASSED","suiteRunner":"tsx tools/test-fast.ts"},{"cases":57,"name":"Constitutional & Isolation Boundaries (test-boundaries)","status":"PASSED","suiteRunner":"tsx tools/test-boundaries.ts"},{"cases":5,"name":"Decoy Minimization Lab (test-minimization)","status":"PASSED","suiteRunner":"tsx tools/test-minimization.ts"},{"cases":17,"name":"End-to-End Golden Cycle (demo-cycle)","status":"PASSED","suiteRunner":"tsx tools/demo-cycle.ts"},{"cases":1,"name":"Independent Evidence Verifier (verify-evidence)","status":"PASSED","suiteRunner":"tsx tools/verify-evidence.ts"},{"cases":8,"name":"Backup Recovery Reconciliation (reconcile-after-restore)","status":"PASSED","suiteRunner":"tsx tools/reconcile-after-restore.ts"},{"cases":5,"name":"Load, Capacity & Concurrency (test-load)","status":"PASSED","suiteRunner":"tsx tools/test-load.ts"},{"cases":8,"name":"Legal Sector Pack & SRA 2023 Invariants (test-legal)","status":"PASSED","suiteRunner":"tsx tools/test-sector-legal.ts"}]}
+{
+  "schema": "abate.release-dossier.v1",
+  "commitSha": "a6a92cd",
+  "generatedAt": "2026-11-14T04:57:00.288Z",
+  "system": {
+    "name": "Zoiko Abate",
+    "specification": "ZAB-ENG-001",
+    "version": "1.0.0",
+    "architecture": "Two-Plane Modular Monolith with Forced Row-Level Security",
+    "postgresRequirementEnv": "HYBRID_LOCAL_SANDBOX"
+  },
+  "constitutionalInvariants": [
+    {
+      "id": "INV-01",
+      "statement": "Tenant isolation at every seam via PostgreSQL RLS + transaction-local context",
+      "verified": true
+    },
+    {
+      "id": "INV-02",
+      "statement": "Measurement safety floor (k >= 10), overlap differencing (>= 5), and residual blocking (>= 5)",
+      "verified": true
+    },
+    {
+      "id": "INV-03",
+      "statement": "Bounded AI cannot write authoritative state and fails closed behind active kill switches",
+      "verified": true
+    },
+    {
+      "id": "INV-04",
+      "statement": "Append-only ledger and audit trail revoke UPDATE/DELETE from runtime app roles",
+      "verified": true
+    },
+    {
+      "id": "INV-05",
+      "statement": "Two-plane separation prevents Plane B performance metrics from mutating Plane A compliance hazards",
+      "verified": true
+    }
+  ],
+  "testSuites": [
+    {
+      "name": "Boundary & Isolation Suite",
+      "script": "test-boundaries",
+      "phase": "Cross-Phase Constitutional Gates",
+      "testsPassed": 57,
+      "status": "PASS",
+      "exitCode": 0,
+      "durationMs": 3336,
+      "lastRun": "2026-11-14T04:57:03.625Z"
+    },
+    {
+      "name": "Phase 2 Ingestion & Decoy Lab",
+      "script": "test-ingest",
+      "phase": "Phase 2 (Domains S02 & S03)",
+      "testsPassed": 9,
+      "status": "PASS",
+      "exitCode": 0,
+      "durationMs": 6008,
+      "lastRun": "2026-11-14T04:57:09.634Z"
+    },
+    {
+      "name": "Phase 3 Reconstruction Attack Lab",
+      "script": "test-privacy",
+      "phase": "Phase 3 (Domains S04 & S06)",
+      "testsPassed": 8,
+      "status": "PASS",
+      "exitCode": 0,
+      "durationMs": 3569,
+      "lastRun": "2026-11-14T04:57:13.203Z"
+    },
+    {
+      "name": "Phase 4 Control & Evidence Suite",
+      "script": "test-control",
+      "phase": "Phase 4 (BE-007)",
+      "testsPassed": 9,
+      "status": "PASS",
+      "exitCode": 0,
+      "durationMs": 1655,
+      "lastRun": "2026-11-14T04:57:14.858Z"
+    },
+    {
+      "name": "Phase 5 Retention & Legal Hold Suite",
+      "script": "test-retention",
+      "phase": "Phase 5 (B5)",
+      "testsPassed": 11,
+      "status": "PASS",
+      "exitCode": 0,
+      "durationMs": 1698,
+      "lastRun": "2026-11-14T04:57:16.556Z"
+    },
+    {
+      "name": "Phase 6 Bounded AI & Actions Suite",
+      "script": "test-ai",
+      "phase": "Phase 6 (BE-008)",
+      "testsPassed": 11,
+      "status": "PASS",
+      "exitCode": 0,
+      "durationMs": 1579,
+      "lastRun": "2026-11-14T04:57:18.135Z"
+    },
+    {
+      "name": "Phase 7 Two-Plane & AI Change Suite",
+      "script": "test-planes",
+      "phase": "Phase 7 (B7)",
+      "testsPassed": 7,
+      "status": "PASS",
+      "exitCode": 0,
+      "durationMs": 1939,
+      "lastRun": "2026-11-14T04:57:20.074Z"
+    },
+    {
+      "name": "Worker Outbox Crash & Lease Suite",
+      "script": "test-worker",
+      "phase": "Async Reliability",
+      "testsPassed": 6,
+      "status": "PASS",
+      "exitCode": 0,
+      "durationMs": 1456,
+      "lastRun": "2026-11-14T04:57:21.530Z"
+    },
+    {
+      "name": "Postgres Parity & Fail-Closed Guard",
+      "script": "verify-pg",
+      "phase": "Infrastructure & Least-Privilege DB",
+      "testsPassed": 2,
+      "status": "PASS",
+      "exitCode": 0,
+      "durationMs": 2976,
+      "lastRun": "2026-11-14T04:57:24.507Z"
+    },
+    {
+      "name": "Daily Endpoint & Contract Drift Check",
+      "script": "check:endpoints",
+      "phase": "API Catalog Compliance",
+      "testsPassed": 22,
+      "status": "PASS",
+      "exitCode": 0,
+      "durationMs": 2479,
+      "lastRun": "2026-11-14T04:57:26.986Z"
+    },
+    {
+      "name": "Evidence Bundle & Merkle Verifier",
+      "script": "verify-evidence",
+      "phase": "Phase 8 Audit Verifier",
+      "testsPassed": 3,
+      "status": "PASS",
+      "exitCode": 0,
+      "durationMs": 2,
+      "lastRun": "2026-11-14T04:57:26.989Z"
+    },
+    {
+      "name": "Scripted 30-Day Real HTTP Simulation",
+      "script": "sim-30d",
+      "phase": "End-to-End Lifecycle Verification",
+      "testsPassed": 9,
+      "status": "PASS",
+      "exitCode": 0,
+      "durationMs": 285,
+      "lastRun": "2026-11-14T04:57:27.275Z"
+    }
+  ],
+  "totalChecksPassed": 154,
+  "defects": {
+    "p0FailedSuites": 0,
+    "failingSuiteScripts": [],
+    "status": "CLEAR (ZERO OPEN P0 DEFECTS)"
+  },
+  "recoveryRehearsal": {
+    "reconcileTool": "backend/tools/reconcile-after-restore.ts",
+    "executedAt": "2026-11-14T04:57:27.287Z",
+    "targetRtoHours": 4,
+    "targetRpoMinutes": 15,
+    "measuredRtoMs": 0,
+    "measuredRpoMinutes": 0,
+    "reconciledDeletions": 10,
+    "unknownActionsReconciled": 1,
+    "outboxPendingCount": 1,
+    "checksPassed": 9,
+    "status": "PASSED"
+  },
+  "killSwitches": [
+    {
+      "scope": "connector:zoikotime",
+      "testedPath": "POST /api/v2/connectors/zoikotime/batches",
+      "unaffectedPath": "GET /api/v2/hazards",
+      "blockedStatus": 503,
+      "unaffectedStatus": 200,
+      "restored": true,
+      "status": "VERIFIED_LIVE",
+      "detail": "ZoikoTime ingestion blocked with 503 while hazards read stayed 200"
+    },
+    {
+      "scope": "release_path",
+      "testedPath": "POST /api/v2/releases/query",
+      "unaffectedPath": "GET /api/v2/organizations",
+      "blockedStatus": 503,
+      "unaffectedStatus": 200,
+      "restored": true,
+      "status": "VERIFIED_LIVE",
+      "detail": "Privacy release compiler blocked with 503 while organizations read stayed 200"
+    },
+    {
+      "scope": "pack:legal-uk-sra",
+      "testedPath": "GET /api/v2/policy/resolution + resolveTenantCoverage",
+      "unaffectedPath": "GET /api/v2/connections",
+      "blockedStatus": 503,
+      "unaffectedStatus": 200,
+      "restored": true,
+      "status": "VERIFIED_LIVE",
+      "detail": "legal-uk-sra marked restricted & NOT_COVERED while connections read stayed 200"
+    },
+    {
+      "scope": "all_ai",
+      "testedPath": "POST /api/v2/ai/explain-release",
+      "unaffectedPath": "GET /api/v2/hazards",
+      "blockedStatus": 503,
+      "unaffectedStatus": 200,
+      "restored": true,
+      "status": "VERIFIED_LIVE",
+      "detail": "AI endpoint failed closed (503) while manual hazard workflow stayed 200"
+    },
+    {
+      "scope": "tool:ticket_notification",
+      "testedPath": "POST /api/v2/actions/:id/dispatch",
+      "unaffectedPath": "GET /api/v2/ai/kill-switches",
+      "blockedStatus": 503,
+      "unaffectedStatus": 200,
+      "restored": true,
+      "status": "VERIFIED_LIVE",
+      "detail": "Action dispatch for tool:ticket_notification blocked with 503 while kill-switch read stayed 200"
+    }
+  ],
+  "simulation30d": {
+    "mode": "SCRIPTED_REAL_HTTP",
+    "notice": "Scripted scenario running against real Express HTTP endpoints; synthetic cohort fixtures.",
+    "passedSteps": 9,
+    "totalSteps": 9,
+    "durationMs": 285
+  },
+  "evidenceVerification": {
+    "merkleTreeVersion": "abate.merkle.v1",
+    "verifierCli": "backend/tools/verify-evidence.ts",
+    "browserVerifierTab": "AuditVerifierTab.tsx",
+    "epistemicNotice": "Cryptographic hashes and Merkle proofs prove files are unchanged since export, NOT that the underlying claims are true."
+  },
+  "status": "READY FOR REVIEW",
+  "signOff": {
+    "schema": "abate.dossier-signoff.v1",
+    "status": "READY FOR REVIEW",
+    "signedBy": null,
+    "role": null,
+    "signedAt": null,
+    "dossierHash": "f456b34a6610d909e52f42a527ab851b073ab66b8f0e26e7c6888b6dbabf66fc",
+    "instruction": "Run `npm --prefix backend run sign-dossier -- --signer=\"Full Name\" --role=\"Release Lead\"` after manual review."
+  },
+  "decision": {
+    "outcome": "READY FOR REVIEW",
+    "authorityRequired": "Named Accountable Signer (tools/sign-dossier.ts)",
+    "rationale": "All automated test suites, live operational drills, and constitutional checks passed; awaiting explicit named human sign-off."
+  }
+}

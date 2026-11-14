@@ -64,8 +64,25 @@ export function LegalPracticeTab({ currentTenant, token }: LegalPracticeTabProps
   }, [token, selectedMatter]);
 
   useEffect(() => {
-    loadMatters();
-  }, [loadMatters]);
+    if (!token) return;
+    let cancelled = false;
+    void fetchLegalMatters(token)
+      .then((items) => {
+        if (cancelled) return;
+        setMatters(items);
+        if (items.length > 0) {
+          setSelectedMatter((prev) => prev || items[0]);
+        }
+      })
+      .catch((err: any) => {
+        if (!cancelled) {
+          setErrorMsg(`Failed to load legal matters: ${err.message}`);
+        }
+      });
+    return () => {
+      cancelled = true;
+    };
+  }, [token]);
 
   // Run SRA 2023 Fatigue & Trial Surge Analysis
   const handleAnalyzeFatigue = async (matter: LegalMatterView) => {

@@ -291,7 +291,6 @@ export const memDb = new MemoryDatabase();
 class MemoryClient {
   // Worker mode mirrors the abate_worker role: cross-tenant access to outbox_event/inbox_event only
   constructor(private readonly workerMode = false) {}
-  private inTransaction = false;
   private tenantContext: string | null = null;
   private writePlane: "A" | "B" = "A";
   private snapshotState: string | null = null;
@@ -311,7 +310,6 @@ class MemoryClient {
     const upper = trimmed.toUpperCase();
 
     if (upper === "BEGIN") {
-      this.inTransaction = true;
       this.snapshotState = JSON.stringify({
         tenants: Array.from(memDb.tenants.entries()),
         principals: Array.from(memDb.principals.entries()),
@@ -365,7 +363,6 @@ class MemoryClient {
     }
 
     if (upper === "COMMIT") {
-      this.inTransaction = false;
       this.tenantContext = null;
       this.snapshotState = null;
       this.releaseHeldLocks();
@@ -423,7 +420,6 @@ class MemoryClient {
         if (snap.tenantPolicyBindings) memDb.tenantPolicyBindings = snap.tenantPolicyBindings;
         if (snap.evidenceItems) memDb.evidenceItems = snap.evidenceItems;
       }
-      this.inTransaction = false;
       this.tenantContext = null;
       this.snapshotState = null;
       this.releaseHeldLocks();
@@ -2205,7 +2201,7 @@ class MemoryClient {
         const [targetTenant, targetFlag] = params;
         rows = rows.filter(f => (f.tenant_id === targetTenant || f.tenant_id === null) && f.flag === targetFlag);
         // Order by tenant_id nulls last (tenant-specific takes priority)
-        rows.sort((a, b) => (a.tenant_id ? -1 : 1));
+        rows.sort((a) => (a.tenant_id ? -1 : 1));
       } else if (params.length > 0) {
         rows = rows.filter(f => f.tenant_id === params[0] || f.tenant_id === null);
       } else if (this.tenantContext) {
@@ -2430,10 +2426,21 @@ class MemoryClient {
 
 let isPgHealthy: boolean | null = null;
 
-async function checkPgHealth(): Promise<boolean> {
-  if (isPgHealthy !== null) return isPgHealthy;
+export function isPostgresRequired(): boolean {
+  return process.env.ABATE_REQUIRE_PG === "1" || process.env.ABATE_REQUIRE_PG === "true";
+}
+
+export function resetPgHealthCache(): void {
+  isPgHealthy = null;
+}
+
+export async function checkPgHealth(): Promise<boolean> {
+  if (isPgHealthy !== null && !isPostgresRequired()) return isPgHealthy;
   if (!appPool) {
     isPgHealthy = false;
+    if (isPostgresRequired()) {
+      throw new AppError("UNAVAILABLE", "PostgreSQL is required (ABATE_REQUIRE_PG=1) but appPool is not configured.");
+    }
     return false;
   }
   try {
@@ -2441,8 +2448,14 @@ async function checkPgHealth(): Promise<boolean> {
     await client.query("SELECT 1");
     client.release();
     isPgHealthy = true;
-  } catch {
+  } catch (err: any) {
     isPgHealthy = false;
+    if (isPostgresRequired()) {
+      throw new AppError(
+        "UNAVAILABLE",
+        `PostgreSQL is required (ABATE_REQUIRE_PG=1) but is not reachable on 5432. Run: docker compose up -d postgres (${err?.message ?? "connection failed"})`
+      );
+    }
   }
   return isPgHealthy;
 }
@@ -2574,7 +2587,7 @@ export async function withWorker<T>(fn: (tx: Tx) => Promise<T>): Promise<T> {
  * withTenantOn: Helper used by boundary tests to verify pooled connection isolation.
  */
 export async function withTenantOn<T>(
-  pool: Pool | { query: QueryFn; connect: () => Promise<any> },
+  _pool: Pool | { query: QueryFn; connect: () => Promise<any> },
   tenantId: string,
   fn: (tx: Tx) => Promise<T>
 ): Promise<T> {

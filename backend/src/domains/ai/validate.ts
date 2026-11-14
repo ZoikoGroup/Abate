@@ -64,7 +64,7 @@ function mentionsIndividualOrMedical(text: string): boolean {
 
 export function validateOutput(
   rawJson: unknown,
-  uc: UseCaseConfig,
+  _uc: UseCaseConfig,
   ctx: ContextItem[]
 ): { ok: boolean; value?: AiProposal; report: ValidatorReport } {
   // 1. Schema Validation (strict Zod)

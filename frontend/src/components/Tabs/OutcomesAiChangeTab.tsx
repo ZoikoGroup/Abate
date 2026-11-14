@@ -67,12 +67,6 @@ export function OutcomesAiChangeTab({ currentTenant, token }: OutcomesAiChangeTa
     details: string;
   } | null>(null);
 
-  // Initial load
-  useEffect(() => {
-    if (!token) return;
-    loadAll();
-  }, [token, currentTenant.id]);
-
   const loadAll = async () => {
     if (!token) return;
     setLoading(true);
@@ -85,13 +79,13 @@ export function OutcomesAiChangeTab({ currentTenant, token }: OutcomesAiChangeTa
       ]);
       setPlaneBEnabled(Boolean(flags.outcomes_plane_b));
       setOutcomeDefs(defs);
-      if (defs.length > 0 && !selectedOutcomeId) {
-        setSelectedOutcomeId(defs[0].outcomeId);
+      if (defs.length > 0) {
+        setSelectedOutcomeId(prev => prev || defs[0].outcomeId);
       }
       setEvaluations(evals);
       setAssessments(assms);
-      if (assms.length > 0 && !activeAssessmentId) {
-        setActiveAssessmentId(assms[0].id);
+      if (assms.length > 0) {
+        setActiveAssessmentId(prev => prev || assms[0].id);
       }
     } catch (err: any) {
       console.warn("Error loading Phase 7 data:", err);
@@ -99,6 +93,33 @@ export function OutcomesAiChangeTab({ currentTenant, token }: OutcomesAiChangeTa
       setLoading(false);
     }
   };
+
+  // Initial load
+  useEffect(() => {
+    if (!token) return;
+    let cancelled = false;
+    void Promise.all([
+      fetchFeatureFlags(token).catch(() => ({ outcomes_plane_b: false })),
+      fetchOutcomeDefinitions(token).catch(() => []),
+      fetchOutcomeEvaluations(token).catch(() => []),
+      fetchAiAssessments(token).catch(() => [])
+    ]).then(([flags, defs, evals, assms]) => {
+      if (cancelled) return;
+      setPlaneBEnabled(Boolean(flags.outcomes_plane_b));
+      setOutcomeDefs(defs);
+      if (defs.length > 0) {
+        setSelectedOutcomeId(prev => prev || defs[0].outcomeId);
+      }
+      setEvaluations(evals);
+      setAssessments(assms);
+      if (assms.length > 0) {
+        setActiveAssessmentId(prev => prev || assms[0].id);
+      }
+    });
+    return () => {
+      cancelled = true;
+    };
+  }, [token, currentTenant.id]);
 
   const handleToggleFlag = async () => {
     if (!token) return;
