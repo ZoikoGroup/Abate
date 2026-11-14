@@ -1,6 +1,6 @@
 {
   "schema": "abate.kill-switch-drill.v1",
-  "executedAt": "2026-11-14T10:56:50.952Z",
+  "executedAt": "2026-11-14T11:15:28.964Z",
   "totalSwitches": 5,
   "passedSwitches": 5,
   "allPassed": true,

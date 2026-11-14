@@ -36,9 +36,9 @@ export const LegalMatterSchema = z.object({
   practiceArea: PracticeAreaEnum,
   currentPhase: DemandWindowEnum,
   jurisdiction: z.enum(["EWHC", "UK_TRIBUNAL", "LCIA_ARBITRATION", "COMPETITION_APPEAL_TRIBUNAL"]),
-  leadPartnerId: z.uuid(),
-  activeWindowStart: z.iso.datetime({ offset: false }),
-  activeWindowEnd: z.iso.datetime({ offset: false })
+  leadPartnerId: z.string().uuid(),
+  activeWindowStart: z.string().datetime(),
+  activeWindowEnd: z.string().datetime()
 }).strict(); // .strict() rejects any unauthorized or prohibited fields!
 
 export type LegalMatter = z.infer<typeof LegalMatterSchema>;

@@ -50,7 +50,7 @@ export interface OutcomeDefinitionView {
 export const EvaluateOutcomeInput = z.object({
   outcomeId: z.string().min(1),
   outcomeVersion: z.number().int().min(1).default(1),
-  interventionId: z.uuid().optional(),
+  interventionId: z.string().uuid().optional(),
   comparisonBasis: z.record(z.string(), z.any()).default({}),
   confounders: z.record(z.string(), z.any()).default({}),
   seriesBreak: z.boolean().default(false),
@@ -82,7 +82,7 @@ export interface OutcomeEvaluationView {
 export const ToggleFeatureFlagInput = z.object({
   flag: z.string().min(1),
   enabled: z.boolean(),
-  tenantId: z.uuid().optional()
+  tenantId: z.string().uuid().optional()
 }).strict();
 export type ToggleFeatureFlagInput = z.infer<typeof ToggleFeatureFlagInput>;
 

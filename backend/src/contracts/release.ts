@@ -9,7 +9,7 @@ const FlexibleDateTime = z.string().transform((val) => {
     return `${val}T00:00:00.000Z`;
   }
   return val;
-}).pipe(z.iso.datetime());
+}).pipe(z.string().datetime());
 
 export const SemanticQueryV1 = z.object({
   metricId: z.string().min(1),

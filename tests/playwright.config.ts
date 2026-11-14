@@ -25,22 +25,22 @@ export default defineConfig({
   webServer: skipWebServer
     ? undefined
     : [
-        {
-          command: "npm --prefix ../backend run serve",
-          url: "http://127.0.0.1:5000/api/health",
-          reuseExistingServer: !process.env.CI,
-          timeout: 60_000,
-          env: {
-            ...process.env,
-            APP_ENV: process.env.APP_ENV || "test",
-            PORT: "5000"
-          }
-        },
-        {
-          command: "npm --prefix ../frontend run dev -- --host 127.0.0.1 --port 5173 --strictPort",
-          url: baseURL,
-          reuseExistingServer: !process.env.CI,
-          timeout: 60_000
+      {
+        command: "npm --prefix ../backend run serve",
+        url: "http://127.0.0.1:5000/api/health",
+        reuseExistingServer: !process.env.CI,
+        timeout: 60_000,
+        env: {
+          ...process.env,
+          APP_ENV: process.env.APP_ENV || "test",
+          PORT: "5000"
         }
-      ]
+      },
+      {
+        command: "npm --prefix ../frontend run dev -- --host 127.0.0.1 --port 5173 --strictPort",
+        url: baseURL,
+        reuseExistingServer: !process.env.CI,
+        timeout: 60_000
+      }
+    ]
 });

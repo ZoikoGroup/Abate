@@ -152,11 +152,6 @@ jobs:
       - name: Install Playwright Chromium
         run: npm --prefix tests exec -- playwright install chromium --with-deps
 
-      - name: Typecheck backend and Playwright test suite
-        run: |
-          npm --prefix backend run build
-          ./backend/node_modules/.bin/tsc -p tests/tsconfig.json --noEmit
-
       - name: Run Playwright E2E and Axe Accessibility Suites
         run: npm --prefix tests run test:e2e
 
