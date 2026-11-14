@@ -67,12 +67,6 @@ export function OutcomesAiChangeTab({ currentTenant, token }: OutcomesAiChangeTa
     details: string;
   } | null>(null);
 
-  // Initial load
-  useEffect(() => {
-    if (!token) return;
-    loadAll();
-  }, [token, currentTenant.id]);
-
   const loadAll = async () => {
     if (!token) return;
     setLoading(true);
@@ -85,13 +79,13 @@ export function OutcomesAiChangeTab({ currentTenant, token }: OutcomesAiChangeTa
       ]);
       setPlaneBEnabled(Boolean(flags.outcomes_plane_b));
       setOutcomeDefs(defs);
-      if (defs.length > 0 && !selectedOutcomeId) {
-        setSelectedOutcomeId(defs[0].outcomeId);
+      if (defs.length > 0) {
+        setSelectedOutcomeId(prev => prev || defs[0].outcomeId);
       }
       setEvaluations(evals);
       setAssessments(assms);
-      if (assms.length > 0 && !activeAssessmentId) {
-        setActiveAssessmentId(assms[0].id);
+      if (assms.length > 0) {
+        setActiveAssessmentId(prev => prev || assms[0].id);
       }
     } catch (err: any) {
       console.warn("Error loading Phase 7 data:", err);
@@ -99,6 +93,33 @@ export function OutcomesAiChangeTab({ currentTenant, token }: OutcomesAiChangeTa
       setLoading(false);
     }
   };
+
+  // Initial load
+  useEffect(() => {
+    if (!token) return;
+    let cancelled = false;
+    void Promise.all([
+      fetchFeatureFlags(token).catch(() => ({ outcomes_plane_b: false })),
+      fetchOutcomeDefinitions(token).catch(() => []),
+      fetchOutcomeEvaluations(token).catch(() => []),
+      fetchAiAssessments(token).catch(() => [])
+    ]).then(([flags, defs, evals, assms]) => {
+      if (cancelled) return;
+      setPlaneBEnabled(Boolean(flags.outcomes_plane_b));
+      setOutcomeDefs(defs);
+      if (defs.length > 0) {
+        setSelectedOutcomeId(prev => prev || defs[0].outcomeId);
+      }
+      setEvaluations(evals);
+      setAssessments(assms);
+      if (assms.length > 0) {
+        setActiveAssessmentId(prev => prev || assms[0].id);
+      }
+    });
+    return () => {
+      cancelled = true;
+    };
+  }, [token, currentTenant.id]);
 
   const handleToggleFlag = async () => {
     if (!token) return;
@@ -502,8 +523,9 @@ export function OutcomesAiChangeTab({ currentTenant, token }: OutcomesAiChangeTa
             <div>
               {/* Form to submit Outcome Evaluation */}
               <div className="form-group" style={{ marginBottom: "0.75rem" }}>
-                <label className="form-label">Outcome Metric Definition</label>
+                <label htmlFor="outcome-metric-select" className="form-label">Outcome Metric Definition</label>
                 <select
+                  id="outcome-metric-select"
                   value={selectedOutcomeId}
                   onChange={e => setSelectedOutcomeId(e.target.value)}
                   className="select-control"
@@ -518,8 +540,9 @@ export function OutcomesAiChangeTab({ currentTenant, token }: OutcomesAiChangeTa
               </div>
 
               <div className="form-group" style={{ marginBottom: "0.75rem" }}>
-                <label className="form-label">Originating Release Evidence ID</label>
+                <label htmlFor="outcome-release-id" className="form-label">Originating Release Evidence ID</label>
                 <input
+                  id="outcome-release-id"
                   type="text"
                   value={evalReleaseId}
                   onChange={e => setEvalReleaseId(e.target.value)}
@@ -529,8 +552,9 @@ export function OutcomesAiChangeTab({ currentTenant, token }: OutcomesAiChangeTa
               </div>
 
               <div className="form-group" style={{ marginBottom: "0.75rem" }}>
-                <label className="form-label">Permitted Performance Claim</label>
+                <label htmlFor="outcome-claim-text" className="form-label">Permitted Performance Claim</label>
                 <textarea
+                  id="outcome-claim-text"
                   value={claimText}
                   onChange={e => setClaimText(e.target.value)}
                   rows={2}
@@ -542,8 +566,9 @@ export function OutcomesAiChangeTab({ currentTenant, token }: OutcomesAiChangeTa
 
               <div style={{ display: "flex", justifyContent: "space-between", alignItems: "center", marginBottom: "1rem" }}>
                 <div style={{ display: "flex", gap: "0.5rem", alignItems: "center" }}>
-                  <label className="form-label" style={{ margin: 0 }}>Confidence:</label>
+                  <label htmlFor="outcome-confidence-select" className="form-label" style={{ margin: 0 }}>Confidence:</label>
                   <select
+                    id="outcome-confidence-select"
                     value={evalConfidence}
                     onChange={e => setEvalConfidence(e.target.value as any)}
                     className="select-control"
@@ -764,8 +789,9 @@ export function OutcomesAiChangeTab({ currentTenant, token }: OutcomesAiChangeTa
             </h5>
 
             <div className="form-group" style={{ marginBottom: "0.5rem" }}>
-              <label className="form-label">System / Agent Title</label>
+              <label htmlFor="ai-change-title" className="form-label">System / Agent Title</label>
               <input
+                id="ai-change-title"
                 type="text"
                 value={profileTitle}
                 onChange={e => setProfileTitle(e.target.value)}
@@ -776,8 +802,9 @@ export function OutcomesAiChangeTab({ currentTenant, token }: OutcomesAiChangeTa
 
             <div style={{ display: "grid", gridTemplateColumns: "1fr 1fr", gap: "0.5rem", marginBottom: "0.5rem" }}>
               <div className="form-group">
-                <label className="form-label">Affected Roles</label>
+                <label htmlFor="ai-change-roles" className="form-label">Affected Roles</label>
                 <input
+                  id="ai-change-roles"
                   type="text"
                   value={affectedRoles}
                   onChange={e => setAffectedRoles(e.target.value)}
@@ -788,8 +815,9 @@ export function OutcomesAiChangeTab({ currentTenant, token }: OutcomesAiChangeTa
               </div>
 
               <div className="form-group">
-                <label className="form-label">Automation Mode</label>
+                <label htmlFor="ai-change-mode" className="form-label">Automation Mode</label>
                 <select
+                  id="ai-change-mode"
                   value={automationMode}
                   onChange={e => setAutomationMode(e.target.value as any)}
                   className="select-control"
@@ -803,8 +831,9 @@ export function OutcomesAiChangeTab({ currentTenant, token }: OutcomesAiChangeTa
             </div>
 
             <div className="form-group" style={{ marginBottom: "0.75rem" }}>
-              <label className="form-label">Affected Tasks</label>
+              <label htmlFor="ai-change-tasks" className="form-label">Affected Tasks</label>
               <input
+                id="ai-change-tasks"
                 type="text"
                 value={affectedTasks}
                 onChange={e => setAffectedTasks(e.target.value)}
@@ -814,8 +843,9 @@ export function OutcomesAiChangeTab({ currentTenant, token }: OutcomesAiChangeTa
             </div>
 
             <div className="form-group" style={{ marginBottom: "0.75rem" }}>
-              <label className="form-label">Decision Rights Boundary</label>
+              <label htmlFor="ai-change-rights" className="form-label">Decision Rights Boundary</label>
               <input
+                id="ai-change-rights"
                 type="text"
                 value={decisionRights}
                 onChange={e => setDecisionRights(e.target.value)}

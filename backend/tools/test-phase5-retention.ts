@@ -26,8 +26,7 @@ import {
   placeLegalHold,
   releaseLegalHold,
   runRetention,
-  previewRetention,
-  getRetentionState
+  previewRetention
 } from "../src/domains/lifecycle/retention";
 import { ingestBatch } from "../src/domains/ingest/ingest-batch";
 import { AppError } from "../src/platform/errors";

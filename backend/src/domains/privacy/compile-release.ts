@@ -4,6 +4,8 @@ import { withTenant, Tx } from "../../platform/db/with-tenant";
 import { SemanticQuery } from "../../contracts/release";
 import { boundaryIntrusionShare } from "../measure/boundary-intrusion";
 import { Interval } from "../measure/intervals";
+import { AppError } from "../../platform/errors";
+import { isKillSwitchActive } from "../ai/kill-switch";
 
 export interface ReleaseResult {
   status: "RELEASED" | "UNAVAILABLE";
@@ -73,6 +75,10 @@ export async function compileRelease(
   customCohortMembers?: string[]
 ): Promise<ReleaseResult> {
   return withTenant(tenantId, async (tx: Tx) => {
+    if (await isKillSwitchActive(tx, "release_path")) {
+      throw new AppError("UNAVAILABLE", "Privacy release compiler disabled by kill switch (release_path).");
+    }
+
     // 1. Tenant-wide lock: serializes ALL release decisions in this tenant until transaction commit
     await tx.q("SELECT pg_advisory_xact_lock(hashtextextended($1, 0))", [`disclosure:${tenantId}`]);
 

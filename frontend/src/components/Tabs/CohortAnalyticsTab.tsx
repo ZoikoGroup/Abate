@@ -18,9 +18,17 @@ interface CohortAnalyticsTabProps {
 }
 
 export function CohortAnalyticsTab({ currentTenant, token }: CohortAnalyticsTabProps) {
+  const defaultCohortRef = currentTenant.id.includes("-b000-")
+    ? "org:00000000-0000-4000-b001-000000000001"
+    : "org:00000000-0000-4000-a001-000000000001";
   const [metricDefs, setMetricDefs] = useState<MetricDefinition[]>([]);
   const [selectedMetricId, setSelectedMetricId] = useState("BOUNDARY_INTRUSION_SHARE");
-  const [cohortRef, setCohortRef] = useState("org:00000000-0000-4000-a001-000000000001");
+  const [cohortRef, setCohortRef] = useState(defaultCohortRef);
+  const [prevTenantId, setPrevTenantId] = useState(currentTenant.id);
+  if (prevTenantId !== currentTenant.id) {
+    setPrevTenantId(currentTenant.id);
+    setCohortRef(defaultCohortRef);
+  }
   const [periodStart, setPeriodStart] = useState("2026-03-02T00:00:00.000Z");
   const [periodEnd, setPeriodEnd] = useState("2026-03-30T00:00:00.000Z"); // 28 days
   const [releaseClass, setReleaseClass] = useState<"CLASS_A" | "CLASS_B">("CLASS_B");
@@ -82,15 +90,6 @@ export function CohortAnalyticsTab({ currentTenant, token }: CohortAnalyticsTabP
         setSelectedMetricId("BOUNDARY_INTRUSION_SHARE");
       });
   }, [token]);
-
-  // Adjust default cohortRef when switching tenant
-  useEffect(() => {
-    if (currentTenant.id.includes("-b000-")) {
-      setCohortRef("org:00000000-0000-4000-b001-000000000001");
-    } else {
-      setCohortRef("org:00000000-0000-4000-a001-000000000001");
-    }
-  }, [currentTenant.id]);
 
   // Attempt to load baseline release on mount
   useEffect(() => {
@@ -362,8 +361,9 @@ export function CohortAnalyticsTab({ currentTenant, token }: CohortAnalyticsTabP
 
         <div className="query-grid">
           <div className="form-group">
-            <label className="form-label">Hazard Indicator</label>
+            <label htmlFor="cohort-metric-select" className="form-label">Hazard Indicator</label>
             <select
+              id="cohort-metric-select"
               value={selectedMetricId}
               onChange={e => setSelectedMetricId(e.target.value)}
               className="select-control"
@@ -384,8 +384,9 @@ export function CohortAnalyticsTab({ currentTenant, token }: CohortAnalyticsTabP
           </div>
 
           <div className="form-group">
-            <label className="form-label">Cohort Reference</label>
+            <label htmlFor="cohort-ref-input" className="form-label">Cohort Reference</label>
             <input
+              id="cohort-ref-input"
               type="text"
               value={cohortRef}
               onChange={e => setCohortRef(e.target.value)}
@@ -395,9 +396,11 @@ export function CohortAnalyticsTab({ currentTenant, token }: CohortAnalyticsTabP
           </div>
 
           <div className="form-group">
-            <label className="form-label">Observation Window (Min 28 Days)</label>
+            <label htmlFor="cohort-period-start" className="form-label">Observation Window (Min 28 Days)</label>
             <div style={{ display: "flex", gap: "0.5rem" }}>
               <input
+                id="cohort-period-start"
+                aria-label="Observation window start date"
                 type="text"
                 value={periodStart.slice(0, 10)}
                 onChange={e => setPeriodStart(`${e.target.value}T00:00:00.000Z`)}
@@ -405,6 +408,7 @@ export function CohortAnalyticsTab({ currentTenant, token }: CohortAnalyticsTabP
                 style={{ width: "50%" }}
               />
               <input
+                aria-label="Observation window end date"
                 type="text"
                 value={periodEnd.slice(0, 10)}
                 onChange={e => setPeriodEnd(`${e.target.value}T00:00:00.000Z`)}
@@ -415,8 +419,9 @@ export function CohortAnalyticsTab({ currentTenant, token }: CohortAnalyticsTabP
           </div>
 
           <div className="form-group">
-            <label className="form-label">Release Class</label>
+            <label htmlFor="cohort-release-class" className="form-label">Release Class</label>
             <select
+              id="cohort-release-class"
               value={releaseClass}
               onChange={e => setReleaseClass(e.target.value as any)}
               className="select-control"

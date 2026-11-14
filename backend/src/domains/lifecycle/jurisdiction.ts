@@ -10,6 +10,7 @@ import {
 } from "../../contracts/retention";
 import { PackRow, resolveEffectivePack, planPackPublish, canonicalJson, sha256Hex } from "./policy";
 import { activeBindings } from "./resolve";
+import { isKillSwitchActive } from "../ai/kill-switch";
 
 const iso = (d: string | Date | null) => (d === null ? null : new Date(d).toISOString());
 
@@ -72,6 +73,9 @@ export async function resolveTenantCoverage(
   if (effective.length === 0) return notCovered("No approved jurisdiction pack is in effect for this tenant.");
   if (effective.length > 1) {
     return notCovered(`More than one jurisdiction pack is in effect (${effective.map(p => p.pack_key).join(", ")}); resolve the binding first.`);
+  }
+  if (await isKillSwitchActive(tx, `pack:${effective[0]!.pack_key}`)) {
+    return notCovered(`Pack ${effective[0]!.pack_key} is paused by emergency kill switch (pack:${effective[0]!.pack_key}).`);
   }
   return { coverage: { status: "COVERED", pack: toPackView(effective[0]!) }, pack: effective[0]! };
 }

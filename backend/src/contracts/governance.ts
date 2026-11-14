@@ -61,6 +61,8 @@ export const EvidencePackageViewSchema = z.object({
   issuerPrincipalId: z.string().uuid(),
   classification: z.enum(["RESTRICTED", "CONFIDENTIAL", "PUBLIC"]),
   manifestHash: z.string(),
+  merkleRoot: z.string().optional(),
+  merkleProofs: z.array(z.any()).optional(),
   supersedesId: z.string().uuid().nullable().optional(),
   supersededById: z.string().uuid().nullable().optional(),
   state: EvidencePackageStateEnum,

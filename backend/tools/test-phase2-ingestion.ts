@@ -20,7 +20,7 @@ import { ingestBatch } from "../src/domains/ingest/ingest-batch";
 import { partition, isDstTransitionAmbiguity } from "../src/domains/ingest/validate";
 import { deriveConnectionHealth } from "../src/domains/ingest/freshness";
 import { withTenant, withWorker, memDb } from "../src/platform/db/with-tenant";
-import { ZoikoTimeBatch, ZoikoTimeIntervalV1 } from "../src/contracts/sources/zoikotime.v1";
+import { ZoikoTimeIntervalV1 } from "../src/contracts/sources/zoikotime.v1";
 import { derivePseudonym } from "../src/domains/work/pseudonym";
 
 console.log("\x1b[36m=== Abate Task Runner: test-phase2-ingestion (Phase 2 Suite) ===\x1b[0m\n");

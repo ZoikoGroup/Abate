@@ -7,7 +7,6 @@
 // 4. REST endpoint contracts, boundary validation, and multi-tenant security
 
 import assert from "node:assert";
-import crypto from "node:crypto";
 import {
   LegalMatterSchema,
   assertLegalBoundaryCompliance,
@@ -16,8 +15,6 @@ import {
   LegalMatter,
   FORBIDDEN_LEGAL_FIELDS
 } from "../src/domains/sector-legal";
-import { createDevToken } from "../src/domains/tenant/auth";
-import { GOLDEN_01 } from "../src/fixtures/golden01";
 import { seedTwoTenants } from "../src/fixtures/seed";
 
 console.log("\x1b[36m=== Abate Task Runner: test-sector-legal (UK Legal Sector Pack & SRA 2023 Invariants) ===\x1b[0m");

@@ -1,6 +1,7 @@
 // backend/src/domains/control/evidence.ts
 import crypto from "node:crypto";
 import { Tx } from "../../platform/db/with-tenant";
+import { buildMerkleTree, MerkleLeafProof } from "../../platform/merkle";
 import { stableStringify } from "./material";
 
 export interface EvidenceItem {
@@ -24,6 +25,8 @@ export interface EvidenceManifest {
     version: number;
     sha256: string;
   }>;
+  merkleRoot: string;
+  merkleProofs?: MerkleLeafProof[];
   manifestHash: string;
 }
 
@@ -148,6 +151,8 @@ export async function exportEvidencePackage(
     sha256: a.sha256
   }));
 
+  const merkleTree = buildMerkleTree(manifestItems.map((it) => it.sha256));
+
   const manifestBase = {
     packageId,
     hazardId,
@@ -155,7 +160,8 @@ export async function exportEvidencePackage(
     cutoff,
     issuer,
     classification: "RESTRICTED" as const,
-    items: manifestItems
+    items: manifestItems,
+    merkleRoot: merkleTree.root
   };
 
   const manifestHash = crypto
@@ -166,6 +172,7 @@ export async function exportEvidencePackage(
   return {
     manifest: {
       ...manifestBase,
+      merkleProofs: merkleTree.leafProofs,
       manifestHash
     },
     artifacts

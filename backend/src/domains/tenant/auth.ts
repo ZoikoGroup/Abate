@@ -108,7 +108,7 @@ export async function resolveActor(tenantId: string, subject: string, at: Date =
  */
 export function authorize(
   actor: Actor,
-  command: string,
+  _command: string,
   resource?: { tenantId?: string; organizationId?: string }
 ): void {
   // Tenant scope check: actor cannot act on a resource belonging to a different tenant

@@ -17,11 +17,11 @@ import crypto from "node:crypto";
 import { GOLDEN_01 } from "../src/fixtures/golden01";
 import { seedTwoTenants } from "../src/fixtures/seed";
 import { createDevToken, authenticate, resolveActor } from "../src/domains/tenant/auth";
-import { canTransition, computeAllowedActions, RULES } from "../src/domains/control/state-machine";
+import { canTransition, computeAllowedActions } from "../src/domains/control/state-machine";
 import { materialHash, InterventionDraft, stableStringify } from "../src/domains/control/material";
 import { evaluateSuggestion } from "../src/domains/control/verify";
 import { exportEvidencePackage } from "../src/domains/control/evidence";
-import { withTenant, memDb } from "../src/platform/db/with-tenant";
+import { withTenant } from "../src/platform/db/with-tenant";
 import { AppError } from "../src/platform/errors";
 
 console.log("\x1b[36m=== Abate Task Runner: test-phase4-control (BE-007 Hazard & Control Governance) ===\x1b[0m\n");

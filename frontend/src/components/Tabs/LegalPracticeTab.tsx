@@ -64,8 +64,25 @@ export function LegalPracticeTab({ currentTenant, token }: LegalPracticeTabProps
   }, [token, selectedMatter]);
 
   useEffect(() => {
-    loadMatters();
-  }, [loadMatters]);
+    if (!token) return;
+    let cancelled = false;
+    void fetchLegalMatters(token)
+      .then((items) => {
+        if (cancelled) return;
+        setMatters(items);
+        if (items.length > 0) {
+          setSelectedMatter((prev) => prev || items[0]);
+        }
+      })
+      .catch((err: any) => {
+        if (!cancelled) {
+          setErrorMsg(`Failed to load legal matters: ${err.message}`);
+        }
+      });
+    return () => {
+      cancelled = true;
+    };
+  }, [token]);
 
   // Run SRA 2023 Fatigue & Trial Surge Analysis
   const handleAnalyzeFatigue = async (matter: LegalMatterView) => {
@@ -319,16 +336,18 @@ export function LegalPracticeTab({ currentTenant, token }: LegalPracticeTabProps
                       </p>
 
                       <div style={{ display: "flex", flexDirection: "column", gap: "0.5rem", marginBottom: "0.75rem" }}>
-                        <label style={{ fontSize: "0.8rem", fontWeight: 600 }}>Supervisory Partner:</label>
+                        <label htmlFor="sra-supervisory-partner" style={{ fontSize: "0.8rem", fontWeight: 600 }}>Supervisory Partner:</label>
                         <input
+                          id="sra-supervisory-partner"
                           type="text"
                           className="input-control"
                           value={consultationPartner}
                           onChange={(e) => setConsultationPartner(e.target.value)}
                         />
 
-                        <label style={{ fontSize: "0.8rem", fontWeight: 600 }}>Statutory Workload Action:</label>
+                        <label htmlFor="sra-mitigation-action" style={{ fontSize: "0.8rem", fontWeight: 600 }}>Statutory Workload Action:</label>
                         <select
+                          id="sra-mitigation-action"
                           className="select-control"
                           value={mitigationAction}
                           onChange={(e) => setMitigationAction(e.target.value)}

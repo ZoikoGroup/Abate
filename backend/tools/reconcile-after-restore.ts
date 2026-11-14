@@ -5,6 +5,8 @@
 
 import assert from "node:assert";
 import crypto from "node:crypto";
+import fs from "node:fs";
+import path from "node:path";
 import { GOLDEN_01 } from "../src/fixtures/golden01";
 
 export interface TombstoneLogEntry {
@@ -63,7 +65,7 @@ export function reconcileUnknownOutcomeActions(
   providerReceipts: Map<string, { status: "DELIVERED" | "BOUNCED" }>
 ): { reconciledActions: number } {
   let count = 0;
-  for (const [id, attempt] of restoredDb.actionAttempts.entries()) {
+  for (const [, attempt] of restoredDb.actionAttempts.entries()) {
     if (attempt.state === "UNKNOWN_OUTCOME") {
       const receipt = providerReceipts.get(attempt.effectKey);
       if (receipt && receipt.status === "DELIVERED") {
@@ -95,10 +97,14 @@ export function reconcileOutbox(restoredDb: RestoredDatabase): { pendingCount: n
  * Full automated recovery rehearsal runner
  */
 export async function runRecoveryRehearsal(): Promise<{
+  schema: string;
   success: boolean;
+  executedAt: string;
   rtoMs: number;
   rpoMinutes: number;
   reconciledDeletions: number;
+  unknownActionsReconciled: number;
+  outboxPendingCount: number;
   checks: string[];
 }> {
   const rehearsalStartTime = Date.now();
@@ -219,13 +225,27 @@ export async function runRecoveryRehearsal(): Promise<{
   checks.push(`RTO verified: ${rehearsalDurationMs} ms (Target: <= 4 hours)`);
   checks.push(`RPO verified: ${measuredRpoMinutes} minutes (Target: <= 15 minutes)`);
 
-  return {
+  const report = {
+    schema: "abate.restore-rehearsal.v1",
     success: true,
+    executedAt: new Date().toISOString(),
     rtoMs: rehearsalDurationMs,
     rpoMinutes: measuredRpoMinutes,
     reconciledDeletions: reconcileResult.reconciledDeletions,
+    unknownActionsReconciled: actionReconcile.reconciledActions,
+    outboxPendingCount: outboxReconcile.pendingCount,
     checks
   };
+
+  try {
+    const outPath = path.resolve(__dirname, "../../evidence/restore-rehearsal-report.json");
+    fs.mkdirSync(path.dirname(outPath), { recursive: true });
+    fs.writeFileSync(outPath, JSON.stringify(report, null, 2));
+  } catch {
+    // non-fatal if imported in read-only environment
+  }
+
+  return report;
 }
 
 // Direct CLI Execution

@@ -1,0 +1,158 @@
+name: Abate Constitutional & Parity CI
+
+on:
+  push:
+    branches: ["main", "Aditya"]
+  pull_request:
+    branches: ["main"]
+
+jobs:
+  verify:
+    name: PostgreSQL Parity, Constitutional Gates & Frontend Build
+    runs-on: ubuntu-latest
+
+    services:
+      postgres:
+        image: postgres:16.2-alpine
+        env:
+          POSTGRES_USER: abate_migrator
+          POSTGRES_PASSWORD: migrator_pw
+          POSTGRES_DB: abate
+        ports:
+          - 5432:5432
+        options: >-
+          --health-cmd="pg_isready -U abate_migrator -d abate"
+          --health-interval=5s
+          --health-timeout=5s
+          --health-retries=10
+
+    env:
+      APP_ENV: test
+      AUTH_ISSUER: http://localhost:5000/auth
+      AUTH_AUDIENCE: abate-api
+      AUTH_SECRET: ci_test_auth_secret_key_abate_minimum_32_characters_long
+      SUPPORT_AUTH_SECRET: ci_test_support_secret_key_abate_minimum_32_characters_long
+      ACTION_GRANT_SECRET: ci_test_action_grant_secret_key_abate_min_32_chars_long
+      FIXED_CLOCK: 2026-03-02T09:00:00Z
+
+    steps:
+      - name: Checkout repository
+        uses: actions/checkout@v4
+
+      - name: Setup Node.js 22
+        uses: actions/setup-node@v4
+        with:
+          node-version: "22"
+
+      - name: Install backend and frontend dependencies
+        run: |
+          npm --prefix backend ci
+          npm --prefix frontend ci
+
+      - name: Run clean database migrations
+        env:
+          ABATE_REQUIRE_PG: "1"
+          DATABASE_URL_MIGRATOR: postgres://abate_migrator:migrator_pw@localhost:5432/abate
+          DATABASE_URL_APP: postgres://abate_app:app_pw@localhost:5432/abate
+          DATABASE_URL_WORKER: postgres://abate_worker:worker_pw@localhost:5432/abate
+        run: npm --prefix backend run migrate
+
+      - name: Verify live Postgres role isolation and migration checksums
+        env:
+          ABATE_REQUIRE_PG: "1"
+          DATABASE_URL_MIGRATOR: postgres://abate_migrator:migrator_pw@localhost:5432/abate
+          DATABASE_URL_APP: postgres://abate_app:app_pw@localhost:5432/abate
+          DATABASE_URL_WORKER: postgres://abate_worker:worker_pw@localhost:5432/abate
+        run: npm --prefix backend run verify-pg -- --require-live
+
+      - name: Typecheck and compile backend
+        run: npm --prefix backend run build
+
+      - name: Run Phase 1-9 and Worker constitutional suites
+        env:
+          ABATE_REQUIRE_PG: "0"
+          DATABASE_URL_MIGRATOR: postgres://disabled:disabled@127.0.0.1:1/abate
+          DATABASE_URL_APP: postgres://disabled:disabled@127.0.0.1:1/abate
+          DATABASE_URL_WORKER: postgres://disabled:disabled@127.0.0.1:1/abate
+        run: |
+          npm --prefix backend run test-fast
+          npm --prefix backend run test-boundaries
+          npm --prefix backend run test-ingest
+          npm --prefix backend run test-privacy
+          npm --prefix backend run test-control
+          npm --prefix backend run test-retention
+          npm --prefix backend run test-ai
+          npm --prefix backend run test-planes
+          npm --prefix backend run test-worker
+
+      - name: Run Evidence Verifier, Kill Switch Drill, 30-Day HTTP Sim and Endpoint Check
+        env:
+          ABATE_REQUIRE_PG: "0"
+          DATABASE_URL_MIGRATOR: postgres://disabled:disabled@127.0.0.1:1/abate
+          DATABASE_URL_APP: postgres://disabled:disabled@127.0.0.1:1/abate
+          DATABASE_URL_WORKER: postgres://disabled:disabled@127.0.0.1:1/abate
+        run: |
+          npm --prefix backend run verify-evidence
+          npm --prefix backend run drill-kill-switches
+          npm --prefix backend run sim-30d -- --tcp
+          npm --prefix backend run check:endpoints
+
+      - name: Lint and build frontend
+        run: |
+          npm --prefix frontend run lint
+          npm --prefix frontend run build
+
+      - name: Assemble dynamic Release Dossier and verify READY FOR REVIEW state
+        env:
+          ABATE_REQUIRE_PG: "0"
+          DATABASE_URL_MIGRATOR: postgres://disabled:disabled@127.0.0.1:1/abate
+          DATABASE_URL_APP: postgres://disabled:disabled@127.0.0.1:1/abate
+          DATABASE_URL_WORKER: postgres://disabled:disabled@127.0.0.1:1/abate
+        run: |
+          npm --prefix backend run build-dossier
+          node -e "const d = require('./evidence/release-dossier.json'); if (d.status !== 'READY FOR REVIEW') { console.error('Expected READY FOR REVIEW, got', d.status); process.exit(1); }"
+
+      - name: Upload Release Dossier artifacts
+        uses: actions/upload-artifact@v4
+        if: always()
+        with:
+          name: release-dossier
+          path: |
+            evidence/release-dossier.json
+            evidence/sim-30d-report.json
+            evidence/kill-switch-drill-report.json
+            evidence/restore-rehearsal-report.json
+            frontend/public/release-dossier.json
+
+  e2e-a11y:
+    name: Browser E2E & WCAG 2.1 AA Accessibility (Playwright + Axe)
+    runs-on: ubuntu-latest
+    env:
+      APP_ENV: test
+      AUTH_ISSUER: http://localhost:5000/auth
+      AUTH_AUDIENCE: abate-api
+      AUTH_SECRET: ci_test_auth_secret_key_abate_minimum_32_characters_long
+      SUPPORT_AUTH_SECRET: ci_test_support_secret_key_abate_minimum_32_characters_long
+      ACTION_GRANT_SECRET: ci_test_action_grant_secret_key_abate_min_32_chars_long
+    steps:
+      - name: Checkout repository
+        uses: actions/checkout@v4
+
+      - name: Setup Node.js 22
+        uses: actions/setup-node@v4
+        with:
+          node-version: "22"
+
+      - name: Install backend, frontend, and test dependencies
+        run: |
+          npm --prefix backend ci
+          npm --prefix frontend ci
+          npm --prefix tests install
+
+      - name: Install Playwright Chromium
+        run: npm --prefix tests exec -- playwright install chromium --with-deps
+
+      - name: Run Playwright E2E and Axe Accessibility Suites
+        run: npm --prefix tests run test:e2e
+
+

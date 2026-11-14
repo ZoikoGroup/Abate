@@ -63,10 +63,26 @@ export function RetentionTab({ currentTenant, token }: RetentionTabProps) {
   }, [token]);
 
   useEffect(() => {
-    setPreview(null);
-    setFeedback(null);
-    load();
-  }, [load, currentTenant.id]);
+    if (!token) return;
+    let cancelled = false;
+    void Promise.all([fetchRetentionState(token), fetchPackVersions(token), fetchConnections(token)])
+      .then(([s, v, c]) => {
+        if (cancelled) return;
+        setPreview(null);
+        setFeedback(null);
+        setState(s);
+        setVersions(v.versions);
+        setConnections(c);
+      })
+      .catch((err: any) => {
+        if (!cancelled) {
+          setFeedback({ kind: "error", title: "Could not load retention state", message: err.message });
+        }
+      });
+    return () => {
+      cancelled = true;
+    };
+  }, [token, currentTenant.id]);
 
   // Every action follows the same shape: run, report, reload
   const act = async (title: string, fn: () => Promise<string>) => {

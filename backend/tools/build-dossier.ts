@@ -1,204 +1,294 @@
 // backend/tools/build-dossier.ts
-// Release Evidence Dossier Builder (Playbook BE-010 / Guide §8.6, Pages 93–94)
-// Assembles machine-checkable evidence links, test results, immutable digests, signed SLO manifest,
-// and enforces the fail-closed assertion: defects.P0 === 0 before emitting evidence/release-dossier.json.
+// Dynamically assembles evidence/release-dossier.json and frontend/public/release-dossier.json
+// from real executed verification suites, live restore rehearsal, and live 5-kill-switch drill.
+// Stays strictly "READY FOR REVIEW" until a named human signs via tools/sign-dossier.ts.
 
-import assert from "node:assert";
-import crypto from "node:crypto";
+import { execSync, spawnSync } from "node:child_process";
 import fs from "node:fs";
 import path from "node:path";
-import { execSync } from "node:child_process";
-import { canonicalJson } from "../src/platform/canonical";
-import { GOLDEN_01 } from "../src/fixtures/golden01";
+import { canonicalJson, sha256Hex } from "../src/platform/canonical";
+import { runRecoveryRehearsal } from "./reconcile-after-restore";
+import { runKillSwitchDrill } from "./drill-kill-switches";
+import { run30DayHttpSimulation } from "./simulate-30d-http";
+import { runVerifierSelfTest } from "./verify-evidence";
 
-console.log("\x1b[36m=== Abate Task Runner: build-dossier (Phase 8 Release Evidence Dossier) ===\x1b[0m");
-
-const ROOT_DIR = path.resolve(__dirname, "../..");
-const EVIDENCE_DIR = path.resolve(ROOT_DIR, "evidence");
-const OPS_DIR = path.resolve(ROOT_DIR, "ops");
-
-if (!fs.existsSync(EVIDENCE_DIR)) {
-  fs.mkdirSync(EVIDENCE_DIR, { recursive: true });
+interface SuiteExecutionResult {
+  name: string;
+  script: string;
+  phase: string;
+  testsPassed: number;
+  status: "PASS" | "FAIL";
+  exitCode: number;
+  durationMs: number;
+  lastRun: string;
 }
+
+const BACKEND_ROOT = path.resolve(__dirname, "..");
+
+const SUITES: Array<{ name: string; script: string; toolPath: string; phase: string }> = [
+  { name: "Boundary & Isolation Suite", script: "test-boundaries", toolPath: "tools/test-boundaries.ts", phase: "Cross-Phase Constitutional Gates" },
+  { name: "Phase 2 Ingestion & Decoy Lab", script: "test-ingest", toolPath: "tools/test-phase2-ingestion.ts", phase: "Phase 2 (Domains S02 & S03)" },
+  { name: "Phase 3 Reconstruction Attack Lab", script: "test-privacy", toolPath: "tools/test-reconstruction.ts", phase: "Phase 3 (Domains S04 & S06)" },
+  { name: "Phase 4 Control & Evidence Suite", script: "test-control", toolPath: "tools/test-phase4-control.ts", phase: "Phase 4 (BE-007)" },
+  { name: "Phase 5 Retention & Legal Hold Suite", script: "test-retention", toolPath: "tools/test-phase5-retention.ts", phase: "Phase 5 (B5)" },
+  { name: "Phase 6 Bounded AI & Actions Suite", script: "test-ai", toolPath: "tools/test-phase6-ai.ts", phase: "Phase 6 (BE-008)" },
+  { name: "Phase 7 Two-Plane & AI Change Suite", script: "test-planes", toolPath: "tools/test-phase7-planes.ts", phase: "Phase 7 (B7)" },
+  { name: "Worker Outbox Crash & Lease Suite", script: "test-worker", toolPath: "tools/test-worker-crash-lab.ts", phase: "Async Reliability" },
+  { name: "Postgres Parity & Fail-Closed Guard", script: "verify-pg", toolPath: "tools/verify-pg-clean.ts", phase: "Infrastructure & Least-Privilege DB" },
+  { name: "Daily Endpoint & Contract Drift Check", script: "check:endpoints", toolPath: "tools/endpoint-check.ts", phase: "API Catalog Compliance" }
+];
 
 function getGitSha(): string {
   try {
-    return execSync("git rev-parse HEAD", { cwd: ROOT_DIR, encoding: "utf8" }).trim();
+    return execSync("git rev-parse --short HEAD", { stdio: ["ignore", "pipe", "ignore"] })
+      .toString("utf8")
+      .trim();
   } catch {
-    return "1a27492c81fb39f60a927b8764263db129e1029c";
+    return "unknown";
   }
 }
 
-function generateSbom(): { path: string; digest: string; packagesCount: number } {
-  const backendPkg = JSON.parse(fs.readFileSync(path.resolve(__dirname, "../package.json"), "utf8"));
-  const frontendPkg = JSON.parse(fs.readFileSync(path.resolve(ROOT_DIR, "frontend/package.json"), "utf8"));
+function getRepoRoot(): string {
+  return path.resolve(__dirname, "../..");
+}
 
-  const allDependencies = {
-    backendDependencies: backendPkg.dependencies || {},
-    backendDevDependencies: backendPkg.devDependencies || {},
-    frontendDependencies: frontendPkg.dependencies || {},
-    frontendDevDependencies: frontendPkg.devDependencies || {}
-  };
+function countPassingChecks(output: string): number {
+  const checkMatches = output.match(/✔/g);
+  if (checkMatches && checkMatches.length > 0) {
+    return checkMatches.length;
+  }
+  const summaryMatch = output.match(/All\s+(\d+)(?:\/\d+)?\s+.*pass/i);
+  if (summaryMatch) {
+    return Number(summaryMatch[1]);
+  }
+  return 0;
+}
 
-  const sbomContent = {
-    schemaVersion: "abate.sbom.v1",
-    generatedAt: new Date().toISOString(),
-    commit: getGitSha(),
-    components: allDependencies
-  };
+function resolveTsxCli(): string {
+  const candidates = [
+    path.join(BACKEND_ROOT, "node_modules/tsx/dist/cli.mjs"),
+    path.resolve(BACKEND_ROOT, "../node_modules/tsx/dist/cli.mjs")
+  ];
+  for (const c of candidates) {
+    if (fs.existsSync(c)) return c;
+  }
+  return require.resolve("tsx/cli");
+}
 
-  const sbomJson = canonicalJson(sbomContent);
-  const sbomHash = crypto.createHash("sha256").update(sbomJson).digest("hex");
-  const sbomPath = path.resolve(EVIDENCE_DIR, "sbom.json");
-  fs.writeFileSync(sbomPath, sbomJson);
+const TSX_CLI = resolveTsxCli();
+
+function runNpmSuite(suite: { name: string; script: string; toolPath: string; phase: string }): SuiteExecutionResult {
+  const start = Date.now();
+  const res = spawnSync(process.execPath, [TSX_CLI, path.join(BACKEND_ROOT, suite.toolPath)], {
+    cwd: BACKEND_ROOT,
+    encoding: "utf8",
+    timeout: 120000
+  });
+  const durationMs = Date.now() - start;
+  const combined = `${res.stdout || ""}\n${res.stderr || ""}`;
+  const exitCode = res.status ?? (res.error ? 1 : 1);
+  const testsPassed = countPassingChecks(combined);
 
   return {
-    path: "evidence/sbom.json",
-    digest: sbomHash,
-    packagesCount: Object.keys(backendPkg.dependencies || {}).length + Object.keys(frontendPkg.dependencies || {}).length
+    name: suite.name,
+    script: suite.script,
+    phase: suite.phase,
+    testsPassed,
+    status: exitCode === 0 ? "PASS" : "FAIL",
+    exitCode,
+    durationMs,
+    lastRun: new Date().toISOString()
   };
 }
 
-function loadSloManifest(): { path: string; digest: string; content: string } {
-  const sloPath = path.resolve(OPS_DIR, "slo-manifest.v1.yaml");
-  assert(fs.existsSync(sloPath), "ops/slo-manifest.v1.yaml must exist");
-  const content = fs.readFileSync(sloPath, "utf8");
-  const digest = crypto.createHash("sha256").update(content).digest("hex");
-  return { path: "ops/slo-manifest.v1.yaml", digest, content };
-}
+export async function assembleDossier() {
+  console.log("=== Abate Release Evidence Dossier Builder (Dynamic Execution Mode) ===");
 
-async function assembleDossier() {
-  const gitSha = getGitSha();
-  console.log(`  ✔ Git Commit SHA: ${gitSha}`);
+  const repoRoot = getRepoRoot();
+  const commitSha = getGitSha();
+  const generatedAt = new Date().toISOString();
 
-  // 1. Generate & Digest Software Bill of Materials (SBOM)
-  const sbom = generateSbom();
-  console.log(`  ✔ Software Bill of Materials (SBOM) generated: ${sbom.path} (SHA-256: ${sbom.digest.slice(0, 12)}...)`);
+  // 1. Run backend test suites dynamically
+  const testSuites: SuiteExecutionResult[] = [];
+  for (const s of SUITES) {
+    process.stdout.write(`  Running ${s.script}... `);
+    const result = runNpmSuite(s);
+    console.log(`${result.status} (${result.testsPassed} checks, ${result.durationMs}ms)`);
+    testSuites.push(result);
+  }
 
-  // 2. Load Signed SLO Manifest
-  const slo = loadSloManifest();
-  console.log(`  ✔ Signed SLO Manifest validated: ${slo.path} (SHA-256: ${slo.digest.slice(0, 12)}...)`);
+  // 2. Run Verifier Self-Test, 30-day HTTP simulation, Restore Rehearsal, and 5-Kill-Switch Drill
+  const verifierStart = Date.now();
+  const verifierRes = runVerifierSelfTest();
+  testSuites.push({
+    name: "Evidence Bundle & Merkle Verifier",
+    script: "verify-evidence",
+    phase: "Phase 8 Audit Verifier",
+    testsPassed: verifierRes.checks.length,
+    status: verifierRes.passed ? "PASS" : "FAIL",
+    exitCode: verifierRes.passed ? 0 : 1,
+    durationMs: Date.now() - verifierStart,
+    lastRun: new Date().toISOString()
+  });
+  console.log(`  ✔ Evidence Verifier Self-Test: ${verifierRes.checks.length} checks PASS`);
 
-  // 3. Collect Test Run Evidence across all 8 mandatory suites
-  const testSuites = [
-    { name: "Unit & Policy Invariants (test-fast)", cases: 9, status: "PASSED", suiteRunner: "tsx tools/test-fast.ts" },
-    { name: "Constitutional & Isolation Boundaries (test-boundaries)", cases: 57, status: "PASSED", suiteRunner: "tsx tools/test-boundaries.ts" },
-    { name: "Decoy Minimization Lab (test-minimization)", cases: 5, status: "PASSED", suiteRunner: "tsx tools/test-minimization.ts" },
-    { name: "End-to-End Golden Cycle (demo-cycle)", cases: 17, status: "PASSED", suiteRunner: "tsx tools/demo-cycle.ts" },
-    { name: "Independent Evidence Verifier (verify-evidence)", cases: 1, status: "PASSED", suiteRunner: "tsx tools/verify-evidence.ts" },
-    { name: "Backup Recovery Reconciliation (reconcile-after-restore)", cases: 8, status: "PASSED", suiteRunner: "tsx tools/reconcile-after-restore.ts" },
-    { name: "Load, Capacity & Concurrency (test-load)", cases: 5, status: "PASSED", suiteRunner: "tsx tools/test-load.ts" },
-    { name: "Legal Sector Pack & SRA 2023 Invariants (test-legal)", cases: 8, status: "PASSED", suiteRunner: "tsx tools/test-sector-legal.ts" }
-  ];
+  const simReport = await run30DayHttpSimulation({ quiet: true, writeReport: true });
+  testSuites.push({
+    name: "Scripted 30-Day Real HTTP Simulation",
+    script: "sim-30d",
+    phase: "End-to-End Lifecycle Verification",
+    testsPassed: simReport.summary.passedSteps,
+    status: simReport.summary.passed ? "PASS" : "FAIL",
+    exitCode: simReport.summary.passed ? 0 : 1,
+    durationMs: simReport.summary.durationMs,
+    lastRun: simReport.generatedAt
+  });
+  console.log(`  ✔ Scripted 30-Day HTTP Simulation: ${simReport.summary.passedSteps}/${simReport.summary.totalSteps} PASS`);
 
-  const totalCases = testSuites.reduce((acc, s) => acc + s.cases, 0);
-  console.log(`  ✔ Aggregated ${testSuites.length} test suites (${totalCases} verified cases with 0 failures)`);
+  const restoreRes = await runRecoveryRehearsal();
+  console.log(`  ✔ Timed Restore Rehearsal: RTO ${restoreRes.rtoMs}ms, RPO ${restoreRes.rpoMinutes}m, 0 resurrected records`);
 
-  // 4. Open Defects Accounting (BE-010 Class Severity Rules)
-  // Class P0: Cross-tenant exposure, privacy reconstruction, prohibited inference, evidence integrity break. NEVER WAIVED.
-  const defects = {
-    P0: 0,
-    P1: 0,
-    P2: 0,
-    P3: 0
-  };
+  const killSwitchReport = await runKillSwitchDrill({ quiet: true, writeReport: true });
+  console.log(`  ✔ 5-Kill-Switch Live Drill: ${killSwitchReport.passedSwitches}/${killSwitchReport.totalSwitches} PASS`);
 
-  // Rule: assert(dossier.defects.P0 === 0, "P0 present: NO-GO")
-  assert.strictEqual(defects.P0, 0, "P0 defect present: Irrevocable NO-GO release gate refusal");
-  console.log(`  ✔ P0 Constitutional Defect Audit: 0 open defects (PASSED)`);
+  // 3. Aggregate Security / Quality Gates & Honest Defect Counters
+  const failingSuites = testSuites.filter((s) => s.status !== "PASS");
+  const allGatesGreen =
+    failingSuites.length === 0 &&
+    restoreRes.success &&
+    killSwitchReport.allPassed &&
+    simReport.summary.passed;
 
-  // 5. Construct Formal Release Evidence Dossier Object
-  const dossier = {
-    schemaVersion: "abate.release-dossier.v1",
-    dossierId: `dossier-${crypto.randomUUID()}`,
-    generatedAt: new Date().toISOString(),
-    status: "RATIFIED",
-    scope: {
-      environment: "sandbox-pilot",
-      namedTenants: [
-        { id: GOLDEN_01.tenantA.id, name: GOLDEN_01.tenantA.name, jurisdiction: "legal-uk-sra" },
-        { id: GOLDEN_01.tenantB.id, name: GOLDEN_01.tenantB.name, jurisdiction: "legal-uk-bar" }
-      ],
-      connectors: ["ZoikoTime v1.0 (Allowlisted approved time intervals)"],
-      jurisdictionPacks: ["legal-uk-sra v1.0 (Solicitors Regulation Authority)"],
-      valuePlanes: {
-        planeA: "Risk Assurance (Hazards, Causes, Version-Bound Controls, Verification)",
-        planeB: "Work-Design Outcomes (Four Families: Workload, Role Clarity, Coordination, AI Quality)"
-      },
-      constitutionalInvariants: [
-        "Zero individual productivity scoring or employee ranking",
-        "Zero surveillance or screenshot capture",
-        "Forced Row-Level Security on all tenant tables (NOBYPASSRLS)",
-        "Minimum contributor floor n >= 10 for all Class B/C releases",
-        "Database trigger isolation blocking Plane B from mutating Plane A"
-      ]
+  const coreEvidencePayload = {
+    schema: "abate.release-dossier.v1",
+    commitSha,
+    generatedAt,
+    system: {
+      name: "Zoiko Abate",
+      specification: "ZAB-ENG-001",
+      version: "1.0.0",
+      architecture: "Two-Plane Modular Monolith with Forced Row-Level Security",
+      postgresRequirementEnv: process.env.ABATE_REQUIRE_PG === "1" ? "LIVE_POSTGRES_REQUIRED" : "HYBRID_LOCAL_SANDBOX"
     },
-    build: {
-      commitSha: gitSha,
-      sbomRef: sbom.path,
-      sbomDigest: sbom.digest,
-      nodeVersion: process.version,
-      architecture: "Next.js App Router (UI) + Express Monolith (Backend) + PostgreSQL (Forced RLS)",
-      rollbackTarget: "commit-baseline-001"
-    },
-    sloManifest: {
-      ref: slo.path,
-      digest: slo.digest,
-      targets: {
-        availability: "99.9% monthly",
-        ordinaryReadsP95Ms: 500,
-        mutationsP95Ms: 800,
-        releasedAnalyticsP95Ms: 1500,
-        rpoMinutes: 15,
-        rtoHours: 4
-      }
-    },
-    testSuites,
-    recoveryRehearsal: {
-      scenario: "Core regional failure and backup restore",
-      tombstoneReconciliation: "PASSED (0 resurrected facts)",
-      isolatedVerification: "PASSED (NOBYPASSRLS verified)",
-      measuredRtoHours: 1.2,
-      targetRtoHours: 4.0,
-      measuredRpoMinutes: 5,
-      targetRpoMinutes: 15
-    },
-    killSwitches: [
-      { scope: "connector:zoikotime", description: "Connector: Ingest Workload", state: "DRILL_VERIFIED" },
-      { scope: "release_path", description: "Analytical Release Path", state: "DRILL_VERIFIED" },
-      { scope: "pack:legal-uk-sra", description: "Jurisdiction Policy Pack", state: "DRILL_VERIFIED" },
-      { scope: "all_ai", description: "Artificial Intelligence Runtime", state: "DRILL_VERIFIED" },
-      { scope: "tool:ticket_notification", description: "External Actions Tool Broker", state: "DRILL_VERIFIED" }
+    constitutionalInvariants: [
+      { id: "INV-01", statement: "Tenant isolation at every seam via PostgreSQL RLS + transaction-local context", verified: allGatesGreen },
+      { id: "INV-02", statement: "Measurement safety floor (k >= 10), overlap differencing (>= 5), and residual blocking (>= 5)", verified: allGatesGreen },
+      { id: "INV-03", statement: "Bounded AI cannot write authoritative state and fails closed behind active kill switches", verified: killSwitchReport.allPassed },
+      { id: "INV-04", statement: "Append-only ledger and audit trail revoke UPDATE/DELETE from runtime app roles", verified: allGatesGreen },
+      { id: "INV-05", statement: "Two-plane separation prevents Plane B performance metrics from mutating Plane A compliance hazards", verified: allGatesGreen }
     ],
-    defects,
-    decision: {
-      outcome: "READY FOR REVIEW",
-      approvedScope: "Tightly scoped design-partner pilot (UK Legal Sector)",
-      signOffAuthority: "Zoiko Abate Engineering Steering Committee",
-      signOffDate: "2026-11-07",
-      conditions: [
-        "Operational pilot limited to Tenant A and Tenant B scoped synthetic and governed environments",
-        "Feature flags for Plane B outcomes default OFF until customer onboarding review",
-        "Continuous monitoring via 5 independent kill switches"
-      ]
+    testSuites,
+    totalChecksPassed: testSuites.reduce((sum, s) => sum + s.testsPassed, 0),
+    defects: {
+      p0FailedSuites: failingSuites.length,
+      failingSuiteScripts: failingSuites.map((s) => s.script),
+      status: allGatesGreen ? "CLEAR (ZERO OPEN P0 DEFECTS)" : "BLOCKED"
+    },
+    recoveryRehearsal: {
+      reconcileTool: "backend/tools/reconcile-after-restore.ts",
+      executedAt: restoreRes.executedAt,
+      targetRtoHours: 4,
+      targetRpoMinutes: 15,
+      measuredRtoMs: restoreRes.rtoMs,
+      measuredRpoMinutes: restoreRes.rpoMinutes,
+      reconciledDeletions: restoreRes.reconciledDeletions,
+      unknownActionsReconciled: restoreRes.unknownActionsReconciled,
+      outboxPendingCount: restoreRes.outboxPendingCount,
+      checksPassed: restoreRes.checks.length,
+      status: restoreRes.success ? "PASSED" : "FAILED"
+    },
+    killSwitches: killSwitchReport.results.map((r) => ({
+      scope: r.scope,
+      testedPath: r.testedPath,
+      unaffectedPath: r.unaffectedPath,
+      blockedStatus: r.blockedStatus,
+      unaffectedStatus: r.unaffectedStatus,
+      restored: r.restored,
+      status: r.passed ? "VERIFIED_LIVE" : "FAILED",
+      detail: r.detail
+    })),
+    simulation30d: {
+      mode: simReport.mode,
+      notice: "Scripted scenario running against real Express HTTP endpoints; synthetic cohort fixtures.",
+      passedSteps: simReport.summary.passedSteps,
+      totalSteps: simReport.summary.totalSteps,
+      durationMs: simReport.summary.durationMs
+    },
+    evidenceVerification: {
+      merkleTreeVersion: "abate.merkle.v1",
+      verifierCli: "backend/tools/verify-evidence.ts",
+      browserVerifierTab: "AuditVerifierTab.tsx",
+      epistemicNotice: "Cryptographic hashes and Merkle proofs prove files are unchanged since export, NOT that the underlying claims are true."
     }
   };
 
-  const dossierJson = canonicalJson(dossier);
-  const dossierHash = crypto.createHash("sha256").update(dossierJson).digest("hex");
-  const dossierPath = path.resolve(EVIDENCE_DIR, "release-dossier.json");
-  fs.writeFileSync(dossierPath, dossierJson);
+  const dossierHash = sha256Hex(canonicalJson(coreEvidencePayload));
 
-  const publicDossierPath = path.resolve(__dirname, "../../frontend/public/release-dossier.json");
-  fs.writeFileSync(publicDossierPath, dossierJson);
+  // 4. Check if a named human signer ratified THIS exact dossierHash; otherwise stay READY FOR REVIEW
+  const signoffPath = path.join(repoRoot, "evidence/dossier-signoff.json");
+  let existingSignoff: any = null;
+  if (fs.existsSync(signoffPath)) {
+    try {
+      const candidate = JSON.parse(fs.readFileSync(signoffPath, "utf8"));
+      if (candidate?.dossierHash === dossierHash && candidate?.signedBy && candidate?.status === "RATIFIED") {
+        existingSignoff = candidate;
+      }
+    } catch {
+      existingSignoff = null;
+    }
+  }
 
-  console.log(`\n\x1b[32m[SUCCESS] Release Evidence Dossier written to: ${dossierPath}\x1b[0m`);
-  console.log(`\x1b[32m[DOSSIER DIGEST] SHA-256: ${dossierHash}\x1b[0m`);
-  console.log(`\x1b[32m[RELEASE DECISION] ${dossier.decision.outcome} (Status: READY FOR REVIEW)\x1b[0m\n`);
+  const isRatified = Boolean(existingSignoff && allGatesGreen);
+  const outcome = !allGatesGreen ? "BLOCKED_FAILING_GATES" : isRatified ? "APPROVED" : "READY FOR REVIEW";
+
+  const dossier = {
+    ...coreEvidencePayload,
+    status: isRatified ? "RATIFIED" : allGatesGreen ? "READY FOR REVIEW" : "BLOCKED",
+    signOff: isRatified
+      ? existingSignoff
+      : {
+        schema: "abate.dossier-signoff.v1",
+        status: "READY FOR REVIEW",
+        signedBy: null,
+        role: null,
+        signedAt: null,
+        dossierHash,
+        instruction: 'Run `npm --prefix backend run sign-dossier -- --signer="Full Name" --role="Release Lead"` after manual review.'
+      },
+    decision: {
+      outcome,
+      authorityRequired: "Named Accountable Signer (tools/sign-dossier.ts)",
+      rationale: allGatesGreen
+        ? isRatified
+          ? `Signed by ${existingSignoff.signedBy} (${existingSignoff.role}) matching dossierHash.`
+          : "All automated test suites, live operational drills, and constitutional checks passed; awaiting explicit named human sign-off."
+        : `Release blocked due to failing gates: ${failingSuites.map((s) => s.script).join(", ")}`
+    }
+  };
+
+  // Write dossier artifacts
+  const evidenceDir = path.join(repoRoot, "evidence");
+  const frontendPublicDir = path.join(repoRoot, "frontend/public");
+  if (!fs.existsSync(evidenceDir)) fs.mkdirSync(evidenceDir, { recursive: true });
+  if (!fs.existsSync(frontendPublicDir)) fs.mkdirSync(frontendPublicDir, { recursive: true });
+
+  fs.writeFileSync(path.join(evidenceDir, "release-dossier.json"), JSON.stringify(dossier, null, 2));
+  fs.writeFileSync(path.join(frontendPublicDir, "release-dossier.json"), JSON.stringify(dossier, null, 2));
+
+  console.log(`\n✔ Built release dossier -> status: ${dossier.status}, outcome: ${dossier.decision.outcome}`);
+  console.log(`  Dossier Hash: ${dossierHash}`);
+  console.log(`  Files written: evidence/release-dossier.json, frontend/public/release-dossier.json`);
+
+  return dossier;
 }
 
-assembleDossier().catch((err) => {
-  console.error("\x1b[31m[BUILD DOSSIER FAILED]\x1b[0m", err);
-  process.exit(1);
-});
-
+if (require.main === module) {
+  assembleDossier()
+    .then((d) => {
+      process.exit(d.decision.outcome === "BLOCKED_FAILING_GATES" ? 1 : 0);
+    })
+    .catch((err) => {
+      console.error("[FAILED] build-dossier crashed:", err);
+      process.exit(1);
+    });
+}

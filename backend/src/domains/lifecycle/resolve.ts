@@ -2,8 +2,8 @@
 import crypto from "node:crypto";
 import { Tx } from "../../platform/db/with-tenant";
 import { PolicyResolution, PackRef, DecisionEnvelopeView } from "../../contracts/governance";
-import { canonicalJson, sha256Hex } from "../../platform/canonical";
 import { getDefaultEntitlements, featureAllowed } from "./entitlement";
+import { isKillSwitchActive } from "../ai/kill-switch";
 
 export interface PolicyPackRecord {
   id: string;
@@ -63,7 +63,7 @@ export async function approvedPackAt(
   return covering[0] || null;
 }
 
-function appliesToFeature(pack: PolicyPackRecord, appliesTo: TenantBindingRecord["applies_to"], feature: string): boolean {
+function appliesToFeature(_pack: PolicyPackRecord, appliesTo: TenantBindingRecord["applies_to"], feature: string): boolean {
   if (!appliesTo.feature || appliesTo.feature.length === 0) return true;
   return appliesTo.feature.includes(feature) || appliesTo.feature.includes("*");
 }
@@ -103,6 +103,10 @@ export async function resolvePolicy(
   const restricted: string[] = [];
 
   for (const b of bindings) {
+    if (await isKillSwitchActive(tx, `pack:${b.pack_key}`)) {
+      restricted.push(b.pack_key);
+      continue;
+    }
     const pack = await approvedPackAt(tx, b.pack_key, q.at);
     if (!pack) {
       // Pack expired or withdrawn at this instant: affected functions restricted

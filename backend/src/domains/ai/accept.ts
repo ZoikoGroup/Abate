@@ -5,7 +5,7 @@ import { Actor } from "../../platform/command";
 
 export async function acceptAiRun(
   tx: Tx,
-  actor: Actor,
+  _actor: Actor,
   runId: string,
   options?: { hazardId?: string; causeStatement?: string }
 ): Promise<{
@@ -55,7 +55,7 @@ export async function acceptAiRun(
 
 export async function discardAiRun(
   tx: Tx,
-  actor: Actor,
+  _actor: Actor,
   runId: string
 ): Promise<{ runId: string; status: "DISCARDED" }> {
   const res = await tx.q(
