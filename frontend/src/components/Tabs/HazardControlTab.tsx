@@ -585,13 +585,12 @@ export function HazardControlTab({ currentTenant, token }: HazardControlTabProps
           style={{
             padding: "1rem 1.25rem",
             marginBottom: "1.5rem",
-            borderLeft: `4px solid ${
-              feedback.type === "success"
-                ? "var(--success)"
-                : feedback.type === "warning" || feedback.type === "conflict"
+            borderLeft: `4px solid ${feedback.type === "success"
+              ? "var(--success)"
+              : feedback.type === "warning" || feedback.type === "conflict"
                 ? "var(--warning)"
                 : "var(--danger)"
-            }`
+              }`
           }}
         >
           <div style={{ fontWeight: 700, fontSize: "0.95rem", marginBottom: "0.25rem" }}>
@@ -722,10 +721,10 @@ export function HazardControlTab({ currentTenant, token }: HazardControlTabProps
 
       {/* Grid: Left Column (Hazard & Causes) / Right Column (Controls & Verification) */}
       <div style={{ display: "grid", gridTemplateColumns: "1fr 1fr", gap: "1.5rem", marginBottom: "1.5rem" }}>
-        
+
         {/* LEFT COLUMN: Hazard & Causes */}
         <div style={{ display: "flex", flexDirection: "column", gap: "1.5rem" }}>
-          
+
           {/* Hazard Registration & Selection */}
           <div className="card">
             <div className="card-header">
@@ -1002,7 +1001,7 @@ export function HazardControlTab({ currentTenant, token }: HazardControlTabProps
 
         {/* RIGHT COLUMN: Controls, Version-Bound Approval & Verification */}
         <div style={{ display: "flex", flexDirection: "column", gap: "1.5rem" }}>
-          
+
           {/* Active Control & Version-Bound Approval Card */}
           <div className="card">
             <div className="card-header">

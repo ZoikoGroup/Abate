@@ -485,9 +485,8 @@ export function AuditVerifierTab({ currentTenant, token }: AuditVerifierTabProps
                         <td className="monospace text-sm">{item.expectedSha256.slice(0, 12)}...</td>
                         <td>
                           <span
-                            className={`status-pill ${
-                              item.status === "MISMATCH" ? "status-error" : "status-live"
-                            }`}
+                            className={`status-pill ${item.status === "MISMATCH" ? "status-error" : "status-live"
+                              }`}
                           >
                             {item.status}
                           </span>

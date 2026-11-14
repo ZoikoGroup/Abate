@@ -4,6 +4,7 @@ import cors from "cors";
 import fs from "node:fs";
 import path from "node:path";
 import { loadConfig } from "./platform/config";
+import { getObjectStore } from "./platform/object-store";
 import { toErrorResponse, AppError } from "./platform/errors";
 import { openApiSpec, CreateOrganizationBody, TokenRequestBody, ZoikoTimeBatchV1, SemanticQueryV1 } from "./contracts";
 import { GOLDEN_01 } from "./fixtures/golden01";
@@ -61,6 +62,7 @@ import {
   recordDecisionEnvelope,
   issuePackage,
   getEvidencePackage,
+  verifyStoredEvidencePackage,
   requestErasure,
   recordCorrection,
   acknowledgeCorrection
@@ -142,12 +144,20 @@ function getHeader(req: Request, name: string): string | null {
 // Health and Metadata Endpoints
 // -------------------------------------------------------------
 
-app.get("/api/health", (_req: Request, res: Response) => {
-  res.status(200).json({
-    status: "ok",
+app.get("/api/health", async (_req: Request, res: Response) => {
+  const store = getObjectStore(cfg);
+  const objectStoreHealth = await store.health();
+  const overallOk = objectStoreHealth.ok || (cfg.appEnv !== "production" && cfg.appEnv !== "staging");
+  res.status(overallOk ? 200 : 503).json({
+    status: objectStoreHealth.ok ? "ok" : "degraded",
     app: "Zoiko Abate",
     version: "1.0.0",
     environment: cfg.appEnv,
+    objectStore: {
+      mode: store.mode,
+      ok: objectStoreHealth.ok,
+      detail: objectStoreHealth.detail
+    },
     timestamp: new Date().toISOString(),
     constitutionalBoundaries: {
       individualScoring: "PROHIBITED",
@@ -249,8 +259,12 @@ app.get(["/docs", "/swagger", "/api-docs"], (_req: Request, res: Response) => {
 // Authentication Endpoints (/api/v2/auth)
 // -------------------------------------------------------------
 
+// Dev-only issuance; staging and production tokens come from the identity provider
 app.post("/api/v2/auth/token", (req: Request, res: Response) => {
   try {
+    if (cfg.appEnv !== "local" && cfg.appEnv !== "test") {
+      throw new AppError("NOT_FOUND", "Not found.");
+    }
     const body = TokenRequestBody.parse(req.body);
     const token = createDevToken(body);
     res.status(200).json({
@@ -1640,6 +1654,23 @@ app.get("/api/v2/evidence-packages/:id", async (req: Request, res: Response) => 
     authorize(await resolveActor(who.tenantId, who.subject, new Date()), "evidence_package.read");
     const out = await withTenant(who.tenantId, async (tx) => {
       return await getEvidencePackage(tx, String(req.params.id));
+    });
+    if (!out) {
+      throw new AppError("NOT_FOUND", "Evidence package not found.");
+    }
+    res.status(200).json(out);
+  } catch (err) {
+    toErrorResponse(err, res);
+  }
+});
+
+// Verify Evidence Package Objects & Manifest Against Active ObjectStore
+app.get("/api/v2/evidence-packages/:id/verify", async (req: Request, res: Response) => {
+  try {
+    const who = await authenticate(getHeader(req, "authorization"));
+    authorize(await resolveActor(who.tenantId, who.subject, new Date()), "evidence_package.read");
+    const out = await withTenant(who.tenantId, async (tx) => {
+      return await verifyStoredEvidencePackage(tx, String(req.params.id));
     });
     if (!out) {
       throw new AppError("NOT_FOUND", "Evidence package not found.");

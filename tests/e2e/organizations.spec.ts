@@ -1,51 +1,50 @@
 // tests/e2e/organizations.spec.ts
 // Playwright End-to-End Test (Guide §F.8, Page 20)
-// Validates end-to-end user intent: login, idempotent organization creation, retry replay, and cross-tenant RLS isolation.
+// Validates end-to-end user intent: login, idempotent organization creation, retry replay, conflict detection, and cross-tenant isolation.
 
 import { test, expect } from "@playwright/test";
 
-const BASE_URL = process.env.PLAYWRIGHT_TEST_BASE_URL || "http://localhost:5173";
+const BASE_URL = process.env.PLAYWRIGHT_TEST_BASE_URL || "http://127.0.0.1:5173";
+const TENANT_B_ID = "00000000-0000-0000-0000-000000000002";
 
 test.describe("Organizations & Tenant Isolation E2E", () => {
-  test("idempotent create and tenant isolation across Tenant A and Tenant B", async ({ page }) => {
-    // 1. Visit App and Select Tenant A (Apex Legal Partners)
+  test("idempotent create, replay, conflict guard, and tenant isolation across Tenant A and Tenant B", async ({ page }) => {
     await page.goto(BASE_URL);
-    await page.waitForLoadState("networkidle");
+    await page.waitForLoadState("domcontentloaded");
 
-    // Click on Organizations tab
-    const orgsTabBtn = page.getByRole("button", { name: /organizations/i });
-    if (await orgsTabBtn.isVisible()) {
-      await orgsTabBtn.click();
-    }
+    // 1. Ensure Backend Connected badge is visible before issuing commands
+    await expect(page.getByText(/Backend Connected/i)).toBeVisible({ timeout: 15_000 });
+
+    // Click Organizations tab
+    await page.getByRole("button", { name: /Organizations & Idempotency/i }).click();
 
     const testOrgName = `Litigation Practice ${Date.now()}`;
+    await page.getByLabel(/Organization \/ Practice Name/i).fill(testOrgName);
 
-    // Fill organization name
-    const nameInput = page.getByLabel(/organization.*name/i).or(page.locator("input[placeholder*='name' i]"));
-    await nameInput.fill(testOrgName);
-
-    // Create organization
-    const createBtn = page.getByRole("button", { name: /create organization/i });
+    const createBtn = page.getByRole("button", { name: /Create Organization via runCommand/i });
+    await expect(createBtn).toBeEnabled({ timeout: 10_000 });
     await createBtn.click();
 
-    // Verify record appears in Tenant A list
-    await expect(page.getByText(testOrgName)).toHaveCount(1);
+    // Verify record appears once in Tenant A list
+    await expect(page.getByText("COMMAND COMPLETED (SUCCESS)")).toBeVisible({ timeout: 10_000 });
+    await expect(page.locator("table").getByText(testOrgName)).toHaveCount(1);
 
-    // 2. Resend same request with same idempotency key (Replay test)
-    // The UI retains the idempotency key until renewed
-    if (await createBtn.isEnabled()) {
-      await createBtn.click();
-      // Should still be exactly one row (idempotent replay)
-      await expect(page.getByText(testOrgName)).toHaveCount(1);
-    }
+    // 2. Replay exact same request (idempotent 200 replay)
+    const replayBtn = page.getByRole("button", { name: /Replay Exact Same Request/i });
+    await expect(replayBtn).toBeVisible();
+    await replayBtn.click();
+    await expect(page.locator("table").getByText(testOrgName)).toHaveCount(1);
 
-    // 3. Switch to Tenant B (Beacon Chambers)
-    const tenantSelector = page.getByRole("combobox", { name: /tenant/i }).or(page.locator("select"));
-    if (await tenantSelector.isVisible()) {
-      await tenantSelector.selectOption({ label: /Beacon Chambers/i });
-      // Database RLS must hide Tenant A's unit from Tenant B
-      await expect(page.getByText(testOrgName)).toHaveCount(0);
-    }
+    // 3. Tamper payload with same idempotency key (expects 409 conflict warning)
+    const tamperBtn = page.getByRole("button", { name: /Tamper Payload with Same Key/i });
+    await expect(tamperBtn).toBeVisible();
+    await tamperBtn.click();
+    await expect(page.getByText(/409 CONFLICT: Idempotency Key collision/i)).toBeVisible({ timeout: 10_000 });
+
+    // 4. Switch to Tenant B (Beacon Chambers) and confirm isolation hides Tenant A's organization
+    const tenantSelector = page.getByLabel(/Active Tenant Scope/i);
+    await tenantSelector.selectOption(TENANT_B_ID);
+    await expect(page.getByText(/Active Tenant Organizations \(Beacon Chambers\)/i)).toBeVisible({ timeout: 10_000 });
+    await expect(page.locator("table").getByText(testOrgName)).toHaveCount(0);
   });
 });
-

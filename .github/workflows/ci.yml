@@ -62,8 +62,9 @@ jobs:
       - name: Typecheck and compile backend
         run: npm --prefix backend run build
 
-      - name: Run Phase 1-7 and Worker constitutional suites
+      - name: Run Phase 1-9 and Worker constitutional suites
         run: |
+          npm --prefix backend run test-fast
           npm --prefix backend run test-boundaries
           npm --prefix backend run test-ingest
           npm --prefix backend run test-privacy
@@ -101,4 +102,36 @@ jobs:
             evidence/kill-switch-drill-report.json
             evidence/restore-rehearsal-report.json
             frontend/public/release-dossier.json
+
+  e2e-a11y:
+    name: Browser E2E & WCAG 2.1 AA Accessibility (Playwright + Axe)
+    runs-on: ubuntu-latest
+    env:
+      APP_ENV: test
+      AUTH_ISSUER: http://localhost:5000/auth
+      AUTH_AUDIENCE: abate-api
+      AUTH_SECRET: ci_test_auth_secret_key_abate_minimum_32_characters_long
+      SUPPORT_AUTH_SECRET: ci_test_support_secret_key_abate_minimum_32_characters_long
+      ACTION_GRANT_SECRET: ci_test_action_grant_secret_key_abate_min_32_chars_long
+    steps:
+      - name: Checkout repository
+        uses: actions/checkout@v4
+
+      - name: Setup Node.js 22
+        uses: actions/setup-node@v4
+        with:
+          node-version: "22"
+
+      - name: Install backend, frontend, and test dependencies
+        run: |
+          npm --prefix backend ci
+          npm --prefix frontend ci
+          npm --prefix tests install
+
+      - name: Install Playwright Chromium
+        run: npx --prefix tests playwright install chromium --with-deps
+
+      - name: Run Playwright E2E and Axe Accessibility Suites
+        run: npm --prefix tests run test:e2e
+
 
