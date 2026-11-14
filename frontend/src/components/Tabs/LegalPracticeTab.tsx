@@ -336,16 +336,18 @@ export function LegalPracticeTab({ currentTenant, token }: LegalPracticeTabProps
                       </p>
 
                       <div style={{ display: "flex", flexDirection: "column", gap: "0.5rem", marginBottom: "0.75rem" }}>
-                        <label style={{ fontSize: "0.8rem", fontWeight: 600 }}>Supervisory Partner:</label>
+                        <label htmlFor="sra-supervisory-partner" style={{ fontSize: "0.8rem", fontWeight: 600 }}>Supervisory Partner:</label>
                         <input
+                          id="sra-supervisory-partner"
                           type="text"
                           className="input-control"
                           value={consultationPartner}
                           onChange={(e) => setConsultationPartner(e.target.value)}
                         />
 
-                        <label style={{ fontSize: "0.8rem", fontWeight: 600 }}>Statutory Workload Action:</label>
+                        <label htmlFor="sra-mitigation-action" style={{ fontSize: "0.8rem", fontWeight: 600 }}>Statutory Workload Action:</label>
                         <select
+                          id="sra-mitigation-action"
                           className="select-control"
                           value={mitigationAction}
                           onChange={(e) => setMitigationAction(e.target.value)}

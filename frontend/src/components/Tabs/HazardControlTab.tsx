@@ -737,8 +737,9 @@ export function HazardControlTab({ currentTenant, token }: HazardControlTabProps
 
             {/* Selector */}
             <div className="form-group" style={{ marginBottom: "1rem" }}>
-              <label className="form-label">Active Hazard</label>
+              <label htmlFor="active-hazard-select" className="form-label">Active Hazard</label>
               <select
+                id="active-hazard-select"
                 value={selectedHazardId || ""}
                 onChange={e => setSelectedHazardId(e.target.value)}
                 className="select-control"
@@ -786,6 +787,7 @@ export function HazardControlTab({ currentTenant, token }: HazardControlTabProps
               <div style={{ fontSize: "0.85rem", fontWeight: 700, marginBottom: "0.5rem" }}>Register New Hazard</div>
               <div className="form-group">
                 <input
+                  aria-label="New hazard title"
                   type="text"
                   value={newHazardTitle}
                   onChange={e => setNewHazardTitle(e.target.value)}
@@ -795,6 +797,7 @@ export function HazardControlTab({ currentTenant, token }: HazardControlTabProps
                   required
                 />
                 <input
+                  aria-label="Originating release ID"
                   type="text"
                   value={newOriginatingReleaseId}
                   onChange={e => setNewOriginatingReleaseId(e.target.value)}
@@ -877,6 +880,7 @@ export function HazardControlTab({ currentTenant, token }: HazardControlTabProps
                         Configure Intervention Parameters:
                       </div>
                       <input
+                        aria-label="Intervention scope"
                         type="text"
                         value={newControlScope}
                         onChange={e => setNewControlScope(e.target.value)}
@@ -885,6 +889,7 @@ export function HazardControlTab({ currentTenant, token }: HazardControlTabProps
                         style={{ width: "100%", fontSize: "0.8rem", marginBottom: "0.25rem" }}
                       />
                       <input
+                        aria-label="Intervention objective"
                         type="text"
                         value={newControlObjective}
                         onChange={e => setNewControlObjective(e.target.value)}
@@ -895,6 +900,7 @@ export function HazardControlTab({ currentTenant, token }: HazardControlTabProps
                       <div style={{ display: "flex", gap: "0.5rem", alignItems: "center", marginBottom: "0.5rem" }}>
                         <span style={{ fontSize: "0.75rem", color: "var(--muted-text)" }}>Due:</span>
                         <input
+                          aria-label="Intervention review due date"
                           type="date"
                           value={newControlDueDate}
                           onChange={e => setNewControlDueDate(e.target.value)}
@@ -920,6 +926,7 @@ export function HazardControlTab({ currentTenant, token }: HazardControlTabProps
             <form onSubmit={handleProposeCause} style={{ borderTop: "1px solid var(--card-border)", paddingTop: "1rem" }}>
               <div style={{ fontSize: "0.85rem", fontWeight: 700, marginBottom: "0.5rem" }}>Propose Work-Design Cause</div>
               <input
+                aria-label="Operational root cause statement"
                 type="text"
                 value={newCauseStatement}
                 onChange={e => setNewCauseStatement(e.target.value)}
@@ -944,8 +951,9 @@ export function HazardControlTab({ currentTenant, token }: HazardControlTabProps
             </div>
             <form onSubmit={handleSetDisposition}>
               <div className="form-group" style={{ marginBottom: "0.75rem" }}>
-                <label className="form-label">Disposition State</label>
+                <label htmlFor="hazard-disposition-select" className="form-label">Disposition State</label>
                 <select
+                  id="hazard-disposition-select"
                   value={dispositionValue}
                   onChange={e => setDispositionValue(e.target.value as any)}
                   className="select-control"
@@ -959,8 +967,9 @@ export function HazardControlTab({ currentTenant, token }: HazardControlTabProps
                 </select>
               </div>
               <div className="form-group" style={{ marginBottom: "0.75rem" }}>
-                <label className="form-label">Rationale</label>
+                <label htmlFor="hazard-disposition-rationale" className="form-label">Rationale</label>
                 <input
+                  id="hazard-disposition-rationale"
                   type="text"
                   value={dispositionRationale}
                   onChange={e => setDispositionRationale(e.target.value)}
@@ -971,8 +980,9 @@ export function HazardControlTab({ currentTenant, token }: HazardControlTabProps
               </div>
               <div style={{ display: "grid", gridTemplateColumns: "1fr 1fr", gap: "0.5rem", marginBottom: "0.75rem" }}>
                 <div>
-                  <label className="form-label">Residual Risk</label>
+                  <label htmlFor="hazard-residual-risk" className="form-label">Residual Risk</label>
                   <input
+                    id="hazard-residual-risk"
                     type="text"
                     value={dispositionResidual}
                     onChange={e => setDispositionResidual(e.target.value)}
@@ -981,8 +991,9 @@ export function HazardControlTab({ currentTenant, token }: HazardControlTabProps
                   />
                 </div>
                 <div>
-                  <label className="form-label">Scheduled Review</label>
+                  <label htmlFor="hazard-scheduled-review" className="form-label">Scheduled Review</label>
                   <input
+                    id="hazard-scheduled-review"
                     type="date"
                     value={dispositionDate}
                     onChange={e => setDispositionDate(e.target.value)}
@@ -1069,8 +1080,9 @@ export function HazardControlTab({ currentTenant, token }: HazardControlTabProps
                       <div style={{ fontSize: "0.8rem", fontWeight: 700, marginBottom: "0.5rem" }}>Record Attributable Implementation Evidence</div>
                       <div style={{ display: "grid", gridTemplateColumns: "1fr 1fr", gap: "0.5rem", marginBottom: "0.5rem" }}>
                         <div>
-                          <label className="form-label" style={{ fontSize: "0.75rem" }}>Implementation Kind</label>
+                          <label htmlFor="hazard-impl-kind" className="form-label" style={{ fontSize: "0.75rem" }}>Implementation Kind</label>
                           <select
+                            id="hazard-impl-kind"
                             value={newImplementationKind}
                             onChange={e => setNewImplementationKind(e.target.value)}
                             className="select-control"
@@ -1083,8 +1095,9 @@ export function HazardControlTab({ currentTenant, token }: HazardControlTabProps
                           </select>
                         </div>
                         <div>
-                          <label className="form-label" style={{ fontSize: "0.75rem" }}>Evidence Reference</label>
+                          <label htmlFor="hazard-evidence-ref" className="form-label" style={{ fontSize: "0.75rem" }}>Evidence Reference</label>
                           <input
+                            id="hazard-evidence-ref"
                             type="text"
                             value={newEvidenceRef}
                             onChange={e => setNewEvidenceRef(e.target.value)}
@@ -1123,6 +1136,7 @@ export function HazardControlTab({ currentTenant, token }: HazardControlTabProps
                     Material Modification (Tests Automatic Approval Invalidation)
                   </div>
                   <input
+                    aria-label="Updated intervention scope"
                     type="text"
                     value={editScope}
                     onChange={e => setEditScope(e.target.value)}
@@ -1131,6 +1145,7 @@ export function HazardControlTab({ currentTenant, token }: HazardControlTabProps
                     style={{ width: "100%", marginBottom: "0.5rem" }}
                   />
                   <input
+                    aria-label="Updated intervention objective"
                     type="text"
                     value={editObjective}
                     onChange={e => setEditObjective(e.target.value)}
@@ -1201,8 +1216,9 @@ export function HazardControlTab({ currentTenant, token }: HazardControlTabProps
                       Conclude Verification (Named Human Reviewer)
                     </div>
                     <div className="form-group" style={{ marginBottom: "0.5rem" }}>
-                      <label className="form-label">Reviewer Outcome</label>
+                      <label htmlFor="hazard-conclude-outcome" className="form-label">Reviewer Outcome</label>
                       <select
+                        id="hazard-conclude-outcome"
                         value={concludeOutcome}
                         onChange={e => setConcludeOutcome(e.target.value as any)}
                         className="select-control"
@@ -1215,8 +1231,9 @@ export function HazardControlTab({ currentTenant, token }: HazardControlTabProps
                       </select>
                     </div>
                     <div className="form-group" style={{ marginBottom: "0.5rem" }}>
-                      <label className="form-label">Residual Risk Statement</label>
+                      <label htmlFor="hazard-conclude-residual" className="form-label">Residual Risk Statement</label>
                       <input
+                        id="hazard-conclude-residual"
                         type="text"
                         value={concludeResidualRisk}
                         onChange={e => setConcludeResidualRisk(e.target.value)}

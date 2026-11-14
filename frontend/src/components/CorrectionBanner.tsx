@@ -22,7 +22,7 @@ export const CorrectionBanner: React.FC<CorrectionBannerProps> = ({
       role="status"
       style={{
         background: "linear-gradient(135deg, rgba(226, 109, 90, 0.08) 0%, rgba(141, 154, 150, 0.12) 100%)",
-        borderLeft: "4px solid #E26D5A",
+        borderLeft: "4px solid #B84230",
         padding: "0.75rem 1rem",
         borderRadius: "4px",
         margin: "0.75rem 0",
@@ -36,7 +36,7 @@ export const CorrectionBanner: React.FC<CorrectionBannerProps> = ({
         <div style={{ display: "flex", alignItems: "center", gap: "0.5rem", marginBottom: "0.25rem" }}>
           <span
             style={{
-              background: "#E26D5A",
+              background: "#B84230",
               color: "#FFFFFF",
               fontSize: "0.68rem",
               fontWeight: 700,

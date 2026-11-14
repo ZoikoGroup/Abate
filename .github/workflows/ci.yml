@@ -28,10 +28,6 @@ jobs:
 
     env:
       APP_ENV: test
-      ABATE_REQUIRE_PG: "1"
-      DATABASE_URL_MIGRATOR: postgres://abate_migrator:migrator_pw@localhost:5432/abate
-      DATABASE_URL_APP: postgres://abate_app:app_pw@localhost:5432/abate
-      DATABASE_URL_WORKER: postgres://abate_worker:worker_pw@localhost:5432/abate
       AUTH_ISSUER: http://localhost:5000/auth
       AUTH_AUDIENCE: abate-api
       AUTH_SECRET: ci_test_auth_secret_key_abate_minimum_32_characters_long
@@ -54,15 +50,30 @@ jobs:
           npm --prefix frontend ci
 
       - name: Run clean database migrations
+        env:
+          ABATE_REQUIRE_PG: "1"
+          DATABASE_URL_MIGRATOR: postgres://abate_migrator:migrator_pw@localhost:5432/abate
+          DATABASE_URL_APP: postgres://abate_app:app_pw@localhost:5432/abate
+          DATABASE_URL_WORKER: postgres://abate_worker:worker_pw@localhost:5432/abate
         run: npm --prefix backend run migrate
 
       - name: Verify live Postgres role isolation and migration checksums
-        run: npx --prefix backend tsx tools/verify-pg-clean.ts --require-live
+        env:
+          ABATE_REQUIRE_PG: "1"
+          DATABASE_URL_MIGRATOR: postgres://abate_migrator:migrator_pw@localhost:5432/abate
+          DATABASE_URL_APP: postgres://abate_app:app_pw@localhost:5432/abate
+          DATABASE_URL_WORKER: postgres://abate_worker:worker_pw@localhost:5432/abate
+        run: npm --prefix backend run verify-pg -- --require-live
 
       - name: Typecheck and compile backend
         run: npm --prefix backend run build
 
       - name: Run Phase 1-9 and Worker constitutional suites
+        env:
+          ABATE_REQUIRE_PG: "0"
+          DATABASE_URL_MIGRATOR: postgres://disabled:disabled@127.0.0.1:1/abate
+          DATABASE_URL_APP: postgres://disabled:disabled@127.0.0.1:1/abate
+          DATABASE_URL_WORKER: postgres://disabled:disabled@127.0.0.1:1/abate
         run: |
           npm --prefix backend run test-fast
           npm --prefix backend run test-boundaries
@@ -75,10 +86,15 @@ jobs:
           npm --prefix backend run test-worker
 
       - name: Run Evidence Verifier, Kill Switch Drill, 30-Day HTTP Sim and Endpoint Check
+        env:
+          ABATE_REQUIRE_PG: "0"
+          DATABASE_URL_MIGRATOR: postgres://disabled:disabled@127.0.0.1:1/abate
+          DATABASE_URL_APP: postgres://disabled:disabled@127.0.0.1:1/abate
+          DATABASE_URL_WORKER: postgres://disabled:disabled@127.0.0.1:1/abate
         run: |
           npm --prefix backend run verify-evidence
           npm --prefix backend run drill-kill-switches
-          npx --prefix backend tsx tools/simulate-30d-http.ts --tcp
+          npm --prefix backend run sim-30d -- --tcp
           npm --prefix backend run check:endpoints
 
       - name: Lint and build frontend
@@ -87,6 +103,11 @@ jobs:
           npm --prefix frontend run build
 
       - name: Assemble dynamic Release Dossier and verify READY FOR REVIEW state
+        env:
+          ABATE_REQUIRE_PG: "0"
+          DATABASE_URL_MIGRATOR: postgres://disabled:disabled@127.0.0.1:1/abate
+          DATABASE_URL_APP: postgres://disabled:disabled@127.0.0.1:1/abate
+          DATABASE_URL_WORKER: postgres://disabled:disabled@127.0.0.1:1/abate
         run: |
           npm --prefix backend run build-dossier
           node -e "const d = require('./evidence/release-dossier.json'); if (d.status !== 'READY FOR REVIEW') { console.error('Expected READY FOR REVIEW, got', d.status); process.exit(1); }"
@@ -129,7 +150,12 @@ jobs:
           npm --prefix tests install
 
       - name: Install Playwright Chromium
-        run: npx --prefix tests playwright install chromium --with-deps
+        run: npm --prefix tests exec -- playwright install chromium --with-deps
+
+      - name: Typecheck backend and Playwright test suite
+        run: |
+          npm --prefix backend run build
+          ./backend/node_modules/.bin/tsc -p tests/tsconfig.json --noEmit
 
       - name: Run Playwright E2E and Axe Accessibility Suites
         run: npm --prefix tests run test:e2e

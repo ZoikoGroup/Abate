@@ -171,7 +171,7 @@ export default function App() {
           type="button"
           className="tab-button demo-tab-btn"
           onClick={() => handleToggleDemo(true)}
-          style={{ borderColor: "var(--abate-coral, #E26D5A)", color: "#E26D5A", fontWeight: 700 }}
+          style={{ borderColor: "#A83828", color: "#A83828", fontWeight: 700 }}
         >
           ✨ Live Demo Console
         </button>
