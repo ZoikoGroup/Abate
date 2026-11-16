@@ -1034,7 +1034,7 @@ export function HazardControlTab({ currentTenant, token }: HazardControlTabProps
                   <div style={{ display: "flex", justifyContent: "space-between", marginBottom: "0.25rem" }}>
                     <span style={{ fontWeight: 700 }}>Version {selectedControl.version}</span>
                     <span className="monospace" style={{ fontSize: "0.8rem", color: "var(--muted-text)" }}>
-                      Hash: {selectedControl.materialHash.slice(0, 16)}...
+                      Hash: {(selectedControl.materialHash || "").slice(0, 16)}...
                     </span>
                   </div>
                   <div style={{ fontSize: "0.85rem", marginBottom: "0.5rem" }}>

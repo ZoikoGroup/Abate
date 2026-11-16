@@ -101,16 +101,18 @@ export async function compileRelease(
     if (customCohortMembers && customCohortMembers.length > 0) {
       memberIds = customCohortMembers;
     } else {
-      // Fetch effective members belonging to cohort organization
+      // Fetch effective members belonging to cohort organization when cohortRef names an org UUID
       if (q.cohortRef && q.cohortRef.startsWith("org:")) {
         const orgId = q.cohortRef.replace(/^org:/, "");
-        const orgMembersRes = await tx.q(
-          `SELECT DISTINCT principal_id FROM effective_membership
-           WHERE tenant_id = $1 AND organization_id = $2 AND (valid_to IS NULL OR valid_to > $3)`,
-          [tenantId, orgId, q.periodStart]
-        );
-        if (orgMembersRes.rowCount && orgMembersRes.rowCount > 0) {
-          memberIds = orgMembersRes.rows.map(r => r.principal_id);
+        if (/^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i.test(orgId)) {
+          const orgMembersRes = await tx.q(
+            `SELECT DISTINCT principal_id FROM effective_membership
+             WHERE tenant_id = $1 AND organization_id = $2 AND (valid_to IS NULL OR valid_to > $3)`,
+            [tenantId, orgId, q.periodStart]
+          );
+          if (orgMembersRes.rowCount && orgMembersRes.rowCount > 0) {
+            memberIds = orgMembersRes.rows.map(r => r.principal_id);
+          }
         }
       }
       if (memberIds.length === 0) {
@@ -193,7 +195,7 @@ export async function compileRelease(
     // Retrieve work interval facts for this cohort and window
     const factsRes = await tx.q(
       `SELECT start_at, end_at FROM work_fact_revision
-       WHERE tenant_id = $1 AND start_at >= $2 AND end_at <= $3`,
+       WHERE tenant_id = $1 AND kind = 'WORK' AND start_at >= $2 AND end_at <= $3`,
       [tenantId, q.periodStart, q.periodEnd]
     );
 

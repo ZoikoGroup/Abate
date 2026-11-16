@@ -12,9 +12,13 @@
 // 7. Deterministic Arithmetic & Idempotent Query Replay
 
 import assert from "node:assert";
+import crypto from "node:crypto";
 import { GOLDEN_01 } from "../src/fixtures/golden01";
 import { seedTwoTenants } from "../src/fixtures/seed";
 import { compileRelease } from "../src/domains/privacy/compile-release";
+import { registerConnection } from "../src/domains/ingest/connections";
+import { ingestBatch } from "../src/domains/ingest/ingest-batch";
+import { resolveActor } from "../src/domains/tenant/auth";
 import { withTenant, withWorker } from "../src/platform/db/with-tenant";
 import { SemanticQuery } from "../src/contracts/release";
 
@@ -353,7 +357,111 @@ async function main() {
     }
   );
 
-  console.log(`\n\x1b[32m[SUCCESS] All ${passed}/7 Reconstruction Attack Lab tests PASSED.\x1b[0m\n`);
+  // --------------------------------------------------------------------------
+  // TEST 8: CalendarCadence Non-WORK Intervals Must Not Double-Count WORK Facts
+  // --------------------------------------------------------------------------
+  await runTest(
+    "Measurement Integrity: CalendarCadence non-WORK facts (AFTER_HOURS_CALL / MEETING_BLOCK) do not inflate WORK totals in compileRelease",
+    async () => {
+      const baseMembers = Array.from({ length: 10 }, (_, i) => `emp-cal-guard-base-${i + 1}`);
+      const baseRes = await compileRelease(
+        tenantAId,
+        {
+          metricId: "BOUNDARY_INTRUSION_SHARE",
+          metricVersion: 1,
+          cohortRef: "org:cal-guard-baseline",
+          periodStart: pStart,
+          periodEnd: pEnd,
+          releaseClass: "CLASS_B"
+        },
+        baseMembers
+      );
+      assert.strictEqual(baseRes.status, "RELEASED");
+
+      let baseVal = 0;
+      await withTenant(tenantAId, async (tx) => {
+        const row = (await tx.q("SELECT value FROM released_artifact WHERE release_id = $1", [baseRes.releaseId])).rows[0];
+        baseVal = Number(row.value);
+      });
+
+      const who = {
+        tenantId: tenantAId,
+        subject: "auth0|user-tenant-a-risk-owner",
+        purpose: GOLDEN_01.tenantA.defaultPurpose,
+        role: "RISK_OWNER"
+      };
+      const actor = await resolveActor(tenantAId, who.subject);
+      const calConn = await registerConnection({
+        who,
+        actor,
+        input: {
+          source: "CalendarCadence",
+          contractId: "00000000-0000-4000-a005-000000000002",
+          expectedCadenceSeconds: 3600
+        },
+        idempotencyKey: `recon-cal-conn-${crypto.randomUUID()}`
+      });
+
+      const batchKey = `recon-cal-batch-${crypto.randomUUID()}`;
+      const calIngest = await ingestBatch({
+        who,
+        actor,
+        connectorSource: "CalendarCadence",
+        batch: {
+          connectionId: calConn.body.id,
+          batchId: batchKey,
+          items: [
+            {
+              recordId: `cal-guard-afterhours-${crypto.randomUUID().slice(0, 8)}`,
+              revision: 1,
+              subjectRef: "emp-cal-guard-after-01",
+              startUtc: "2026-03-04T20:00:00Z",
+              endUtc: "2026-03-04T23:30:00Z",
+              workTz: "Europe/London",
+              kind: "AFTER_HOURS_CALL"
+            },
+            {
+              recordId: `cal-guard-meeting-${crypto.randomUUID().slice(0, 8)}`,
+              revision: 1,
+              subjectRef: "emp-cal-guard-after-02",
+              startUtc: "2026-03-05T21:00:00Z",
+              endUtc: "2026-03-05T23:00:00Z",
+              workTz: "Europe/London",
+              kind: "MEETING_BLOCK"
+            }
+          ]
+        },
+        idempotencyKey: batchKey
+      });
+      assert.strictEqual(calIngest.body.accepted, 2);
+
+      const postMembers = Array.from({ length: 10 }, (_, i) => `emp-cal-guard-post-${i + 1}`);
+      const postRes = await compileRelease(
+        tenantAId,
+        {
+          metricId: "BOUNDARY_INTRUSION_SHARE",
+          metricVersion: 1,
+          cohortRef: "org:cal-guard-post-calendar",
+          periodStart: pStart,
+          periodEnd: pEnd,
+          releaseClass: "CLASS_B"
+        },
+        postMembers
+      );
+      assert.strictEqual(postRes.status, "RELEASED");
+
+      await withTenant(tenantAId, async (tx) => {
+        const postRow = (await tx.q("SELECT value FROM released_artifact WHERE release_id = $1", [postRes.releaseId])).rows[0];
+        assert.strictEqual(
+          Number(postRow.value),
+          baseVal,
+          "CalendarCadence non-WORK intervals MUST NOT affect BOUNDARY_INTRUSION_SHARE compiled from WORK facts"
+        );
+      });
+    }
+  );
+
+  console.log(`\n\x1b[32m[SUCCESS] All ${passed}/9 Reconstruction Attack Lab tests PASSED.\x1b[0m\n`);
 }
 
 main().catch((err) => {

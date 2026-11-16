@@ -15,11 +15,36 @@ function parseArg(flag: string): string | null {
 function main() {
   const signer = parseArg("signer");
   const role = parseArg("role") || "Accountable Release Authority";
+  const scope = parseArg("scope");
+  const conditions = parseArg("conditions") || "Synthetic sandbox evaluation only; no external pilot or production customer data.";
+  const expiryDaysRaw = parseArg("expiry-days");
+  const imageDigestsRaw = parseArg("image-digests");
   const notes = parseArg("notes") || "Verified test suites, operational drills, and constitutional gates.";
 
   if (!signer || signer.length < 3 || /^(auto|ci|bot|system)$/i.test(signer)) {
-    console.error('ERROR: Explicit named human signer is required (e.g. --signer="Vishwajeet Singh" --role="Release Lead").');
+    console.error('ERROR: Explicit named human signer is required (e.g. --signer="Vishwajeet Singh" --role="Release Lead" --scope="synthetic-sandbox" --expiry-days=14).');
     process.exit(1);
+  }
+
+  if (!scope || scope.trim().length < 3) {
+    console.error('ERROR: Explicit scope is required (e.g. --scope="synthetic-sandbox").');
+    process.exit(1);
+  }
+
+  const expiryDays = expiryDaysRaw ? Number(expiryDaysRaw) : 14;
+  if (!Number.isFinite(expiryDays) || expiryDays < 1 || expiryDays > 90) {
+    console.error("ERROR: --expiry-days must be an integer between 1 and 90.");
+    process.exit(1);
+  }
+
+  let imageDigests: Record<string, string> | null = null;
+  if (imageDigestsRaw) {
+    try {
+      imageDigests = JSON.parse(imageDigestsRaw);
+    } catch {
+      console.error("ERROR: --image-digests must be valid JSON.");
+      process.exit(1);
+    }
   }
 
   const evidencePath = path.resolve(__dirname, "../../evidence/release-dossier.json");
@@ -38,17 +63,26 @@ function main() {
   }
 
   const dossierHash = dossier.signOff?.dossierHash;
-  if (!dossierHash) {
-    console.error("ERROR: Dossier missing cryptographic dossierHash. Rebuild dossier first.");
+  const commitSha = dossier.commitSha;
+  if (!dossierHash || !commitSha) {
+    console.error("ERROR: Dossier missing cryptographic dossierHash or commitSha. Rebuild dossier first.");
     process.exit(1);
   }
+
+  const now = new Date();
+  const expiresAt = new Date(now.getTime() + expiryDays * 24 * 60 * 60 * 1000).toISOString();
 
   const signOffRecord = {
     schema: "abate.dossier-signoff.v1",
     status: "RATIFIED",
     signedBy: signer,
     role,
-    signedAt: new Date().toISOString(),
+    scope: scope.trim(),
+    conditions,
+    commitSha,
+    imageDigests: imageDigests ?? dossier.system?.imageDigests ?? null,
+    signedAt: now.toISOString(),
+    expiresAt,
     dossierHash,
     notes
   };

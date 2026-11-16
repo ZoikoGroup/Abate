@@ -50,7 +50,7 @@ async function writeAudit(tx: Tx, actor: Actor, audit: AuditInput): Promise<void
       audit.resourceId,
       audit.resourceVersion || 1,
       audit.result,
-      audit.evidenceRefs || []
+      JSON.stringify(audit.evidenceRefs || [])
     ]
   );
 }
@@ -69,7 +69,7 @@ async function writeOutbox(tx: Tx, event: OutboxInput): Promise<void> {
       event.eventType,
       event.schemaVersion,
       event.purpose,
-      event.refs || []
+      JSON.stringify(event.refs || [])
     ]
   );
 }
@@ -130,7 +130,7 @@ export async function runCommand<T>(args: {
     await tx.q(
       `UPDATE idempotency_record SET status = 'DONE', response_status = 200, response_body = $4
        WHERE tenant_id = $1 AND operation = $2 AND idempotency_key = $3`,
-      [args.tenantId, args.operation, args.idempotencyKey, out.result]
+      [args.tenantId, args.operation, args.idempotencyKey, JSON.stringify(out.result)]
     );
 
     return { status: 200, body: out.result };

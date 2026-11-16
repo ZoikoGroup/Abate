@@ -5,18 +5,36 @@ declare module "@playwright/test" {
   export interface Locator {
     fill(value: string): Promise<void>;
     click(): Promise<void>;
+    check(): Promise<void>;
+    uncheck(): Promise<void>;
+    inputValue(): Promise<string>;
+    setInputFiles(
+      files:
+        | string
+        | string[]
+        | { name: string; mimeType: string; buffer: any }
+        | Array<{ name: string; mimeType: string; buffer: any }>
+    ): Promise<void>;
     selectOption(value: string | { label?: string | RegExp; value?: string }): Promise<string[]>;
     isVisible(): Promise<boolean>;
     isEnabled(): Promise<boolean>;
+    first(): Locator;
+    last(): Locator;
+    nth(index: number): Locator;
+    getByRole(role: string, options?: { name?: string | RegExp; exact?: boolean }): Locator;
+    getByLabel(label: string | RegExp, options?: { exact?: boolean }): Locator;
+    getByText(text: string | RegExp, options?: { exact?: boolean }): Locator;
+    locator(selector: string): Locator;
     or(locator: Locator): Locator;
   }
 
   export interface Page {
     goto(url: string): Promise<any>;
     waitForLoadState(state?: "load" | "domcontentloaded" | "networkidle"): Promise<any>;
-    getByRole(role: string, options?: { name?: string | RegExp }): Locator;
-    getByLabel(label: string | RegExp): Locator;
-    getByText(text: string | RegExp): Locator;
+    waitForTimeout(timeout: number): Promise<void>;
+    getByRole(role: string, options?: { name?: string | RegExp; exact?: boolean }): Locator;
+    getByLabel(label: string | RegExp, options?: { exact?: boolean }): Locator;
+    getByText(text: string | RegExp, options?: { exact?: boolean }): Locator;
     locator(selector: string): Locator;
   }
 
@@ -34,7 +52,10 @@ declare module "@playwright/test" {
   export const test: TestFunction;
 
   export interface ExpectMatcher {
-    toHaveCount(count: number): Promise<void>;
+    toBeVisible(options?: { timeout?: number }): Promise<void>;
+    toBeEnabled(options?: { timeout?: number }): Promise<void>;
+    toHaveText(expected: string | RegExp | Array<string | RegExp>, options?: { timeout?: number }): Promise<void>;
+    toHaveCount(count: number, options?: { timeout?: number }): Promise<void>;
     toEqual(expected: any): Promise<void>;
     toBe(expected: any): Promise<void>;
     toBeTruthy(): Promise<void>;
@@ -42,6 +63,8 @@ declare module "@playwright/test" {
   }
 
   export function expect(actual: any): ExpectMatcher;
+  export function defineConfig(config: any): any;
+  export const devices: Record<string, any>;
 }
 
 declare module "@axe-core/playwright" {
@@ -86,3 +109,6 @@ declare namespace NodeJS {
 
 declare const process: NodeJS.Process;
 
+declare const Buffer: {
+  from(data: string | Uint8Array | Array<number>, encoding?: string): any;
+};

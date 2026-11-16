@@ -244,7 +244,7 @@ export function CohortAnalyticsTab({ currentTenant, token }: CohortAnalyticsTabP
             <h3>Deterministic Cohort Measurement & Privacy Release</h3>
             <p className="card-desc">
               Aggregate psychosocial hazard indicators computed strictly over intervals and guarded by
-              differential-privacy compilation gates. Zero individual scoring. Zero surveillance telemetry.
+              constitutional privacy-release suppression gates. Zero individual scoring. Zero surveillance telemetry.
             </p>
           </div>
 

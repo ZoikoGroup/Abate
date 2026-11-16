@@ -19,8 +19,10 @@ import { createDevToken, authenticate, resolveActor } from "../src/domains/tenan
 import { ingestBatch } from "../src/domains/ingest/ingest-batch";
 import { partition, isDstTransitionAmbiguity } from "../src/domains/ingest/validate";
 import { deriveConnectionHealth } from "../src/domains/ingest/freshness";
+import { registerConnection, setConnectionState } from "../src/domains/ingest/connections";
 import { withTenant, withWorker, memDb } from "../src/platform/db/with-tenant";
 import { ZoikoTimeIntervalV1 } from "../src/contracts/sources/zoikotime.v1";
+import { CalendarCadenceEventV1 } from "../src/contracts/sources/calendar-cadence.v1";
 import { derivePseudonym } from "../src/domains/work/pseudonym";
 
 console.log("\x1b[36m=== Abate Task Runner: test-phase2-ingestion (Phase 2 Suite) ===\x1b[0m\n");
@@ -527,7 +529,135 @@ async function main() {
     }
   );
 
-  console.log(`\n\x1b[32m[SUCCESS] All ${passed}/8 Phase 2 Ingestion & Ledger tests PASSED.\x1b[0m\n`);
+  // --------------------------------------------------------------------------
+  // TEST 9: CalendarCadence v1 Connector Registration, Ingestion & Strict Rejection
+  // --------------------------------------------------------------------------
+  await runTest(
+    "CalendarCadence v1: Registers connection, ingests cadence blocks, rejects meeting subjects/attendees",
+    async () => {
+      // 1. Validate schema strictly rejects invitees / subjects / descriptions
+      assert.strictEqual(
+        CalendarCadenceEventV1.safeParse({
+          recordId: "cal-1",
+          revision: 1,
+          subjectRef: "emp-cal-01",
+          startUtc: "2026-03-02T10:00:00Z",
+          endUtc: "2026-03-02T11:00:00Z",
+          workTz: "Europe/London",
+          kind: "MEETING_BLOCK"
+        }).success,
+        true
+      );
+      assert.strictEqual(
+        CalendarCadenceEventV1.safeParse({
+          recordId: "cal-decoy-1",
+          revision: 1,
+          subjectRef: "emp-cal-01",
+          startUtc: "2026-03-02T10:00:00Z",
+          endUtc: "2026-03-02T11:00:00Z",
+          workTz: "Europe/London",
+          kind: "MEETING_BLOCK",
+          eventTitle: "Confidential Disciplinary Review",
+          attendees: ["alice@example.com"]
+        }).success,
+        false
+      );
+
+      // 2. Register new CalendarCadence connection idempotently against seeded CalendarCadence contract
+      const regKey = `reg-cal-${crypto.randomUUID()}`;
+      const reg1 = await registerConnection({
+        who: whoA,
+        actor: actorA,
+        input: {
+          source: "CalendarCadence",
+          contractId: "00000000-0000-4000-a005-000000000002",
+          expectedCadenceSeconds: 3600
+        },
+        idempotencyKey: regKey
+      });
+      assert.strictEqual(reg1.status, 200);
+      assert.strictEqual(reg1.body.source, "CalendarCadence");
+
+      // Idempotent replay returns same connection id
+      const reg2 = await registerConnection({
+        who: whoA,
+        actor: actorA,
+        input: {
+          source: "CalendarCadence",
+          contractId: "00000000-0000-4000-a005-000000000002",
+          expectedCadenceSeconds: 3600
+        },
+        idempotencyKey: regKey
+      });
+      assert.strictEqual(reg2.body.id, reg1.body.id);
+
+      // 3. Ingest mixed batch (1 valid MEETING_BLOCK, 1 rejected decoy with attendees)
+      const calBatchId = `batch-cal-${crypto.randomUUID()}`;
+      const calRes = await ingestBatch({
+        who: whoA,
+        actor: actorA,
+        connectorSource: "CalendarCadence",
+        batch: {
+          connectionId: reg1.body.id,
+          batchId: calBatchId,
+          items: [
+            {
+              recordId: `cal-rec-${crypto.randomUUID().slice(0, 8)}`,
+              revision: 1,
+              subjectRef: "emp-cal-alpha-01",
+              startUtc: "2026-03-03T10:00:00Z",
+              endUtc: "2026-03-03T11:00:00Z",
+              workTz: "Europe/London",
+              kind: "MEETING_BLOCK"
+            },
+            {
+              recordId: `cal-rec-bad-${crypto.randomUUID().slice(0, 8)}`,
+              revision: 1,
+              subjectRef: "emp-cal-alpha-02",
+              startUtc: "2026-03-03T11:00:00Z",
+              endUtc: "2026-03-03T12:00:00Z",
+              workTz: "Europe/London",
+              kind: "AFTER_HOURS_CALL",
+              attendees: ["secret@example.com"]
+            } as any
+          ]
+        },
+        idempotencyKey: calBatchId
+      });
+      assert.strictEqual(calRes.body.accepted, 1);
+      assert.strictEqual(calRes.body.rejected, 1);
+
+      // 4. Revoke connection and verify REVOKED state is terminal (cannot resume)
+      const revRes = await setConnectionState({
+        who: whoA,
+        actor: actorA,
+        connectionId: reg1.body.id,
+        newState: "REVOKED"
+      });
+      assert.strictEqual(revRes.body.state, "REVOKED");
+
+      await assert.rejects(
+        async () => {
+          await setConnectionState({
+            who: whoA,
+            actor: actorA,
+            connectionId: reg1.body.id,
+            newState: "ACTIVE"
+          });
+        },
+        /REVOKED connection is terminal/,
+        "REVOKED connection must refuse transition back to ACTIVE"
+      );
+
+      // Audit & Outbox event emitted for connection.state_change
+      const hasStateChangeAudit = memDb.auditEvents.some(
+        e => e.command === "connection.state_change" && e.resource_id === reg1.body.id
+      );
+      assert.strictEqual(hasStateChangeAudit, true, "Audit event must be recorded for connection state change");
+    }
+  );
+
+  console.log(`\n\x1b[32m[SUCCESS] All ${passed}/10 Phase 2 Ingestion & Ledger tests PASSED.\x1b[0m\n`);
 }
 
 main().catch((err) => {

@@ -45,12 +45,12 @@ recovery:
 
 signed_by:
   - role: "SRE Owner"
-    name: "Zoiko Abate Infrastructure Lead"
-    verified: true
+    name: "PENDING_NAMED_REVIEWER"
+    verified: false
   - role: "Release Owner"
-    name: "Zoiko Abate Principal Architect"
-    verified: true
+    name: "PENDING_NAMED_REVIEWER"
+    verified: false
 
-signature_status: "SIGNED_AND_RATIFIED"
-date: "2026-11-07"
+signature_status: "PENDING_MEASURED_EVIDENCE"
+date: "2026-11-16"
 

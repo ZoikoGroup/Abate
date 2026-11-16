@@ -1,5 +1,5 @@
 // frontend/src/components/Tabs/OperationsTab.tsx
-import { useState } from "react";
+import { useState, useEffect, useCallback } from "react";
 import {
   PRESET_TENANTS,
   requestSupportToken,
@@ -49,9 +49,41 @@ export function OperationsTab({ currentTenant, token }: OperationsTabProps) {
   const [errors, setErrors] = useState<SafeErrorLogEntry[]>([]);
   const [killSwitches, setKillSwitches] = useState<KillSwitchRecord[]>([]);
   const [opsJobs, setOpsJobs] = useState<OpsJobsOverview | null>(null);
+  const [dossier, setDossier] = useState<any | null>(null);
   const [requestId, setRequestId] = useState("");
   const [requestRecord, setRequestRecord] = useState<OpsRequestRecord | null>(null);
   const [receiptText, setReceiptText] = useState("");
+
+  const loadDossier = useCallback(async () => {
+    try {
+      const res = await fetch("/api/v2/release/dossier");
+      if (res.ok) {
+        setDossier(await res.json());
+        return;
+      }
+    } catch {
+      // Fallback to static bundle artifact
+    }
+    try {
+      const res = await fetch("/release-dossier.json");
+      if (res.ok) {
+        setDossier(await res.json());
+      }
+    } catch {
+      // Ignore offline fetch failure
+    }
+  }, []);
+
+  useEffect(() => {
+    let cancelled = false;
+    void Promise.resolve().then(() => {
+      if (cancelled) return;
+      void loadDossier();
+    });
+    return () => {
+      cancelled = true;
+    };
+  }, [loadDossier]);
 
   const act = async (title: string, fn: () => Promise<string>) => {
     setBusy(true);
@@ -69,7 +101,8 @@ export function OperationsTab({ currentTenant, token }: OperationsTabProps) {
       fetchSloReport(t),
       fetchOpsErrors(t),
       fetchKillSwitchesOps(t).catch(() => []),
-      fetchOpsJobs(t).catch(() => null)
+      fetchOpsJobs(t).catch(() => null),
+      loadDossier()
     ]);
     setReport(r);
     setErrors(e);
@@ -489,8 +522,33 @@ export function OperationsTab({ currentTenant, token }: OperationsTabProps) {
                 Constitutional and operational readiness criteria evaluated before release. A single P0 constitutional failure enforces an irrevocable NO-GO decision.
               </p>
             </div>
-            <span className="badge badge-success">STATUS: READY FOR REVIEW (0 FAILING P0 TESTS)</span>
+            <span className="badge badge-success">
+              STATUS: {dossier?.status || "READY FOR REVIEW"} (P0 GATE: {dossier?.p0Failures ?? 0} FAILURES)
+            </span>
           </div>
+          {dossier?.signOff?.signedBy && (
+            <div
+              style={{
+                background: "var(--success-bg)",
+                border: "1px solid var(--success)",
+                borderRadius: "6px",
+                padding: "0.75rem 1rem",
+                marginBottom: "1rem",
+                color: "var(--aubergine)",
+                fontSize: "0.85rem"
+              }}
+            >
+              <div>
+                <strong>Ratified By:</strong> {dossier.signOff.signedBy} ({dossier.signOff.role})
+              </div>
+              <div>
+                <strong>Signed At:</strong> {fmt(dossier.signOff.signedAt)}
+              </div>
+              <div style={{ wordBreak: "break-all" }}>
+                <strong>Dossier SHA-256:</strong> <code className="monospace">{dossier.signOff.dossierHash}</code>
+              </div>
+            </div>
+          )}
           <div className="table-responsive">
             <table className="data-table">
               <thead>

@@ -6,12 +6,12 @@ import path from "node:path";
 import { loadConfig } from "./platform/config";
 import { getObjectStore } from "./platform/object-store";
 import { toErrorResponse, AppError } from "./platform/errors";
-import { openApiSpec, CreateOrganizationBody, TokenRequestBody, ZoikoTimeBatchV1, SemanticQueryV1 } from "./contracts";
+import { openApiSpec, CreateOrganizationBody, TokenRequestBody, ZoikoTimeBatchV1, CalendarCadenceBatchV1, CreateConnectionInput, SourceAdapterName, SemanticQueryV1 } from "./contracts";
 import { GOLDEN_01 } from "./fixtures/golden01";
 import { authenticate, resolveActor, createDevToken, authorize } from "./domains/tenant/auth";
 import { RightsRequestInputSchema, CorrectionInputSchema, AcknowledgeCorrectionInputSchema } from "./contracts/governance";
 import { createOrganization, getOrganization, listOrganizations, getTenant } from "./domains/tenant/commands";
-import { ingestBatch, listConnections, getConnection, setConnectionState, listReceipts, listWorkFacts } from "./domains/ingest";
+import { ingestBatch, listSourceContracts, listConnections, getConnection, registerConnection, setConnectionState, listReceipts, listWorkFacts } from "./domains/ingest";
 import { compileRelease, getRelease } from "./domains/privacy";
 import {
   ExplainReleaseInput,
@@ -487,23 +487,89 @@ app.post("/api/v2/outbox/drain", async (_req: Request, res: Response) => {
 // Domain S02 / S03: Phase 2 Ingestion & Work-State Ledger Endpoints
 // -------------------------------------------------------------
 
-// Ingest ZoikoTime batch (Strict allowlist, natural batchId idempotency, returns safe counts)
-app.post("/api/v2/connectors/zoikotime/batches", async (req: Request, res: Response) => {
+async function handleConnectorBatchRequest(
+  req: Request,
+  res: Response,
+  schema: typeof ZoikoTimeBatchV1 | typeof CalendarCadenceBatchV1,
+  connectorSource: SourceAdapterName
+) {
   try {
     const who = await authenticate(getHeader(req, "authorization"));
     const actor = await resolveActor(who.tenantId, who.subject, new Date());
 
     // Strict schema parse: unknown or prohibited top-level fields rejected immediately
-    const batch = ZoikoTimeBatchV1.parse(req.body);
-
+    const batch = schema.parse(req.body);
     const idempotencyKey = getHeader(req, "idempotency-key") || batch.batchId;
     const out = await ingestBatch({
       who,
       actor,
       batch,
-      idempotencyKey
+      idempotencyKey,
+      connectorSource
     });
 
+    res.status(out.status).json(out.body);
+  } catch (err) {
+    toErrorResponse(err, res);
+  }
+}
+
+async function handleConnectionStateRequest(
+  req: Request,
+  res: Response,
+  newState: "ACTIVE" | "PAUSED" | "REVOKED"
+) {
+  try {
+    const who = await authenticate(getHeader(req, "authorization"));
+    const actor = await resolveActor(who.tenantId, who.subject, new Date());
+
+    const out = await setConnectionState({
+      who,
+      actor,
+      connectionId: String(req.params.id),
+      newState,
+      idempotencyKey: getHeader(req, "idempotency-key") || undefined
+    });
+    res.status(out.status).json(out.body);
+  } catch (err) {
+    toErrorResponse(err, res);
+  }
+}
+
+// Ingest ZoikoTime batch (Strict allowlist, natural batchId idempotency, returns safe counts)
+app.post("/api/v2/connectors/zoikotime/batches", (req: Request, res: Response) => {
+  return handleConnectorBatchRequest(req, res, ZoikoTimeBatchV1, "ZoikoTime");
+});
+
+// Ingest CalendarCadence batch (Strict allowlist; rejects meeting subjects, attendees, descriptions)
+app.post("/api/v2/connectors/calendar-cadence/batches", (req: Request, res: Response) => {
+  return handleConnectorBatchRequest(req, res, CalendarCadenceBatchV1, "CalendarCadence");
+});
+
+// List approved Source Contracts for tenant
+app.get("/api/v2/source-contracts", async (req: Request, res: Response) => {
+  try {
+    const who = await authenticate(getHeader(req, "authorization"));
+    const actor = await resolveActor(who.tenantId, who.subject, new Date());
+
+    const contracts = await listSourceContracts({ who, actor });
+    res.status(200).json(contracts);
+  } catch (err) {
+    toErrorResponse(err, res);
+  }
+});
+
+// Register new idempotent Source Connection bound to an active contract
+app.post("/api/v2/connections", async (req: Request, res: Response) => {
+  try {
+    const who = await authenticate(getHeader(req, "authorization"));
+    const actor = await resolveActor(who.tenantId, who.subject, new Date());
+    const idempotencyKey = getHeader(req, "idempotency-key");
+    if (!idempotencyKey) {
+      throw new AppError("VALIDATION", "Missing mandatory Idempotency-Key header.");
+    }
+    const input = CreateConnectionInput.parse(req.body);
+    const out = await registerConnection({ who, actor, input, idempotencyKey });
     res.status(out.status).json(out.body);
   } catch (err) {
     toErrorResponse(err, res);
@@ -535,56 +601,17 @@ app.get("/api/v2/connections/:id", async (req: Request, res: Response) => {
   }
 });
 
-// Connection state transitions (Pause / Resume / Revoke)
-app.post("/api/v2/connections/:id/pause", async (req: Request, res: Response) => {
-  try {
-    const who = await authenticate(getHeader(req, "authorization"));
-    const actor = await resolveActor(who.tenantId, who.subject, new Date());
-
-    const conn = await setConnectionState({
-      who,
-      actor,
-      connectionId: String(req.params.id),
-      newState: "PAUSED"
-    });
-    res.status(200).json(conn);
-  } catch (err) {
-    toErrorResponse(err, res);
-  }
+// Connection state transitions (Pause / Resume / Revoke) via atomic runCommand pipeline
+app.post("/api/v2/connections/:id/pause", (req: Request, res: Response) => {
+  return handleConnectionStateRequest(req, res, "PAUSED");
 });
 
-app.post("/api/v2/connections/:id/resume", async (req: Request, res: Response) => {
-  try {
-    const who = await authenticate(getHeader(req, "authorization"));
-    const actor = await resolveActor(who.tenantId, who.subject, new Date());
-
-    const conn = await setConnectionState({
-      who,
-      actor,
-      connectionId: String(req.params.id),
-      newState: "ACTIVE"
-    });
-    res.status(200).json(conn);
-  } catch (err) {
-    toErrorResponse(err, res);
-  }
+app.post("/api/v2/connections/:id/resume", (req: Request, res: Response) => {
+  return handleConnectionStateRequest(req, res, "ACTIVE");
 });
 
-app.post("/api/v2/connections/:id/revoke", async (req: Request, res: Response) => {
-  try {
-    const who = await authenticate(getHeader(req, "authorization"));
-    const actor = await resolveActor(who.tenantId, who.subject, new Date());
-
-    const conn = await setConnectionState({
-      who,
-      actor,
-      connectionId: String(req.params.id),
-      newState: "REVOKED"
-    });
-    res.status(200).json(conn);
-  } catch (err) {
-    toErrorResponse(err, res);
-  }
+app.post("/api/v2/connections/:id/revoke", (req: Request, res: Response) => {
+  return handleConnectionStateRequest(req, res, "REVOKED");
 });
 
 // Ingest Receipts (Traceable receipts with counts only, NEVER rejected payloads)
@@ -919,6 +946,7 @@ app.get("/api/v2/hazards/:id", async (req: Request, res: Response) => {
   try {
     const who = await authenticate(getHeader(req, "authorization"));
     const actor = await resolveActor(who.tenantId, who.subject, new Date());
+    const role = who.role || actor.memberships[0]?.domain_role || "RISK_OWNER";
     const hazardId = String(req.params.id);
 
     const out = await withTenant(who.tenantId, async (tx) => {
@@ -930,12 +958,17 @@ app.get("/api/v2/hazards/:id", async (req: Request, res: Response) => {
 
       const cRes = await tx.q("SELECT * FROM cause WHERE hazard_id = $1", [hazard.id]);
       const iRes = await tx.q("SELECT * FROM intervention WHERE hazard_id = $1", [hazard.id]);
+      const controls = await Promise.all(
+        iRes.rows.map((ctrl: any) =>
+          buildControlDetailView(tx, ctrl, role, ctrl.owner_principal_id === actor.principalId)
+        )
+      );
       const rel = await getRelease(actor, hazard.originating_release_id);
 
       return {
         hazard,
         causes: cRes.rows,
-        controls: iRes.rows,
+        controls,
         originatingRelease: rel
       };
     });

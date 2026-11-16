@@ -36,8 +36,16 @@ export const PublishPackInput = z.object({
   reviewDate: z.string().regex(/^\d{4}-\d{2}-\d{2}$/),
   content: z.object({
     title: z.string().min(3),
+    description: z.string().optional(),
+    publisher: z.string().optional(),
+    permittedFeatures: z.array(z.string()).optional(),
+    gates: z.union([z.array(z.string()), z.record(z.string(), z.unknown())]).optional(),
+    privacyFloor: z.union([z.number(), z.record(z.string(), z.unknown())]).optional(),
+    aiAuthority: z.union([z.string(), z.record(z.string(), z.unknown())]).optional(),
+    demandWindows: z.array(z.unknown()).optional(),
+    forbiddenWorkProduct: z.array(z.string()).optional(),
     retention: RetentionBounds.optional()
-  }).passthrough()
+  }).strict()
 }).strict();
 export type PublishPackInput = z.infer<typeof PublishPackInput>;
 
