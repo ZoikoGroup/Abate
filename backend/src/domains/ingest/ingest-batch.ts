@@ -93,10 +93,17 @@ export async function ingestBatch(args: {
       let conflicted = 0;
       let staleSnapshotsMarked = 0;
 
+      // Step 3a: Persist parent Ingest Receipt BEFORE inserting work_fact_revision children (FK receipt_id -> ingest_receipt.id)
+      await tx.q(
+        `INSERT INTO ingest_receipt (id, tenant_id, connection_id, batch_id, accepted, duplicate, rejected, conflicted)
+         VALUES ($1, $2, $3, $4, $5, $6, $7, $8)`,
+        [receiptId, tx.tenantId, conn.id, args.batch.batchId, 0, 0, rejected, 0]
+      );
+
       // Tenant secret for HMAC pseudonym derivation
       const tenantSecret = `${cfg.authSecret}:${args.who.tenantId}`;
 
-      // Step 3: Process validated items into work_fact_revision and identity_map
+      // Step 3b: Process validated items into work_fact_revision and identity_map
       for (const item of ok) {
         const itemHash = computeRequestHash(item);
         const pseudonym = derivePseudonym(tenantSecret, item.subjectRef);
@@ -176,11 +183,10 @@ export async function ingestBatch(args: {
         }
       }
 
-      // Step 4: Persist traceable Ingest Receipt (stores counts only, NEVER rejected payloads)
+      // Step 4: Update Ingest Receipt counts (stores counts only, NEVER rejected payloads)
       await tx.q(
-        `INSERT INTO ingest_receipt (id, tenant_id, connection_id, batch_id, accepted, duplicate, rejected, conflicted)
-         VALUES ($1, $2, $3, $4, $5, $6, $7, $8)`,
-        [receiptId, tx.tenantId, conn.id, args.batch.batchId, accepted, duplicate, rejected, conflicted]
+        `UPDATE ingest_receipt SET accepted = $1, duplicate = $2, conflicted = $3 WHERE id = $4`,
+        [accepted, duplicate, conflicted, receiptId]
       );
 
       // Step 5: Advance watermark & connection success timestamp in SAME transaction

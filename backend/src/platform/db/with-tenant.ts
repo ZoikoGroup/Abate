@@ -1141,6 +1141,19 @@ class MemoryClient {
       return { rows: [receipt], rowCount: 1, command: "INSERT", oid: 0, fields: [] };
     }
 
+    // Ingest Receipt Update
+    if (upper.includes("UPDATE INGEST_RECEIPT")) {
+      const [accepted, duplicate, conflicted, id] = params;
+      const existing = memDb.ingestReceipts.get(id);
+      if (existing && (!this.tenantContext || existing.tenant_id === this.tenantContext)) {
+        existing.accepted = accepted;
+        existing.duplicate = duplicate;
+        existing.conflicted = conflicted;
+        return { rows: [existing], rowCount: 1, command: "UPDATE", oid: 0, fields: [] };
+      }
+      return { rows: [], rowCount: 0, command: "UPDATE", oid: 0, fields: [] };
+    }
+
     // Ingest Receipt Select
     if (upper.includes("FROM INGEST_RECEIPT")) {
       let rows = Array.from(memDb.ingestReceipts.values()).filter(r => r.tenant_id === this.tenantContext);
