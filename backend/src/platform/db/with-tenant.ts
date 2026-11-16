@@ -2511,6 +2511,9 @@ let lastPgProbeAt = 0;
 // staging/production must never silently serve from the in-memory store: that would accept writes that vanish on restart
 const REQUIRE_PG = cfg.appEnv === "staging" || cfg.appEnv === "production";
 
+// Client-facing text: names the policy flag only, never hosts, ports or driver errors (those go to the server log)
+const PG_UNAVAILABLE_MESSAGE = "Database unavailable: PostgreSQL is required (ABATE_REQUIRE_PG=1) and the in-memory fallback is refused.";
+
 export function isPostgresRequired(): boolean {
   return REQUIRE_PG || process.env.ABATE_REQUIRE_PG === "1" || process.env.ABATE_REQUIRE_PG === "true";
 }
@@ -2527,12 +2530,12 @@ export async function checkPgHealth(): Promise<boolean> {
   if (isPgHealthy === false && !required) return false;
   // strict mode: re-probe (at most every 5s) so a slow first connect or a restart of Postgres recovers on its own
   if (required && isPgHealthy === false && Date.now() - lastPgProbeAt < 5000) {
-    throw new AppError("UNAVAILABLE", "Database unavailable.");
+    throw new AppError("UNAVAILABLE", PG_UNAVAILABLE_MESSAGE);
   }
   lastPgProbeAt = Date.now();
   if (!appPool) {
     isPgHealthy = false;
-    if (required) throw new AppError("UNAVAILABLE", "Database unavailable.");
+    if (required) throw new AppError("UNAVAILABLE", PG_UNAVAILABLE_MESSAGE);
     return false;
   }
   try {
@@ -2545,7 +2548,7 @@ export async function checkPgHealth(): Promise<boolean> {
     if (isPostgresRequired()) {
       // Detail stays in the server log; the client only ever sees the generic envelope
       console.error(`[DB] PostgreSQL is required but unreachable: ${err?.message ?? "connection failed"}. Run: docker compose up -d postgres`);
-      throw new AppError("UNAVAILABLE", "Database unavailable.");
+      throw new AppError("UNAVAILABLE", PG_UNAVAILABLE_MESSAGE);
     }
     console.warn("[DB] PostgreSQL is unreachable: using the in-memory store. Data is NOT persisted and resets on restart.");
   }
