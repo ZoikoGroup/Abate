@@ -20,21 +20,21 @@ try {
     connectionTimeoutMillis: 1000
   });
   // Prevent unhandled errors on idle clients
-  appPool.on("error", () => {});
+  appPool.on("error", () => { });
 
   workerPool = new Pool({
     connectionString: cfg.databaseUrlWorker,
     max: 2,
     connectionTimeoutMillis: 1000
   });
-  workerPool.on("error", () => {});
+  workerPool.on("error", () => { });
 
   migratorPool = new Pool({
     connectionString: cfg.databaseUrlMigrator,
     max: 5,
     connectionTimeoutMillis: 1000
   });
-  migratorPool.on("error", () => {});
+  migratorPool.on("error", () => { });
 } catch {
   // Graceful fallback to embedded store if Postgres is not available
 }
@@ -69,7 +69,7 @@ class MemoryDatabase {
   public outboxEvents: any[] = [];
   public deadLetterEvents: any[] = [];
   public inboxEvents: Map<string, any> = new Map();
-  
+
   // Phase 2 Ingestion & Work-State Ledger
   public sourceContracts: Map<string, any> = new Map();
   public connections: Map<string, any> = new Map();
@@ -290,7 +290,7 @@ export const memDb = new MemoryDatabase();
 // In-Memory Transaction Client simulating Postgres RLS and transaction-local set_config
 class MemoryClient {
   // Worker mode mirrors the abate_worker role: cross-tenant access to outbox_event/inbox_event only
-  constructor(private readonly workerMode = false) {}
+  constructor(private readonly workerMode = false) { }
   private tenantContext: string | null = null;
   private writePlane: "A" | "B" = "A";
   private snapshotState: string | null = null;
@@ -300,7 +300,7 @@ class MemoryClient {
     for (const rel of this.heldLocks) {
       try {
         rel();
-      } catch {}
+      } catch { }
     }
     this.heldLocks = [];
   }
@@ -1466,7 +1466,7 @@ class MemoryClient {
     // Hazard Select
     if (upper.includes("FROM HAZARD")) {
       let rows = Array.from(memDb.hazards.values()).filter(h => h.tenant_id === this.tenantContext);
-      if (params.length > 0) {
+      if (params.length > 0 && !upper.includes("WHERE TENANT_ID = $1") && !upper.includes("WHERE TENANT_ID=$1")) {
         rows = rows.filter(h => h.id === params[0] || h.originating_release_id === params[0]);
       }
       return { rows, rowCount: rows.length, command: "SELECT", oid: 0, fields: [] };
@@ -2487,7 +2487,7 @@ export async function withTenant<T>(
       await client.query("COMMIT");
       return out;
     } catch (e) {
-      await client.query("ROLLBACK").catch(() => {});
+      await client.query("ROLLBACK").catch(() => { });
       throw e;
     } finally {
       client.release();
@@ -2526,7 +2526,7 @@ export async function withPlatform<T>(fn: (tx: Tx) => Promise<T>): Promise<T> {
       await client.query("COMMIT");
       return out;
     } catch (e) {
-      await client.query("ROLLBACK").catch(() => {});
+      await client.query("ROLLBACK").catch(() => { });
       throw e;
     } finally {
       client.release();
@@ -2562,7 +2562,7 @@ export async function withWorker<T>(fn: (tx: Tx) => Promise<T>): Promise<T> {
       await client.query("COMMIT");
       return out;
     } catch (e) {
-      await client.query("ROLLBACK").catch(() => {});
+      await client.query("ROLLBACK").catch(() => { });
       throw e;
     } finally {
       client.release();

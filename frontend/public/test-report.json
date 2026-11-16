@@ -1,18 +1,18 @@
 {
   "suite": "Constitutional & Isolation Boundary Verification (ZAB-ENG-001)",
   "command": "npm run test-boundaries",
-  "timestamp": "2026-11-14T11:15:17.325Z",
+  "timestamp": "2026-11-16T03:13:13.586Z",
   "role": "AUDITOR / BOUNDARY_VERIFIER",
   "total": 57,
   "passed": 57,
   "failed": 0,
-  "durationMs": 277,
+  "durationMs": 359,
   "tests": [
     {
       "id": 1,
       "name": "Foreign tenant ID returns zero rows (Row-Level Security hides existence)",
       "status": "PASSED",
-      "durationMs": 29
+      "durationMs": 41
     },
     {
       "id": 2,
@@ -30,7 +30,7 @@
       "id": 4,
       "name": "Command pipeline returns cached response on exact replay and CONFLICT on payload mutation",
       "status": "PASSED",
-      "durationMs": 4
+      "durationMs": 3
     },
     {
       "id": 5,
@@ -48,25 +48,25 @@
       "id": 7,
       "name": "Decoy Lab: Prohibited fields (screenshots, sick reason) are rejected with zero persistence trace",
       "status": "PASSED",
-      "durationMs": 38
+      "durationMs": 44
     },
     {
       "id": 8,
       "name": "Duplicate batch delivery returns previous receipt and adds zero work facts",
       "status": "PASSED",
-      "durationMs": 4
+      "durationMs": 3
     },
     {
       "id": 9,
       "name": "Higher revision appends new record without destroying historical revision 1",
       "status": "PASSED",
-      "durationMs": 7
+      "durationMs": 4
     },
     {
       "id": 10,
       "name": "Paused connector refuses ingestion immediately with 403 FORBIDDEN",
       "status": "PASSED",
-      "durationMs": 3
+      "durationMs": 4
     },
     {
       "id": 11,
@@ -90,7 +90,7 @@
       "id": 14,
       "name": "Overlap differencing gate: Two cohorts differing by 1 person (symmetric difference < 5) are blocked",
       "status": "PASSED",
-      "durationMs": 1
+      "durationMs": 2
     },
     {
       "id": 15,
@@ -114,7 +114,7 @@
       "id": 18,
       "name": "Phase 4 Version-Bound Approval: Material edit (v1 -> v2) invalidates approval and resets to APPROVAL_REQUIRED",
       "status": "PASSED",
-      "durationMs": 2
+      "durationMs": 1
     },
     {
       "id": 19,
@@ -132,43 +132,43 @@
       "id": 21,
       "name": "Phase 4 Evidence Package: Exports complete vertical slice with verifiable SHA-256 manifest",
       "status": "PASSED",
-      "durationMs": 3
+      "durationMs": 4
     },
     {
       "id": 22,
       "name": "Phase 5 Jurisdiction: Pack resolution is effective-dated and fails closed outside coverage",
       "status": "PASSED",
-      "durationMs": 4
+      "durationMs": 8
     },
     {
       "id": 23,
       "name": "Phase 5 Jurisdiction: Published versions are immutable; out-of-sequence or overlapping versions are refused",
       "status": "PASSED",
-      "durationMs": 1
+      "durationMs": 2
     },
     {
       "id": 24,
       "name": "Phase 5 Retention: With no configured class a run deletes nothing (no invented default)",
       "status": "PASSED",
-      "durationMs": 1
+      "durationMs": 2
     },
     {
       "id": 25,
       "name": "Phase 5 Retention: Durations outside the pack floor/ceiling, or without pack coverage, are refused",
       "status": "PASSED",
-      "durationMs": 7
+      "durationMs": 13
     },
     {
       "id": 26,
       "name": "Phase 5 Legal Hold: Held facts survive purge; eligible = purged + held; tombstones are verified and content-free",
       "status": "PASSED",
-      "durationMs": 6
+      "durationMs": 7
     },
     {
       "id": 27,
       "name": "Phase 5 Legal Hold: Releasing the hold lets the next run purge; releasing twice is CONFLICT",
       "status": "PASSED",
-      "durationMs": 3
+      "durationMs": 4
     },
     {
       "id": 28,
@@ -186,25 +186,25 @@
       "id": 30,
       "name": "Phase 5 Isolation: Tenant B sees none of Tenant A's classes, holds, runs or tombstones and cannot release A's hold",
       "status": "PASSED",
-      "durationMs": 1
+      "durationMs": 4
     },
     {
       "id": 31,
       "name": "Phase 5 Authority: MEMBER and CONTROL_OWNER cannot place legal holds or run retention (FORBIDDEN)",
       "status": "PASSED",
-      "durationMs": 0
+      "durationMs": 1
     },
     {
       "id": 32,
       "name": "Phase 5 Fail Closed: A class outside a newer pack version's floor blocks the run instead of deleting",
       "status": "PASSED",
-      "durationMs": 1
+      "durationMs": 2
     },
     {
       "id": 33,
       "name": "B8 Diagnostic Receipt: content-free, tenant-scoped and verifiable after transport",
       "status": "PASSED",
-      "durationMs": 2
+      "durationMs": 7
     },
     {
       "id": 34,
@@ -216,7 +216,7 @@
       "id": 35,
       "name": "Phase 6 AI Lab 1: Injected instruction in knowledge cannot cause individual disclosure (rejected by validator)",
       "status": "PASSED",
-      "durationMs": 4
+      "durationMs": 9
     },
     {
       "id": 36,
@@ -228,7 +228,7 @@
       "id": 37,
       "name": "Phase 6 AI Lab 3: Fabricated/changed number rejected by numeric fidelity validator",
       "status": "PASSED",
-      "durationMs": 2
+      "durationMs": 3
     },
     {
       "id": 38,
@@ -240,13 +240,13 @@
       "id": 39,
       "name": "Phase 6 Action Lab 5: Mutated action parameters fail grant verification (FORBIDDEN)",
       "status": "PASSED",
-      "durationMs": 3
+      "durationMs": 4
     },
     {
       "id": 40,
       "name": "Phase 6 Action Lab 6: Timeout after provider dispatch records UNKNOWN_OUTCOME",
       "status": "PASSED",
-      "durationMs": 3
+      "durationMs": 6
     },
     {
       "id": 41,
@@ -264,37 +264,37 @@
       "id": 43,
       "name": "Review fix: GDPR erasure deletes with verified tombstones, keeps held facts, and refuses re-delivery",
       "status": "PASSED",
-      "durationMs": 14
+      "durationMs": 13
     },
     {
       "id": 44,
       "name": "Review fix: tenant policy bindings resolve to the bound packs for each tenant",
       "status": "PASSED",
-      "durationMs": 1
+      "durationMs": 2
     },
     {
       "id": 45,
       "name": "Review fix: actions require a live approval; editing the control after approval blocks dispatch without sending",
       "status": "PASSED",
-      "durationMs": 4
+      "durationMs": 7
     },
     {
       "id": 46,
       "name": "Review fix: a grant cannot dispatch a different attempt or another tenant's attempt",
       "status": "PASSED",
-      "durationMs": 8
+      "durationMs": 9
     },
     {
       "id": 47,
       "name": "Review fix: a live lease cannot be stolen while the provider call is in flight",
       "status": "PASSED",
-      "durationMs": 2
+      "durationMs": 3
     },
     {
       "id": 48,
       "name": "Review fix: a failed transaction leaves no Phase 6 rows behind",
       "status": "PASSED",
-      "durationMs": 0
+      "durationMs": 2
     },
     {
       "id": 49,
@@ -306,31 +306,31 @@
       "id": 50,
       "name": "AI accept: an accepted cause draft is stored as PROPOSED (not with a user id as its status)",
       "status": "PASSED",
-      "durationMs": 2
+      "durationMs": 3
     },
     {
       "id": 51,
       "name": "Evidence & corrections: a correction marks only overlapping releases STALE and supersedes only packages containing them",
       "status": "PASSED",
-      "durationMs": 18
+      "durationMs": 25
     },
     {
       "id": 52,
       "name": "Outbox worker: crash after delivery leaves the event unpublished; redelivery is deduplicated",
       "status": "PASSED",
-      "durationMs": 30
+      "durationMs": 36
     },
     {
       "id": 53,
       "name": "Phase 7 Lab 1: Performance outcome write cannot close an open hazard (Plane B cannot mutate Plane A)",
       "status": "PASSED",
-      "durationMs": 3
+      "durationMs": 6
     },
     {
       "id": 54,
       "name": "Phase 7 Lab 2: Prohibited claims in outcome evaluation are strictly rejected",
       "status": "PASSED",
-      "durationMs": 2
+      "durationMs": 1
     },
     {
       "id": 55,
@@ -348,7 +348,7 @@
       "id": 57,
       "name": "Phase 7 Lab 5: AI Change assessment workflow enforces stage guards and blocks closure on open obligations",
       "status": "PASSED",
-      "durationMs": 15
+      "durationMs": 21
     }
   ]
 }

@@ -5,7 +5,7 @@
 import { test, expect } from "@playwright/test";
 
 const BASE_URL = process.env.PLAYWRIGHT_TEST_BASE_URL || "http://127.0.0.1:5173";
-const TENANT_B_ID = "00000000-0000-0000-0000-000000000002";
+const TENANT_B_ID = "00000000-0000-4000-b000-00000000000b";
 
 test.describe("Organizations & Tenant Isolation E2E", () => {
   test("idempotent create, replay, conflict guard, and tenant isolation across Tenant A and Tenant B", async ({ page }) => {
