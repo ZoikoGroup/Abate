@@ -53,7 +53,7 @@ export function featureAllowed(
 /**
  * Default synthetic entitlements for tenants
  */
-export function getDefaultEntitlements(tenantId: string): Entitlements {
+export function getDefaultEntitlements(_tenantId: string): Entitlements {
   return {
     tier: "ENTERPRISE",
     features: [

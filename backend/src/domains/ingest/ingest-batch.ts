@@ -4,33 +4,50 @@ import { runCommand, computeRequestHash, Actor } from "../../platform/command";
 import { AppError } from "../../platform/errors";
 import { AuthenticatedIdentity, authorize } from "../tenant/auth";
 import { ZoikoTimeBatch } from "../../contracts/sources/zoikotime.v1";
-import { partition } from "./validate";
+import { CalendarCadenceBatch } from "../../contracts/sources/calendar-cadence.v1";
+import { SourceAdapterName } from "../../contracts/ingest";
+import { partition, partitionCalendarCadence } from "./validate";
 import { derivePseudonym } from "../work/pseudonym";
 import { recordKeyDigest } from "../work/record-key";
 import { loadConfig } from "../../platform/config";
+import { isKillSwitchActive } from "../ai/kill-switch";
 
 const cfg = loadConfig();
+
+const KILL_SWITCH_BY_SOURCE: Record<string, string> = {
+  zoikotime: "connector:zoikotime",
+  calendarcadence: "connector:calendar_cadence",
+  calendar_cadence: "connector:calendar_cadence"
+};
 
 export interface IngestBatchArgs {
   who: AuthenticatedIdentity;
   actor: Actor;
-  batch: ZoikoTimeBatch;
+  batch: ZoikoTimeBatch | CalendarCadenceBatch;
   idempotencyKey: string;
+  connectorSource?: SourceAdapterName;
 }
 
 export async function ingestBatch(args: {
   who: AuthenticatedIdentity;
   actor: Actor;
-  batch: ZoikoTimeBatch;
+  batch: ZoikoTimeBatch | CalendarCadenceBatch;
   idempotencyKey?: string;
+  connectorSource?: SourceAdapterName;
 }) {
   authorize(args.actor, "ingest.batch");
 
-  // Step 1: Strict Partitioning. Never log raw payloads or error objects.
-  const { ok, rejected } = partition(args.batch.items);
+  const expectedSource: SourceAdapterName = args.connectorSource || "ZoikoTime";
+
+  // Step 1: Strict Partitioning against the active connector contract. Never log raw payloads or error objects.
+  const { ok, rejected } =
+    expectedSource === "CalendarCadence"
+      ? partitionCalendarCadence(args.batch.items)
+      : partition(args.batch.items);
 
   const batchKey = args.idempotencyKey || args.batch.batchId;
   const requestHash = computeRequestHash({
+    connectorSource: expectedSource,
     connectionId: args.batch.connectionId,
     batchId: args.batch.batchId,
     // The full item set, not just its length: the same key with different items used to replay the first
@@ -45,9 +62,9 @@ export async function ingestBatch(args: {
     requestHash,
     actor: args.actor,
     body: async (tx) => {
-      // Step 2: Validate Connection exists and is ACTIVE
+      // Step 2: Validate Connection exists, matches adapter source, kill switch is inactive, and connection is ACTIVE
       const connRes = await tx.q(
-        `SELECT id, state FROM connection WHERE id = $1`,
+        `SELECT id, state, source FROM connection WHERE id = $1`,
         [args.batch.connectionId]
       );
 
@@ -56,6 +73,18 @@ export async function ingestBatch(args: {
       }
 
       const conn = connRes.rows[0];
+      if (args.connectorSource && String(conn.source).toLowerCase() !== expectedSource.toLowerCase()) {
+        throw new AppError(
+          "VALIDATION",
+          `Connection source mismatch: expected '${expectedSource}', got '${conn.source}'.`
+        );
+      }
+
+      const normSource = String(conn.source || expectedSource).toLowerCase();
+      const connectorScope = KILL_SWITCH_BY_SOURCE[normSource] || `connector:${normSource}`;
+      if (await isKillSwitchActive(tx, connectorScope)) {
+        throw new AppError("UNAVAILABLE", `Ingestion disabled by kill switch (${connectorScope}).`);
+      }
       if (conn.state !== "ACTIVE") {
         throw new AppError("FORBIDDEN", `Connection is ${conn.state}; further data collection is blocked.`);
       }
@@ -66,10 +95,17 @@ export async function ingestBatch(args: {
       let conflicted = 0;
       let staleSnapshotsMarked = 0;
 
+      // Step 3a: Persist parent Ingest Receipt BEFORE inserting work_fact_revision children (FK receipt_id -> ingest_receipt.id)
+      await tx.q(
+        `INSERT INTO ingest_receipt (id, tenant_id, connection_id, batch_id, accepted, duplicate, rejected, conflicted)
+         VALUES ($1, $2, $3, $4, $5, $6, $7, $8)`,
+        [receiptId, tx.tenantId, conn.id, args.batch.batchId, 0, 0, rejected, 0]
+      );
+
       // Tenant secret for HMAC pseudonym derivation
       const tenantSecret = `${cfg.pseudonymSecret}:${args.who.tenantId}`;
 
-      // Step 3: Process validated items into work_fact_revision and identity_map
+      // Step 3b: Process validated items into work_fact_revision and identity_map
       const mappedSubjects = new Set<string>();
       for (const item of ok) {
         const itemHash = computeRequestHash(item);
@@ -154,11 +190,10 @@ export async function ingestBatch(args: {
         }
       }
 
-      // Step 4: Persist traceable Ingest Receipt (stores counts only, NEVER rejected payloads)
+      // Step 4: Update Ingest Receipt counts (stores counts only, NEVER rejected payloads)
       await tx.q(
-        `INSERT INTO ingest_receipt (id, tenant_id, connection_id, batch_id, accepted, duplicate, rejected, conflicted)
-         VALUES ($1, $2, $3, $4, $5, $6, $7, $8)`,
-        [receiptId, tx.tenantId, conn.id, args.batch.batchId, accepted, duplicate, rejected, conflicted]
+        `UPDATE ingest_receipt SET accepted = $1, duplicate = $2, conflicted = $3 WHERE id = $4`,
+        [accepted, duplicate, conflicted, receiptId]
       );
 
       // Step 5: Advance watermark & connection success timestamp in SAME transaction
@@ -169,7 +204,9 @@ export async function ingestBatch(args: {
 
       await tx.q(
         `INSERT INTO watermark (tenant_id, connection_id, cursor, advanced_at)
-         VALUES ($1, $2, $3, now())`,
+         VALUES ($1, $2, $3, now())
+         ON CONFLICT (tenant_id, connection_id)
+         DO UPDATE SET cursor = EXCLUDED.cursor, advanced_at = EXCLUDED.advanced_at`,
         [tx.tenantId, conn.id, args.batch.batchId]
       );
 

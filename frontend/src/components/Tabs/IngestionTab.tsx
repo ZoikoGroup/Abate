@@ -1,11 +1,14 @@
 // frontend/src/components/Tabs/IngestionTab.tsx
 import { useState, useEffect, useCallback } from "react";
 import {
+  fetchSourceContracts,
   fetchConnections,
+  registerConnection,
   setConnectionState,
   fetchReceipts,
   fetchWorkFacts,
   submitZoikoBatch,
+  type SourceContract,
   type Connection,
   type IngestReceipt,
   type WorkFact,
@@ -20,6 +23,9 @@ interface IngestionTabProps {
 }
 
 export function IngestionTab({ currentTenant, token, onRefresh }: IngestionTabProps) {
+  const [contracts, setContracts] = useState<SourceContract[]>([]);
+  const [selectedContractId, setSelectedContractId] = useState<string>("");
+  const [newCadenceSeconds, setNewCadenceSeconds] = useState<string>("3600");
   const [connections, setConnections] = useState<Connection[]>([]);
   const [receipts, setReceipts] = useState<IngestReceipt[]>([]);
   const [workFacts, setWorkFacts] = useState<WorkFact[]>([]);
@@ -39,11 +45,16 @@ export function IngestionTab({ currentTenant, token, onRefresh }: IngestionTabPr
     if (!token) return;
     setLoading(true);
     try {
-      const [conns, recs, facts] = await Promise.all([
+      const [ctrs, conns, recs, facts] = await Promise.all([
+        fetchSourceContracts(token).catch(() => [] as SourceContract[]),
         fetchConnections(token),
         fetchReceipts(token),
         fetchWorkFacts(token)
       ]);
+      setContracts(ctrs);
+      if (ctrs.length > 0) {
+        setSelectedContractId(prev => prev && ctrs.some(c => c.id === prev) ? prev : ctrs[0].id);
+      }
       setConnections(conns);
       setReceipts(recs);
       setWorkFacts(facts);
@@ -55,8 +66,68 @@ export function IngestionTab({ currentTenant, token, onRefresh }: IngestionTabPr
   }, [token]);
 
   useEffect(() => {
-    loadData();
-  }, [loadData, currentTenant.id]);
+    if (!token) return;
+    let cancelled = false;
+    void Promise.all([
+      fetchSourceContracts(token).catch(() => [] as SourceContract[]),
+      fetchConnections(token),
+      fetchReceipts(token),
+      fetchWorkFacts(token)
+    ])
+      .then(([ctrs, conns, recs, facts]) => {
+        if (cancelled) return;
+        setContracts(ctrs);
+        if (ctrs.length > 0) {
+          setSelectedContractId(ctrs[0].id);
+        }
+        setConnections(conns);
+        setReceipts(recs);
+        setWorkFacts(facts);
+      })
+      .catch((err) => {
+        console.error("Failed to load ingestion data:", err);
+      });
+    return () => {
+      cancelled = true;
+    };
+  }, [token, currentTenant.id]);
+
+  // Register new source connection bound to approved contract
+  const handleRegisterConnection = async (e: React.FormEvent) => {
+    e.preventDefault();
+    if (!token || !selectedContractId) return;
+    const contract = contracts.find(c => c.id === selectedContractId);
+    if (!contract) return;
+
+    setActionLoading("register-conn");
+    setFeedback(null);
+    try {
+      const created = await registerConnection(
+        {
+          source: contract.source,
+          contractId: contract.id,
+          expectedCadenceSeconds: Math.max(60, Number(newCadenceSeconds) || 3600)
+        },
+        `reg-conn-${crypto.randomUUID()}`,
+        token
+      );
+      setFeedback({
+        type: "success",
+        title: "Source Connection Registered",
+        message: `Bound new "${created.source}" connection (${created.id.slice(0, 8)}...) to contract ${contract.version}.`
+      });
+      await loadData();
+      onRefresh();
+    } catch (err: any) {
+      setFeedback({
+        type: "error",
+        title: "Connection Registration Failed",
+        message: err.message || "Failed to register connection."
+      });
+    } finally {
+      setActionLoading(null);
+    }
+  };
 
   // Connection State Controls
   const handleToggleState = async (conn: Connection, action: "pause" | "resume" | "revoke") => {
@@ -443,6 +514,59 @@ export function IngestionTab({ currentTenant, token, onRefresh }: IngestionTabPr
           </div>
           <div className="badge badge-dark">{connections.length} Connections</div>
         </div>
+
+        {contracts.length > 0 && (
+          <form
+            onSubmit={handleRegisterConnection}
+            style={{
+              display: "flex",
+              gap: "0.75rem",
+              flexWrap: "wrap",
+              alignItems: "flex-end",
+              padding: "0.9rem 1rem",
+              marginBottom: "1rem",
+              border: "1px solid var(--card-border)",
+              borderRadius: "8px",
+              background: "var(--ivory)"
+            }}
+          >
+            <div className="form-group" style={{ flex: "1 1 240px", marginBottom: 0 }}>
+              <label htmlFor="new-conn-contract" className="form-label">Approved Source Contract</label>
+              <select
+                id="new-conn-contract"
+                className="select-control"
+                style={{ width: "100%", background: "#FFFFFF", color: "var(--graphite)", borderColor: "var(--card-border)" }}
+                value={selectedContractId}
+                onChange={(e) => setSelectedContractId(e.target.value)}
+              >
+                {contracts.map(c => (
+                  <option key={c.id} value={c.id}>
+                    {c.source} {c.version} ({c.status})
+                  </option>
+                ))}
+              </select>
+            </div>
+            <div className="form-group" style={{ flex: "0 1 160px", marginBottom: 0 }}>
+              <label htmlFor="new-conn-cadence" className="form-label">Cadence (seconds)</label>
+              <input
+                id="new-conn-cadence"
+                type="number"
+                min={60}
+                max={86400}
+                className="text-control"
+                value={newCadenceSeconds}
+                onChange={(e) => setNewCadenceSeconds(e.target.value)}
+              />
+            </div>
+            <button
+              type="submit"
+              className="btn btn-primary btn-sm"
+              disabled={loading || actionLoading !== null || !selectedContractId}
+            >
+              {actionLoading === "register-conn" ? "Registering..." : "+ Register Connection"}
+            </button>
+          </form>
+        )}
 
         {connections.length === 0 ? (
           <p className="empty-message">No connections found for this tenant scope.</p>

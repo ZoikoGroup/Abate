@@ -1,12 +1,18 @@
 // backend/src/fixtures/seed.ts
 import { GOLDEN_01 } from "./golden01";
-import { memDb, appPool } from "../platform/db/with-tenant";
+import { memDb } from "../platform/db/with-tenant";
 import { assertNotProduction } from "../platform/config";
 import crypto from "node:crypto";
+import { Pool } from "pg";
 import { packContentHash } from "../domains/lifecycle/jurisdiction";
 import { materialHash } from "../domains/control/material";
 
-export async function seedTwoTenants(opts: { clock?: Date } = {}) {
+export interface SeedTwoTenantsOptions {
+  clock?: Date;
+  persistToPostgres?: boolean;
+}
+
+export async function seedTwoTenants(opts: SeedTwoTenantsOptions = {}) {
   // Enforce mandatory playbook guard: refuses to run in staging or production
   assertNotProduction("seedTwoTenants");
 
@@ -86,6 +92,16 @@ export async function seedTwoTenants(opts: { clock?: Date } = {}) {
     status: "ACTIVE"
   };
   memDb.sourceContracts.set(contractA.id, contractA);
+
+  const contractCalA = {
+    id: "00000000-0000-4000-a005-000000000002",
+    tenant_id: tA.id,
+    source: "CalendarCadence",
+    version: "v1.0",
+    contract_hash: "sha256-contract-calendar-cadence-v1.0-approved",
+    status: "ACTIVE"
+  };
+  memDb.sourceContracts.set(contractCalA.id, contractCalA);
 
   const connA = {
     id: "00000000-0000-4000-a004-000000000001",
@@ -216,6 +232,16 @@ export async function seedTwoTenants(opts: { clock?: Date } = {}) {
     status: "ACTIVE"
   };
   memDb.sourceContracts.set(contractB.id, contractB);
+
+  const contractCalB = {
+    id: "00000000-0000-4000-b005-000000000002",
+    tenant_id: tB.id,
+    source: "CalendarCadence",
+    version: "v1.0",
+    contract_hash: "sha256-contract-calendar-cadence-v1.0-approved",
+    status: "ACTIVE"
+  };
+  memDb.sourceContracts.set(contractCalB.id, contractCalB);
 
   const connB = {
     id: "00000000-0000-4000-b004-000000000001",
@@ -445,9 +471,10 @@ export async function seedTwoTenants(opts: { clock?: Date } = {}) {
     enabled: true
   });
 
-  // Seed Phase 8 Five Independent Kill Switches (Playbook §8.4 / Page 91-92)
+  // Seed Phase 8 Independent Kill Switches (Playbook §8.4 / Page 91-92)
   const defaultKillSwitches = [
     { scope: "connector:zoikotime", active: false, changed_by: "system.init", changed_at: validFrom },
+    { scope: "connector:calendar_cadence", active: false, changed_by: "system.init", changed_at: validFrom },
     { scope: "release_path", active: false, changed_by: "system.init", changed_at: validFrom },
     { scope: "pack:legal-uk-sra", active: false, changed_by: "system.init", changed_at: validFrom },
     { scope: "all_ai", active: false, changed_by: "system.init", changed_at: validFrom },
@@ -456,6 +483,103 @@ export async function seedTwoTenants(opts: { clock?: Date } = {}) {
   for (const ks of defaultKillSwitches) {
     if (!memDb.aiKillSwitches.has(ks.scope)) {
       memDb.aiKillSwitches.set(ks.scope, ks);
+    }
+  }
+
+  if (opts.persistToPostgres || process.env.ABATE_SEED_PG === "1") {
+    const connectionString = process.env.DATABASE_URL_MIGRATOR || process.env.DATABASE_URL_APP;
+    if (!connectionString) {
+      throw new Error("PostgreSQL seeding requested but DATABASE_URL_MIGRATOR / DATABASE_URL_APP is not configured.");
+    }
+
+    const pool = new Pool({ connectionString, max: 2, connectionTimeoutMillis: 3000 });
+    try {
+      const client = await pool.connect();
+      try {
+        const tenantBundles = [
+          { tenant: tA, org: orgA, principal: principalA, membership: membershipA, contracts: [contractA, contractCalA], connection: connA },
+          { tenant: tB, org: orgB, principal: principalB, membership: membershipB, contracts: [contractB, contractCalB], connection: connB }
+        ];
+
+        for (const b of tenantBundles) {
+          await client.query("BEGIN");
+          try {
+            await client.query("SELECT set_config('app.tenant_id', $1, true)", [b.tenant.id]);
+            await client.query(
+              `INSERT INTO tenant (id, name, region, jurisdiction_config_ref, created_at)
+               VALUES ($1, $2, $3, $4, $5)
+               ON CONFLICT (id) DO NOTHING`,
+              [b.tenant.id, b.tenant.name, b.tenant.region, b.tenant.jurisdiction_config_ref, b.tenant.created_at]
+            );
+            await client.query(
+              `INSERT INTO organization (id, tenant_id, parent_id, name)
+               VALUES ($1, $2, $3, $4)
+               ON CONFLICT (id) DO NOTHING`,
+              [b.org.id, b.org.tenant_id, b.org.parent_id, b.org.name]
+            );
+            await client.query(
+              `INSERT INTO principal (id, tenant_id, external_subject, kind)
+               VALUES ($1, $2, $3, $4)
+               ON CONFLICT (id) DO NOTHING`,
+              [b.principal.id, b.principal.tenant_id, b.principal.external_subject, b.principal.kind]
+            );
+            await client.query(
+              `INSERT INTO effective_membership (id, tenant_id, principal_id, organization_id, domain_role, valid_from, valid_to, recorded_at)
+               VALUES ($1, $2, $3, $4, $5, $6, $7, $8)
+               ON CONFLICT (id) DO NOTHING`,
+              [
+                b.membership.id,
+                b.membership.tenant_id,
+                b.membership.principal_id,
+                b.membership.organization_id,
+                b.membership.domain_role,
+                b.membership.valid_from,
+                b.membership.valid_to,
+                b.membership.recorded_at
+              ]
+            );
+            for (const c of b.contracts) {
+              await client.query(
+                `INSERT INTO source_contract (id, tenant_id, source, version, contract_hash, status)
+                 VALUES ($1, $2, $3, $4, $5, $6)
+                 ON CONFLICT (id) DO NOTHING`,
+                [c.id, c.tenant_id, c.source, c.version, c.contract_hash, c.status]
+              );
+            }
+            await client.query(
+              `INSERT INTO connection (id, tenant_id, source, contract_id, state, last_success_at, expected_cadence_seconds)
+               VALUES ($1, $2, $3, $4, $5, $6, $7)
+               ON CONFLICT (id) DO NOTHING`,
+              [
+                b.connection.id,
+                b.connection.tenant_id,
+                b.connection.source,
+                b.connection.contract_id,
+                b.connection.state,
+                b.connection.last_success_at,
+                b.connection.expected_cadence_seconds
+              ]
+            );
+            await client.query("COMMIT");
+          } catch (txErr) {
+            await client.query("ROLLBACK");
+            throw txErr;
+          }
+        }
+
+        for (const ks of defaultKillSwitches) {
+          await client.query(
+            `INSERT INTO ai_kill_switch (scope, active, changed_by, changed_at)
+             VALUES ($1, $2, $3, $4)
+             ON CONFLICT (scope) DO NOTHING`,
+            [ks.scope, ks.active, ks.changed_by, ks.changed_at]
+          );
+        }
+      } finally {
+        client.release();
+      }
+    } finally {
+      await pool.end();
     }
   }
 

@@ -205,7 +205,7 @@ export const WhatHappened: React.FC<WhatHappenedProps> = ({ stepId, data }) => {
           </p>
           <p>
             The release dossier consolidates cryptographic evidence across all 8 automated test suites (110 automated cases),
-            confirms 0 failing P0 tests, drills 5 independent kill switches, and verifies backup restore reconciliation.
+            reports zero P0 suite failures, drills 5 independent kill switches, and verifies backup restore reconciliation.
           </p>
           <p className="note-text">
             <strong>Key Guarantee:</strong> Authoritative evidence is compiled directly from automated test runners and

@@ -4,6 +4,16 @@ import { Tx } from "../../platform/db/with-tenant";
 import { AppError } from "../../platform/errors";
 import { EvidencePackageView } from "../../contracts/governance";
 import { canonicalJson, sha256Hex } from "../../platform/canonical";
+import { buildMerkleTree } from "../../platform/merkle";
+import {
+  getObjectStore,
+  memoryObjectStore,
+  ObjectStore,
+  putVerified,
+  readVerified
+} from "../../platform/object-store";
+
+export { memoryObjectStore };
 
 export interface StoredEvidenceItem {
   type: string;
@@ -14,11 +24,20 @@ export interface StoredEvidenceItem {
   data: any;
 }
 
-/**
- * In-memory simulated object store for content-addressed evidence bytes.
- * Key format: t/${tenantId}/evidence/${sha256}
- */
-export const memoryObjectStore = new Map<string, string>();
+async function persistArtifact(
+  store: ObjectStore,
+  tenantId: string,
+  type: string,
+  id: string,
+  version: number,
+  data: any
+): Promise<StoredEvidenceItem> {
+  const bytes = canonicalJson(data);
+  const sha = sha256Hex(bytes);
+  const key = `t/${tenantId}/evidence/${sha}`;
+  await putVerified(store, key, bytes, sha);
+  return { type, id, version, sha256: sha, objectKey: key, data };
+}
 
 /**
  * issuePackage: Issues a content-addressed, manifest-hashed, supersession-aware Evidence Package (Playbook B5 §3).
@@ -35,6 +54,7 @@ export async function issuePackage(
 ): Promise<EvidencePackageView> {
   const cutoff = new Date().toISOString();
   const classification = args.classification || "RESTRICTED";
+  const store = getObjectStore();
   const items: StoredEvidenceItem[] = [];
 
   // 1. Hazard
@@ -43,66 +63,35 @@ export async function issuePackage(
     throw new AppError("NOT_FOUND", "Hazard not found for evidence packaging.");
   }
   const hazard = hRes.rows[0];
-  const hazardBytes = canonicalJson(hazard);
-  const hazardSha = sha256Hex(hazardBytes);
-  const hazardKey = `t/${tx.tenantId}/evidence/${hazardSha}`;
-  memoryObjectStore.set(hazardKey, hazardBytes);
-  items.push({
-    type: "hazard",
-    id: hazard.id,
-    version: hazard.version,
-    sha256: hazardSha,
-    objectKey: hazardKey,
-    data: hazard
-  });
+  items.push(await persistArtifact(store, tx.tenantId, "hazard", hazard.id, hazard.version, hazard));
 
   // 2. Causes
   const cRes = await tx.q("SELECT * FROM cause WHERE hazard_id = $1 AND tenant_id = $2", [hazard.id, tx.tenantId]);
   for (const c of cRes.rows) {
-    const bytes = canonicalJson(c);
-    const sha = sha256Hex(bytes);
-    const key = `t/${tx.tenantId}/evidence/${sha}`;
-    memoryObjectStore.set(key, bytes);
-    items.push({ type: "cause", id: c.id, version: c.version, sha256: sha, objectKey: key, data: c });
+    items.push(await persistArtifact(store, tx.tenantId, "cause", c.id, c.version, c));
   }
 
   // 3. Interventions
   const iRes = await tx.q("SELECT * FROM intervention WHERE hazard_id = $1 AND tenant_id = $2", [hazard.id, tx.tenantId]);
   for (const i of iRes.rows) {
-    const bytes = canonicalJson(i);
-    const sha = sha256Hex(bytes);
-    const key = `t/${tx.tenantId}/evidence/${sha}`;
-    memoryObjectStore.set(key, bytes);
-    items.push({ type: "intervention", id: i.id, version: i.version, sha256: sha, objectKey: key, data: i });
+    items.push(await persistArtifact(store, tx.tenantId, "intervention", i.id, i.version, i));
 
     // Approvals for this intervention
     const aRes = await tx.q("SELECT * FROM approval WHERE intervention_id = $1 AND tenant_id = $2", [i.id, tx.tenantId]);
     for (const a of aRes.rows) {
-      const aBytes = canonicalJson(a);
-      const aSha = sha256Hex(aBytes);
-      const aKey = `t/${tx.tenantId}/evidence/${aSha}`;
-      memoryObjectStore.set(aKey, aBytes);
-      items.push({ type: "approval", id: a.id, version: a.approved_version, sha256: aSha, objectKey: aKey, data: a });
+      items.push(await persistArtifact(store, tx.tenantId, "approval", a.id, a.approved_version, a));
     }
 
     // Implementation receipts
     const rRes = await tx.q("SELECT * FROM implementation_receipt WHERE intervention_id = $1 AND tenant_id = $2", [i.id, tx.tenantId]);
     for (const r of rRes.rows) {
-      const rBytes = canonicalJson(r);
-      const rSha = sha256Hex(rBytes);
-      const rKey = `t/${tx.tenantId}/evidence/${rSha}`;
-      memoryObjectStore.set(rKey, rBytes);
-      items.push({ type: "implementation_receipt", id: r.id, version: r.intervention_version, sha256: rSha, objectKey: rKey, data: r });
+      items.push(await persistArtifact(store, tx.tenantId, "implementation_receipt", r.id, r.intervention_version, r));
     }
 
     // Evaluations
     const eRes = await tx.q("SELECT * FROM evaluation WHERE intervention_id = $1 AND tenant_id = $2", [i.id, tx.tenantId]);
     for (const e of eRes.rows) {
-      const eBytes = canonicalJson(e);
-      const eSha = sha256Hex(eBytes);
-      const eKey = `t/${tx.tenantId}/evidence/${eSha}`;
-      memoryObjectStore.set(eKey, eBytes);
-      items.push({ type: "evaluation", id: e.id, version: 1, sha256: eSha, objectKey: eKey, data: e });
+      items.push(await persistArtifact(store, tx.tenantId, "evaluation", e.id, 1, e));
     }
   }
 
@@ -114,11 +103,7 @@ export async function issuePackage(
     );
     if (relRes.rowCount && relRes.rowCount > 0) {
       const rel = relRes.rows[0];
-      const relBytes = canonicalJson(rel);
-      const relSha = sha256Hex(relBytes);
-      const relKey = `t/${tx.tenantId}/evidence/${relSha}`;
-      memoryObjectStore.set(relKey, relBytes);
-      items.push({ type: "released_artifact", id: rel.release_id, version: rel.metric_version, sha256: relSha, objectKey: relKey, data: rel });
+      items.push(await persistArtifact(store, tx.tenantId, "released_artifact", rel.release_id, rel.metric_version, rel));
     }
   }
 
@@ -130,18 +115,23 @@ export async function issuePackage(
     sha256: it.sha256
   }));
 
+  const merkleTree = buildMerkleTree(manifestItems.map(it => it.sha256));
+
   const manifest = {
     schema: "abate.evidence.v1",
     cutoff,
     issuer: args.issuerPrincipalId,
     classification,
-    items: manifestItems
+    items: manifestItems,
+    merkleRoot: merkleTree.root
   };
 
   const manifestBytes = canonicalJson(manifest);
   const manifestHash = sha256Hex(manifestBytes);
 
   const packageId = crypto.randomUUID();
+  const manifestKey = `t/${tx.tenantId}/evidence-manifests/${packageId}.json`;
+  await putVerified(store, manifestKey, manifestBytes, manifestHash);
   const now = new Date().toISOString();
 
   // 6. Handle Supersession if provided
@@ -192,6 +182,8 @@ export async function issuePackage(
     issuerPrincipalId: args.issuerPrincipalId,
     classification,
     manifestHash,
+    merkleRoot: merkleTree.root,
+    merkleProofs: merkleTree.leafProofs,
     supersedesId: args.supersedesId || null,
     supersededById: null,
     state: "ISSUED",
@@ -237,5 +229,69 @@ export async function getEvidencePackage(
       sha256: r.sha256,
       objectKey: r.object_key
     }))
+  };
+}
+
+export interface StoredEvidenceVerification {
+  verified: boolean;
+  packageId: string;
+  objectStoreMode: "memory" | "s3";
+  manifestKey: string;
+  manifestHash: string;
+  merkleRoot: string | null;
+  verifiedItems: number;
+  totalItems: number;
+  errors: string[];
+}
+
+/**
+ * verifyStoredEvidencePackage: Downloads manifest + every content-addressed item from the active ObjectStore,
+ * verifies SHA-256 digests against DB manifest_hash and item hashes, and validates the Merkle root.
+ */
+export async function verifyStoredEvidencePackage(
+  tx: Tx,
+  packageId: string
+): Promise<StoredEvidenceVerification | null> {
+  const pkg = await getEvidencePackage(tx, packageId);
+  if (!pkg) return null;
+
+  const store = getObjectStore();
+  const manifestKey = `t/${tx.tenantId}/evidence-manifests/${packageId}.json`;
+  const errors: string[] = [];
+  let merkleRoot: string | null = null;
+  let verifiedItems = 0;
+
+  try {
+    const manifestJson = await readVerified(store, manifestKey, pkg.manifestHash);
+    const parsed = JSON.parse(manifestJson) as { merkleRoot?: string; items?: Array<{ sha256: string }> };
+    const leaves = (parsed.items ?? []).map((it) => it.sha256);
+    const recomputedRoot = buildMerkleTree(leaves).root;
+    merkleRoot = recomputedRoot;
+    if (parsed.merkleRoot !== recomputedRoot) {
+      errors.push(`Manifest merkleRoot mismatch: expected ${recomputedRoot}, got ${parsed.merkleRoot ?? "missing"}`);
+    }
+  } catch (err: unknown) {
+    errors.push(err instanceof Error ? err.message : String(err));
+  }
+
+  for (const item of pkg.items ?? []) {
+    try {
+      await readVerified(store, item.objectKey, item.sha256);
+      verifiedItems += 1;
+    } catch (err: unknown) {
+      errors.push(`${item.itemType}:${item.itemId}: ${err instanceof Error ? err.message : String(err)}`);
+    }
+  }
+
+  return {
+    verified: errors.length === 0,
+    packageId,
+    objectStoreMode: store.mode,
+    manifestKey,
+    manifestHash: pkg.manifestHash,
+    merkleRoot,
+    verifiedItems,
+    totalItems: pkg.items?.length ?? 0,
+    errors
   };
 }

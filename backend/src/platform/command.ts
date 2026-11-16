@@ -133,7 +133,7 @@ export async function runCommand<T>(args: {
     await tx.q(
       `UPDATE idempotency_record SET status = 'DONE', response_status = 200, response_body = $4
        WHERE tenant_id = $1 AND operation = $2 AND idempotency_key = $3`,
-      [args.tenantId, args.operation, args.idempotencyKey, out.result]
+      [args.tenantId, args.operation, args.idempotencyKey, JSON.stringify(out.result)]
     );
 
     return { status: 200, body: out.result };

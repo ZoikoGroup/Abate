@@ -6,19 +6,22 @@ console.log("\x1b[36m=== Abate Task Runner: seed-demo ===\x1b[0m");
 
 const cfg = loadConfig();
 
-try {
+async function main() {
   // Production guard enforced here
   assertNotProduction("seed-demo");
   const clock = new Date(cfg.fixedClock);
-  
-  seedTwoTenants({ clock }).then((seeded) => {
-    console.log(`  [OK] Seeded Tenant A: ${seeded.tenantA.tenant.name} (${seeded.tenantA.tenant.id})`);
-    console.log(`  [OK] Seeded Tenant B: ${seeded.tenantB.tenant.name} (${seeded.tenantB.tenant.id})`);
-    console.log(`  [OK] Fixed clock pinned to: ${clock.toISOString()}`);
-    console.log("\x1b[32m[SUCCESS] Demo dataset seeded with synthetic fixtures (ABATE-GOLDEN-01 skeleton).\x1b[0m");
-  });
-} catch (err: any) {
+  const persistToPostgres = process.argv.includes("--pg") || process.env.ABATE_SEED_PG === "1";
+
+  const seeded = await seedTwoTenants({ clock, persistToPostgres });
+  console.log(`  [OK] Seeded Tenant A: ${seeded.tenantA.tenant.name} (${seeded.tenantA.tenant.id})`);
+  console.log(`  [OK] Seeded Tenant B: ${seeded.tenantB.tenant.name} (${seeded.tenantB.tenant.id})`);
+  console.log(`  [OK] Fixed clock pinned to: ${clock.toISOString()}`);
+  console.log(`  [OK] PostgreSQL persistence: ${persistToPostgres ? "ENABLED" : "MEMORY_ONLY"}`);
+  console.log("\x1b[32m[SUCCESS] Demo dataset seeded with synthetic fixtures (ABATE-GOLDEN-01 skeleton).\x1b[0m");
+}
+
+main().catch((err: any) => {
   console.error(`\x1b[31m[SEED ERROR]\x1b[0m ${err.message}`);
   process.exit(1);
-}
+});
 

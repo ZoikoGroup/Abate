@@ -11,6 +11,7 @@ import { createDevToken, authenticate, resolveActor } from "../src/domains/tenan
 import { ingestBatch } from "../src/domains/ingest/ingest-batch";
 import { withTenant, memDb } from "../src/platform/db/with-tenant";
 import { ZoikoTimeBatch } from "../src/contracts/sources/zoikotime.v1";
+import { CalendarCadenceBatchV1 } from "../src/contracts/sources/calendar-cadence.v1";
 
 console.log("\x1b[36m=== Abate Task Runner: test-minimization (Decoy Minimization Lab) ===\x1b[0m");
 
@@ -202,7 +203,42 @@ async function run() {
     });
   });
 
-  // Step 7: Verify memory DB dump has zero occurrences
+  // Step 7: Verify CalendarCadence decoy fields (eventTitle, attendees) are rejected with 0 persistence
+  await check("CalendarCadence connector rejects meeting subjects & attendees with zero trace", async () => {
+    const CAL_DECOY = "DECOY_CALENDAR_SUBJECT_6f2b";
+    const calRes = await ingestBatch({
+      who: whoA,
+      actor: actorA,
+      connectorSource: "CalendarCadence",
+      batch: {
+        connectionId,
+        batchId: `batch-cal-min-${crypto.randomUUID()}`,
+        items: []
+      }
+    }).catch(() => null);
+    assert.strictEqual(calRes, null, "Mismatched CalendarCadence batch on ZoikoTime connection must fail closed");
+
+    const parseBad = CalendarCadenceBatchV1.safeParse({
+      connectionId,
+      batchId: "batch-cal-decoy-check",
+      items: [
+        {
+          recordId: "cal-min-1",
+          revision: 1,
+          subjectRef: "emp-alpha-109",
+          startUtc: "2026-03-02T09:00:00Z",
+          endUtc: "2026-03-02T10:00:00Z",
+          workTz: "Europe/London",
+          kind: "MEETING_BLOCK",
+          eventTitle: CAL_DECOY
+        }
+      ]
+    });
+    assert.strictEqual(parseBad.success, false, "CalendarCadenceBatchV1 must reject eventTitle");
+    assert(!JSON.stringify(memDb.workFactRevisions).includes(CAL_DECOY));
+  });
+
+  // Step 8: Verify memory DB dump has zero occurrences
   await check("Complete memory snapshot dump has zero occurrences of decoy strings", () => {
     const dumpedJson = JSON.stringify(memDb, (_key, value) => {
       if (value instanceof Map) return Array.from(value.entries());

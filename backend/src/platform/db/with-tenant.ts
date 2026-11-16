@@ -24,21 +24,21 @@ try {
     idle_in_transaction_session_timeout: 30000
   });
   // Prevent unhandled errors on idle clients
-  appPool.on("error", () => {});
+  appPool.on("error", () => { });
 
   workerPool = new Pool({
     connectionString: cfg.databaseUrlWorker,
     max: 2,
     connectionTimeoutMillis: 1000
   });
-  workerPool.on("error", () => {});
+  workerPool.on("error", () => { });
 
   migratorPool = new Pool({
     connectionString: cfg.databaseUrlMigrator,
     max: 5,
     connectionTimeoutMillis: 1000
   });
-  migratorPool.on("error", () => {});
+  migratorPool.on("error", () => { });
 } catch {
   // Graceful fallback to embedded store if Postgres is not available
 }
@@ -73,7 +73,7 @@ class MemoryDatabase {
   public outboxEvents: any[] = [];
   public deadLetterEvents: any[] = [];
   public inboxEvents: Map<string, any> = new Map();
-  
+
   // Phase 2 Ingestion & Work-State Ledger
   public sourceContracts: Map<string, any> = new Map();
   public connections: Map<string, any> = new Map();
@@ -294,8 +294,7 @@ export const memDb = new MemoryDatabase();
 // In-Memory Transaction Client simulating Postgres RLS and transaction-local set_config
 class MemoryClient {
   // Worker mode mirrors the abate_worker role: cross-tenant access to outbox_event/inbox_event only
-  constructor(private readonly workerMode = false) {}
-  private inTransaction = false;
+  constructor(private readonly workerMode = false) { }
   private tenantContext: string | null = null;
   private writePlane: "A" | "B" = "A";
   private snapshotState: string | null = null;
@@ -305,7 +304,7 @@ class MemoryClient {
     for (const rel of this.heldLocks) {
       try {
         rel();
-      } catch {}
+      } catch { }
     }
     this.heldLocks = [];
   }
@@ -315,7 +314,6 @@ class MemoryClient {
     const upper = trimmed.toUpperCase();
 
     if (upper === "BEGIN") {
-      this.inTransaction = true;
       this.snapshotState = JSON.stringify({
         tenants: Array.from(memDb.tenants.entries()),
         principals: Array.from(memDb.principals.entries()),
@@ -369,7 +367,6 @@ class MemoryClient {
     }
 
     if (upper === "COMMIT") {
-      this.inTransaction = false;
       this.tenantContext = null;
       this.snapshotState = null;
       this.releaseHeldLocks();
@@ -427,7 +424,6 @@ class MemoryClient {
         if (snap.tenantPolicyBindings) memDb.tenantPolicyBindings = snap.tenantPolicyBindings;
         if (snap.evidenceItems) memDb.evidenceItems = snap.evidenceItems;
       }
-      this.inTransaction = false;
       this.tenantContext = null;
       this.snapshotState = null;
       this.releaseHeldLocks();
@@ -984,6 +980,58 @@ class MemoryClient {
     // Phase 2 Ingestion & Ledger Handlers
     // -------------------------------------------------------------
 
+    // Source Contract Select & Insert
+    if (upper.includes("FROM SOURCE_CONTRACT")) {
+      let rows = Array.from(memDb.sourceContracts.values()).filter(c => c.tenant_id === this.tenantContext);
+      if (params.length > 0) {
+        rows = rows.filter(c => c.id === params[0]);
+      }
+      return { rows, rowCount: rows.length, command: "SELECT", oid: 0, fields: [] };
+    }
+
+    if (upper.includes("INSERT INTO SOURCE_CONTRACT")) {
+      const [id, tId, source, version, contractHash, status] = params;
+      if (this.tenantContext && tId !== this.tenantContext) {
+        throw new Error("RLS WITH CHECK violation: cross-tenant source_contract write rejected");
+      }
+      const existing = Array.from(memDb.sourceContracts.values()).find(
+        c => c.tenant_id === tId && c.source === source && c.version === version
+      );
+      if (existing) {
+        return { rows: [], rowCount: 0, command: "INSERT", oid: 0, fields: [] };
+      }
+      const rec = {
+        id,
+        tenant_id: tId,
+        source,
+        version,
+        contract_hash: contractHash,
+        status,
+        created_at: new Date().toISOString()
+      };
+      memDb.sourceContracts.set(id, rec);
+      return { rows: [rec], rowCount: 1, command: "INSERT", oid: 0, fields: [] };
+    }
+
+    // Connection Insert
+    if (upper.includes("INSERT INTO CONNECTION")) {
+      const [id, tId, source, contractId, state, expectedCadenceSeconds] = params;
+      if (this.tenantContext && tId !== this.tenantContext) {
+        throw new Error("RLS WITH CHECK violation: cross-tenant connection write rejected");
+      }
+      const rec = {
+        id,
+        tenant_id: tId,
+        source,
+        contract_id: contractId,
+        state: state || "ACTIVE",
+        last_success_at: null,
+        expected_cadence_seconds: Number(expectedCadenceSeconds) || 3600
+      };
+      memDb.connections.set(id, rec);
+      return { rows: [rec], rowCount: 1, command: "INSERT", oid: 0, fields: [] };
+    }
+
     // Connection Select
     if (upper.includes("FROM CONNECTION")) {
       let rows = Array.from(memDb.connections.values()).filter(c => c.tenant_id === this.tenantContext);
@@ -1058,12 +1106,20 @@ class MemoryClient {
     // Work Fact Revision Select All
     if (upper.includes("FROM WORK_FACT_REVISION")) {
       let rows = Array.from(memDb.workFactRevisions.values()).filter(r => r.tenant_id === this.tenantContext);
+      if (upper.includes("KIND = 'WORK'") || upper.includes("KIND='WORK'")) {
+        rows = rows.filter(r => r.kind === "WORK");
+      }
       if (params.length > 0) {
         if (upper.includes("RECEIPT_ID = $1") || upper.includes("RECEIPT_ID=$1")) {
           rows = rows.filter(r => r.receipt_id === params[0]);
         } else if (upper.includes("SOURCE_RECORD_ID = $1") || upper.includes("SOURCE_RECORD_ID=$1")) {
           rows = rows.filter(r => r.source_record_id === params[0]);
         }
+      }
+      if (params.length >= 3 && upper.includes("START_AT >= $2") && upper.includes("END_AT <= $3")) {
+        const pStart = new Date(params[1] as string | Date).getTime();
+        const pEnd = new Date(params[2] as string | Date).getTime();
+        rows = rows.filter(r => new Date(r.start_at).getTime() >= pStart && new Date(r.end_at).getTime() <= pEnd);
       }
       return { rows, rowCount: rows.length, command: "SELECT", oid: 0, fields: [] };
     }
@@ -1087,6 +1143,19 @@ class MemoryClient {
       };
       memDb.ingestReceipts.set(id, receipt);
       return { rows: [receipt], rowCount: 1, command: "INSERT", oid: 0, fields: [] };
+    }
+
+    // Ingest Receipt Update
+    if (upper.includes("UPDATE INGEST_RECEIPT")) {
+      const [accepted, duplicate, conflicted, id] = params;
+      const existing = memDb.ingestReceipts.get(id);
+      if (existing && (!this.tenantContext || existing.tenant_id === this.tenantContext)) {
+        existing.accepted = accepted;
+        existing.duplicate = duplicate;
+        existing.conflicted = conflicted;
+        return { rows: [existing], rowCount: 1, command: "UPDATE", oid: 0, fields: [] };
+      }
+      return { rows: [], rowCount: 0, command: "UPDATE", oid: 0, fields: [] };
     }
 
     // Ingest Receipt Select
@@ -1165,6 +1234,9 @@ class MemoryClient {
 
     // Metric Snapshot Select
     if (upper.includes("FROM METRIC_SNAPSHOT")) {
+      if (this.workerMode) {
+        return { rows: [], rowCount: 0, command: "SELECT", oid: 0, fields: [] };
+      }
       let rows = Array.from(memDb.metricSnapshots.values()).filter(s => s.tenant_id === this.tenantContext);
       if (params.length > 0) {
         rows = rows.filter(s => s.id === params[0] || (params.length >= 3 && s.metric_id === params[0] && s.cohort_ref === params[1]));
@@ -1231,7 +1303,18 @@ class MemoryClient {
 
     // Privacy Decision Insert
     if (upper.includes("INSERT INTO PRIVACY_DECISION")) {
-      const [id, tId, queryHash, outcome, reasonCode, policyVersion] = params;
+      let outcome = "RELEASED";
+      let reasonCode = "APPROVED";
+      let policyVersion = "v1.0";
+      if (upper.includes("'SUPPRESSED'")) {
+        outcome = "SUPPRESSED";
+        reasonCode = params[3] || "SUPPRESSED";
+      } else if (params.length >= 6) {
+        outcome = params[3];
+        reasonCode = params[4];
+        policyVersion = params[5];
+      }
+      const [id, tId, queryHash] = params;
       if (this.tenantContext && tId !== this.tenantContext) {
         throw new Error("RLS WITH CHECK violation: cross-tenant privacy_decision write rejected");
       }
@@ -1301,15 +1384,24 @@ class MemoryClient {
 
     // Privacy Decision Select
     if (upper.includes("FROM PRIVACY_DECISION")) {
+      if (this.workerMode) {
+        return { rows: [], rowCount: 0, command: "SELECT", oid: 0, fields: [] };
+      }
       let rows = Array.from(memDb.privacyDecisions.values()).filter(d => d.tenant_id === this.tenantContext);
-      if (params.length > 0) {
+      if (params.length > 0 && !upper.includes("TENANT_ID = $1") && !upper.includes("TENANT_ID=$1")) {
         rows = rows.filter(d => d.id === params[0] || d.semantic_query_hash === params[0]);
+      }
+      if (upper.includes("ORDER BY DECIDED_AT DESC")) {
+        rows.reverse();
       }
       return { rows, rowCount: rows.length, command: "SELECT", oid: 0, fields: [] };
     }
 
     // Privacy Release Select
     if (upper.includes("FROM PRIVACY_RELEASE") && !upper.includes("JOIN RELEASED_ARTIFACT")) {
+      if (this.workerMode) {
+        return { rows: [], rowCount: 0, command: "SELECT", oid: 0, fields: [] };
+      }
       let rows = Array.from(memDb.privacyReleases.values()).filter(r => r.tenant_id === this.tenantContext);
       if (params.length > 0) {
         rows = rows.filter(r => r.id === params[0]);
@@ -1392,6 +1484,9 @@ class MemoryClient {
 
     // Disclosure Ledger Select
     if (upper.includes("FROM DISCLOSURE_LEDGER")) {
+      if (this.workerMode) {
+        return { rows: [], rowCount: 0, command: "SELECT", oid: 0, fields: [] };
+      }
       let rows = memDb.disclosureLedger.filter(d => d.tenant_id === this.tenantContext);
       if (params.length >= 2) {
         rows = rows.filter(d => d.metric_id === params[1]);
@@ -1614,6 +1709,12 @@ class MemoryClient {
       let rows = Array.from(memDb.approvals.values()).filter(a => a.tenant_id === this.tenantContext);
       if (params.length > 0) {
         rows = rows.filter(a => a.intervention_id === params[0] || a.id === params[0]);
+      }
+      if (params.length >= 2 && (upper.includes("APPROVED_VERSION = $2") || upper.includes("APPROVED_VERSION=$2"))) {
+        rows = rows.filter(a => a.approved_version === Number(params[1]));
+      }
+      if (params.length >= 3 && (upper.includes("APPROVED_MATERIAL_HASH = $3") || upper.includes("APPROVED_MATERIAL_HASH=$3"))) {
+        rows = rows.filter(a => a.approved_material_hash === params[2]);
       }
       // Sort newest first
       rows.sort((a, b) => new Date(b.approved_at).getTime() - new Date(a.approved_at).getTime());
@@ -2181,7 +2282,7 @@ class MemoryClient {
         const [targetTenant, targetFlag] = params;
         rows = rows.filter(f => (f.tenant_id === targetTenant || f.tenant_id === null) && f.flag === targetFlag);
         // Order by tenant_id nulls last (tenant-specific takes priority)
-        rows.sort((a, b) => (a.tenant_id ? -1 : 1));
+        rows.sort((a) => (a.tenant_id ? -1 : 1));
       } else if (params.length > 0) {
         rows = rows.filter(f => f.tenant_id === params[0] || f.tenant_id === null);
       } else if (this.tenantContext) {
@@ -2410,18 +2511,28 @@ let lastPgProbeAt = 0;
 // staging/production must never silently serve from the in-memory store: that would accept writes that vanish on restart
 const REQUIRE_PG = cfg.appEnv === "staging" || cfg.appEnv === "production";
 
-async function checkPgHealth(): Promise<boolean> {
+export function isPostgresRequired(): boolean {
+  return REQUIRE_PG || process.env.ABATE_REQUIRE_PG === "1" || process.env.ABATE_REQUIRE_PG === "true";
+}
+
+export function resetPgHealthCache(): void {
+  isPgHealthy = null;
+  lastPgProbeAt = 0;
+}
+
+export async function checkPgHealth(): Promise<boolean> {
   if (isPgHealthy === true) return true;
+  const required = isPostgresRequired();
   // local/test: the first probe decides and sticks. Flipping engines mid-run would drop the seeded in-memory state.
-  if (isPgHealthy === false && !REQUIRE_PG) return false;
+  if (isPgHealthy === false && !required) return false;
   // strict mode: re-probe (at most every 5s) so a slow first connect or a restart of Postgres recovers on its own
-  if (REQUIRE_PG && isPgHealthy === false && Date.now() - lastPgProbeAt < 5000) {
+  if (required && isPgHealthy === false && Date.now() - lastPgProbeAt < 5000) {
     throw new AppError("UNAVAILABLE", "Database unavailable.");
   }
   lastPgProbeAt = Date.now();
   if (!appPool) {
     isPgHealthy = false;
-    if (REQUIRE_PG) throw new AppError("UNAVAILABLE", "Database unavailable.");
+    if (required) throw new AppError("UNAVAILABLE", "Database unavailable.");
     return false;
   }
   try {
@@ -2429,9 +2540,13 @@ async function checkPgHealth(): Promise<boolean> {
     await client.query("SELECT 1");
     client.release();
     isPgHealthy = true;
-  } catch {
+  } catch (err: any) {
     isPgHealthy = false;
-    if (REQUIRE_PG) throw new AppError("UNAVAILABLE", "Database unavailable.");
+    if (isPostgresRequired()) {
+      // Detail stays in the server log; the client only ever sees the generic envelope
+      console.error(`[DB] PostgreSQL is required but unreachable: ${err?.message ?? "connection failed"}. Run: docker compose up -d postgres`);
+      throw new AppError("UNAVAILABLE", "Database unavailable.");
+    }
     console.warn("[DB] PostgreSQL is unreachable: using the in-memory store. Data is NOT persisted and resets on restart.");
   }
   return isPgHealthy;
@@ -2464,7 +2579,7 @@ export async function withTenant<T>(
       await client.query("COMMIT");
       return out;
     } catch (e) {
-      await client.query("ROLLBACK").catch(() => {});
+      await client.query("ROLLBACK").catch(() => { });
       throw e;
     } finally {
       client.release();
@@ -2503,7 +2618,7 @@ export async function withPlatform<T>(fn: (tx: Tx) => Promise<T>): Promise<T> {
       await client.query("COMMIT");
       return out;
     } catch (e) {
-      await client.query("ROLLBACK").catch(() => {});
+      await client.query("ROLLBACK").catch(() => { });
       throw e;
     } finally {
       client.release();
@@ -2539,7 +2654,7 @@ export async function withWorker<T>(fn: (tx: Tx) => Promise<T>): Promise<T> {
       await client.query("COMMIT");
       return out;
     } catch (e) {
-      await client.query("ROLLBACK").catch(() => {});
+      await client.query("ROLLBACK").catch(() => { });
       throw e;
     } finally {
       client.release();
@@ -2564,7 +2679,7 @@ export async function withWorker<T>(fn: (tx: Tx) => Promise<T>): Promise<T> {
  * withTenantOn: Helper used by boundary tests to verify pooled connection isolation.
  */
 export async function withTenantOn<T>(
-  pool: Pool | { query: QueryFn; connect: () => Promise<any> },
+  _pool: Pool | { query: QueryFn; connect: () => Promise<any> },
   tenantId: string,
   fn: (tx: Tx) => Promise<T>
 ): Promise<T> {

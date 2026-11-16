@@ -3,6 +3,8 @@ export * from "./common";
 export * from "./tenant";
 export * from "./openapi";
 export * from "./sources/zoikotime.v1";
+export * from "./sources/calendar-cadence.v1";
+export * from "./ingest";
 export * from "./release";
 export * from "./control";
 export * from "./retention";

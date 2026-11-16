@@ -55,7 +55,19 @@ export function BoundedAiTab({ currentTenant, token }: BoundedAiTabProps) {
   };
 
   useEffect(() => {
-    loadData();
+    if (!token) return;
+    let cancelled = false;
+    void Promise.all([
+      fetchAiRuns(token).catch(() => []),
+      fetchKillSwitches(token).catch(() => [])
+    ]).then(([rList, ksList]) => {
+      if (cancelled) return;
+      setRuns(rList);
+      setKillSwitches(ksList);
+    });
+    return () => {
+      cancelled = true;
+    };
   }, [token, currentTenant.id]);
 
   // Toggle kill switch

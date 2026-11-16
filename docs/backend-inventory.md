@@ -80,7 +80,7 @@ Run migrations from `backend/` with `npm run migrate` after PostgreSQL is availa
       "info": {
         "title": "Zoiko Abate Authoritative API Contract Registry",
         "version": "2.0.0",
-        "description": "Production API specification for Zoiko Abate..."
+        "description": "API v2 specification for Zoiko Abate..."
       },
       "servers": [{ "url": "/api/v2", "description": "API v2 Base (Default Tenant Environment)" }],
       "paths": { ... }

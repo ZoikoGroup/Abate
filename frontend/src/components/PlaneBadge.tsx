@@ -12,7 +12,7 @@ export const PlaneBadge: React.FC<PlaneBadgeProps> = ({ plane, showLabel = true 
       <span
         className="badge"
         style={{
-          background: "linear-gradient(135deg, #4A154B 0%, #E26D5A 100%)",
+          background: "linear-gradient(135deg, #4A154B 0%, #B84230 100%)",
           color: "#FFFFFF",
           fontWeight: 600,
           letterSpacing: "0.04em",

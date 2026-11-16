@@ -16,8 +16,7 @@ import { EventBus } from "../src/worker/outbox-publisher";
 import {
   drainBatch,
   getWorkerMetrics,
-  resetWorkerMetrics,
-  WorkerOptions
+  resetWorkerMetrics
 } from "../src/worker/daemon";
 
 interface TestReport {

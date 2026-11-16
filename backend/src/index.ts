@@ -6,13 +6,14 @@ import { z } from "zod";
 import fs from "node:fs";
 import path from "node:path";
 import { loadConfig } from "./platform/config";
+import { getObjectStore } from "./platform/object-store";
 import { toErrorResponse, AppError } from "./platform/errors";
-import { openApiSpec, CreateOrganizationBody, TokenRequestBody, ZoikoTimeBatchV1, SemanticQueryV1 } from "./contracts";
+import { openApiSpec, CreateOrganizationBody, TokenRequestBody, ZoikoTimeBatchV1, CalendarCadenceBatchV1, CreateConnectionInput, SourceAdapterName, SemanticQueryV1 } from "./contracts";
 import { GOLDEN_01 } from "./fixtures/golden01";
 import { authenticate, resolveActor, createDevToken, authorize, requireSeparationOfDuties } from "./domains/tenant/auth";
 import { RightsRequestInputSchema, CorrectionInputSchema, AcknowledgeCorrectionInputSchema } from "./contracts/governance";
 import { createOrganization, getOrganization, listOrganizations, getTenant } from "./domains/tenant/commands";
-import { ingestBatch, listConnections, getConnection, setConnectionState, listReceipts, listWorkFacts } from "./domains/ingest";
+import { ingestBatch, listSourceContracts, listConnections, getConnection, registerConnection, setConnectionState, listReceipts, listWorkFacts } from "./domains/ingest";
 import { compileRelease, getRelease, getReleaseTx } from "./domains/privacy";
 import {
   ExplainReleaseInput,
@@ -24,11 +25,9 @@ import {
   EvaluateOutcomeInput,
   ToggleFeatureFlagInput,
   CreateAiChangeProfileInput,
-  CreateAssessmentInput,
   AdvanceAssessmentInput
 } from "./contracts";
 import {
-  isFeatureFlagEnabled,
   setFeatureFlag,
   listFeatureFlags,
   requireFeatureFlag,
@@ -42,8 +41,6 @@ import {
 } from "./domains/performance";
 import {
   registerAiChangeProfile,
-  getAiChangeProfile,
-  listAiChangeProfiles,
   createAssessment,
   advanceAssessment,
   getAssessment,
@@ -65,9 +62,9 @@ import {
   getDefaultEntitlements,
   resolvePolicy,
   recordDecisionEnvelope,
-  getDecisionEnvelope,
   issuePackage,
   getEvidencePackage,
+  verifyStoredEvidencePackage,
   requestErasure,
   recordCorrection,
   acknowledgeCorrection
@@ -78,7 +75,6 @@ import {
   ReviewCauseInput,
   CreateControlInput,
   UpdateControlInput,
-  ApproveControlInput,
   ImplementationReceiptInput,
   PinVerificationPlanInput,
   ConcludeVerificationInput,
@@ -88,7 +84,6 @@ import {
 import {
   materialHash,
   computeAllowedActions,
-  evaluateSuggestion,
   exportEvidencePackage
 } from "./domains/control";
 import {
@@ -205,12 +200,20 @@ function getHeader(req: Request, name: string): string | null {
 // Health and Metadata Endpoints
 // -------------------------------------------------------------
 
-app.get("/api/health", (_req: Request, res: Response) => {
-  res.status(200).json({
-    status: "ok",
+app.get("/api/health", async (_req: Request, res: Response) => {
+  const store = getObjectStore(cfg);
+  const objectStoreHealth = await store.health();
+  const overallOk = objectStoreHealth.ok || (cfg.appEnv !== "production" && cfg.appEnv !== "staging");
+  res.status(overallOk ? 200 : 503).json({
+    status: objectStoreHealth.ok ? "ok" : "degraded",
     app: "Zoiko Abate",
     version: "1.0.0",
     environment: cfg.appEnv,
+    objectStore: {
+      mode: store.mode,
+      ok: objectStoreHealth.ok,
+      detail: objectStoreHealth.detail
+    },
     timestamp: new Date().toISOString(),
     constitutionalBoundaries: {
       individualScoring: "PROHIBITED",
@@ -552,23 +555,89 @@ app.post("/api/v2/outbox/drain", async (req: Request, res: Response) => {
 // Domain S02 / S03: Phase 2 Ingestion & Work-State Ledger Endpoints
 // -------------------------------------------------------------
 
-// Ingest ZoikoTime batch (Strict allowlist, natural batchId idempotency, returns safe counts)
-app.post("/api/v2/connectors/zoikotime/batches", async (req: Request, res: Response) => {
+async function handleConnectorBatchRequest(
+  req: Request,
+  res: Response,
+  schema: typeof ZoikoTimeBatchV1 | typeof CalendarCadenceBatchV1,
+  connectorSource: SourceAdapterName
+) {
   try {
     const who = await authenticate(getHeader(req, "authorization"));
     const actor = await resolveActor(who.tenantId, who.subject, new Date(), who.role);
 
     // Strict schema parse: unknown or prohibited top-level fields rejected immediately
-    const batch = ZoikoTimeBatchV1.parse(req.body);
-
+    const batch = schema.parse(req.body);
     const idempotencyKey = getHeader(req, "idempotency-key") || batch.batchId;
     const out = await ingestBatch({
       who,
       actor,
       batch,
-      idempotencyKey
+      idempotencyKey,
+      connectorSource
     });
 
+    res.status(out.status).json(out.body);
+  } catch (err) {
+    toErrorResponse(err, res);
+  }
+}
+
+async function handleConnectionStateRequest(
+  req: Request,
+  res: Response,
+  newState: "ACTIVE" | "PAUSED" | "REVOKED"
+) {
+  try {
+    const who = await authenticate(getHeader(req, "authorization"));
+    const actor = await resolveActor(who.tenantId, who.subject, new Date(), who.role);
+
+    const out = await setConnectionState({
+      who,
+      actor,
+      connectionId: String(req.params.id),
+      newState,
+      idempotencyKey: getHeader(req, "idempotency-key") || undefined
+    });
+    res.status(out.status).json(out.body);
+  } catch (err) {
+    toErrorResponse(err, res);
+  }
+}
+
+// Ingest ZoikoTime batch (Strict allowlist, natural batchId idempotency, returns safe counts)
+app.post("/api/v2/connectors/zoikotime/batches", (req: Request, res: Response) => {
+  return handleConnectorBatchRequest(req, res, ZoikoTimeBatchV1, "ZoikoTime");
+});
+
+// Ingest CalendarCadence batch (Strict allowlist; rejects meeting subjects, attendees, descriptions)
+app.post("/api/v2/connectors/calendar-cadence/batches", (req: Request, res: Response) => {
+  return handleConnectorBatchRequest(req, res, CalendarCadenceBatchV1, "CalendarCadence");
+});
+
+// List approved Source Contracts for tenant
+app.get("/api/v2/source-contracts", async (req: Request, res: Response) => {
+  try {
+    const who = await authenticate(getHeader(req, "authorization"));
+    const actor = await resolveActor(who.tenantId, who.subject, new Date(), who.role);
+
+    const contracts = await listSourceContracts({ who, actor });
+    res.status(200).json(contracts);
+  } catch (err) {
+    toErrorResponse(err, res);
+  }
+});
+
+// Register new idempotent Source Connection bound to an active contract
+app.post("/api/v2/connections", async (req: Request, res: Response) => {
+  try {
+    const who = await authenticate(getHeader(req, "authorization"));
+    const actor = await resolveActor(who.tenantId, who.subject, new Date(), who.role);
+    const idempotencyKey = getHeader(req, "idempotency-key");
+    if (!idempotencyKey) {
+      throw new AppError("VALIDATION", "Missing mandatory Idempotency-Key header.");
+    }
+    const input = CreateConnectionInput.parse(req.body);
+    const out = await registerConnection({ who, actor, input, idempotencyKey });
     res.status(out.status).json(out.body);
   } catch (err) {
     toErrorResponse(err, res);
@@ -600,56 +669,17 @@ app.get("/api/v2/connections/:id", async (req: Request, res: Response) => {
   }
 });
 
-// Connection state transitions (Pause / Resume / Revoke)
-app.post("/api/v2/connections/:id/pause", async (req: Request, res: Response) => {
-  try {
-    const who = await authenticate(getHeader(req, "authorization"));
-    const actor = await resolveActor(who.tenantId, who.subject, new Date(), who.role);
-
-    const conn = await setConnectionState({
-      who,
-      actor,
-      connectionId: String(req.params.id),
-      newState: "PAUSED"
-    });
-    res.status(200).json(conn);
-  } catch (err) {
-    toErrorResponse(err, res);
-  }
+// Connection state transitions (Pause / Resume / Revoke) via atomic runCommand pipeline
+app.post("/api/v2/connections/:id/pause", (req: Request, res: Response) => {
+  return handleConnectionStateRequest(req, res, "PAUSED");
 });
 
-app.post("/api/v2/connections/:id/resume", async (req: Request, res: Response) => {
-  try {
-    const who = await authenticate(getHeader(req, "authorization"));
-    const actor = await resolveActor(who.tenantId, who.subject, new Date(), who.role);
-
-    const conn = await setConnectionState({
-      who,
-      actor,
-      connectionId: String(req.params.id),
-      newState: "ACTIVE"
-    });
-    res.status(200).json(conn);
-  } catch (err) {
-    toErrorResponse(err, res);
-  }
+app.post("/api/v2/connections/:id/resume", (req: Request, res: Response) => {
+  return handleConnectionStateRequest(req, res, "ACTIVE");
 });
 
-app.post("/api/v2/connections/:id/revoke", async (req: Request, res: Response) => {
-  try {
-    const who = await authenticate(getHeader(req, "authorization"));
-    const actor = await resolveActor(who.tenantId, who.subject, new Date(), who.role);
-
-    const conn = await setConnectionState({
-      who,
-      actor,
-      connectionId: String(req.params.id),
-      newState: "REVOKED"
-    });
-    res.status(200).json(conn);
-  } catch (err) {
-    toErrorResponse(err, res);
-  }
+app.post("/api/v2/connections/:id/revoke", (req: Request, res: Response) => {
+  return handleConnectionStateRequest(req, res, "REVOKED");
 });
 
 // Ingest Receipts (Traceable receipts with counts only, NEVER rejected payloads)
@@ -997,6 +1027,7 @@ app.get("/api/v2/hazards/:id", async (req: Request, res: Response) => {
   try {
     const who = await authenticate(getHeader(req, "authorization"));
     const actor = await resolveActor(who.tenantId, who.subject, new Date(), who.role);
+    const role = who.role || actor.memberships[0]?.domain_role || "RISK_OWNER";
     const hazardId = String(req.params.id);
 
     const out = await withTenant(who.tenantId, async (tx) => {
@@ -1008,12 +1039,17 @@ app.get("/api/v2/hazards/:id", async (req: Request, res: Response) => {
 
       const cRes = await tx.q("SELECT * FROM cause WHERE hazard_id = $1", [hazard.id]);
       const iRes = await tx.q("SELECT * FROM intervention WHERE hazard_id = $1", [hazard.id]);
+      const controls = await Promise.all(
+        iRes.rows.map((ctrl: any) =>
+          buildControlDetailView(tx, ctrl, role, ctrl.owner_principal_id === actor.principalId)
+        )
+      );
       const rel = await getReleaseTx(tx, hazard.originating_release_id);
 
       return {
         hazard,
         causes: cRes.rows,
-        controls: iRes.rows,
+        controls,
         originatingRelease: rel
       };
     });
@@ -1706,9 +1742,6 @@ app.post("/api/v2/evidence-packages", async (req: Request, res: Response) => {
     const who = await authenticate(getHeader(req, "authorization"));
     await resolveActor(who.tenantId, who.subject, new Date(), who.role);
 
-    const periodStart = req.body.periodStart || new Date(Date.now() - 28 * 24 * 3600 * 1000).toISOString();
-    const periodEnd = req.body.periodEnd || new Date().toISOString();
-
     const out = await withTenant(who.tenantId, async (tx) => {
       const hRes = await tx.q("SELECT * FROM hazard WHERE tenant_id = $1 LIMIT 1", [who.tenantId]);
       const hazardId = req.body.hazardId || (hRes.rows[0]?.id);
@@ -1749,6 +1782,23 @@ app.get("/api/v2/evidence-packages/:id", async (req: Request, res: Response) => 
     authorize(await resolveActor(who.tenantId, who.subject, new Date(), who.role), "evidence_package.read");
     const out = await withTenant(who.tenantId, async (tx) => {
       return await getEvidencePackage(tx, String(req.params.id));
+    });
+    if (!out) {
+      throw new AppError("NOT_FOUND", "Evidence package not found.");
+    }
+    res.status(200).json(out);
+  } catch (err) {
+    toErrorResponse(err, res);
+  }
+});
+
+// Verify Evidence Package Objects & Manifest Against Active ObjectStore
+app.get("/api/v2/evidence-packages/:id/verify", async (req: Request, res: Response) => {
+  try {
+    const who = await authenticate(getHeader(req, "authorization"));
+    authorize(await resolveActor(who.tenantId, who.subject, new Date(), who.role), "evidence_package.read");
+    const out = await withTenant(who.tenantId, async (tx) => {
+      return await verifyStoredEvidencePackage(tx, String(req.params.id));
     });
     if (!out) {
       throw new AppError("NOT_FOUND", "Evidence package not found.");

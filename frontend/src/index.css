@@ -3,7 +3,7 @@
 
 :root {
   --aubergine: #2B1B38;
-  --coral: #E26D5A;
+  --coral: #B84230;
   --graphite: #2F343A;
   --sage: #8D9A96;
   --ivory: #F6F4EF;
@@ -166,10 +166,15 @@ body {
 
 .context-label {
   font-weight: 600;
-  color: var(--sage);
+  color: var(--muted-text);
   font-size: 0.8rem;
   text-transform: uppercase;
   letter-spacing: 0.04em;
+}
+
+.header-context-bar .context-label,
+.app-header .context-label {
+  color: var(--ivory);
 }
 
 .select-control {
@@ -188,10 +193,17 @@ body {
 
 .monospace-badge {
   font-family: var(--font-mono);
-  background: rgba(255, 255, 255, 0.1);
+  background: var(--light-sage);
   padding: 0.2rem 0.5rem;
   border-radius: 4px;
   font-size: 0.8rem;
+  color: var(--aubergine);
+}
+
+.header .monospace-badge,
+.navbar .monospace-badge,
+.app-header .monospace-badge {
+  background: rgba(255, 255, 255, 0.15);
   color: var(--ivory);
 }
 
@@ -307,9 +319,15 @@ body {
   letter-spacing: 0.05em;
 }
 
-.badge-aubergine {
+.badge-aubergine,
+.badge-primary {
   background: var(--aubergine);
   color: #FFFFFF;
+}
+
+.badge-secondary {
+  background: #E5E7EB;
+  color: var(--graphite);
 }
 
 .badge-coral {
@@ -329,6 +347,11 @@ body {
 
 .badge-dark {
   background: var(--graphite);
+  color: #FFFFFF;
+}
+
+.badge-danger {
+  background: var(--danger);
   color: #FFFFFF;
 }
 

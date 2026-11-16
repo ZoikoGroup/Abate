@@ -47,7 +47,7 @@ export function Navbar({
               className="btn btn-primary btn-sm demo-launch-btn"
               onClick={onOpenDemo}
               aria-label="Launch Guided Live Demo Console"
-              style={{ backgroundColor: "var(--abate-coral, #E26D5A)", color: "#FFFFFF", fontWeight: "bold" }}
+              style={{ backgroundColor: "#A83828", color: "#FFFFFF", fontWeight: "bold" }}
             >
               ✨ Live Demo Console
             </button>

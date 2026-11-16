@@ -5,6 +5,8 @@ import { withTenant, Tx } from "../../platform/db/with-tenant";
 import { SemanticQuery } from "../../contracts/release";
 import { boundaryIntrusionShare } from "../measure/boundary-intrusion";
 import { Interval } from "../measure/intervals";
+import { AppError } from "../../platform/errors";
+import { isKillSwitchActive } from "../ai/kill-switch";
 
 const cfg = loadConfig();
 
@@ -76,6 +78,10 @@ export async function compileRelease(
   customCohortMembers?: string[]
 ): Promise<ReleaseResult> {
   return withTenant(tenantId, async (tx: Tx) => {
+    if (await isKillSwitchActive(tx, "release_path")) {
+      throw new AppError("UNAVAILABLE", "Privacy release compiler disabled by kill switch (release_path).");
+    }
+
     // 1. Tenant-wide lock: serializes ALL release decisions in this tenant until transaction commit
     await tx.q("SELECT pg_advisory_xact_lock(hashtextextended($1, 0))", [`disclosure:${tenantId}`]);
 
@@ -98,16 +104,18 @@ export async function compileRelease(
     if (customCohortMembers && customCohortMembers.length > 0) {
       memberIds = customCohortMembers;
     } else {
-      // Fetch effective members belonging to cohort organization
+      // Fetch effective members belonging to cohort organization when cohortRef names an org UUID
       if (q.cohortRef && q.cohortRef.startsWith("org:")) {
         const orgId = q.cohortRef.replace(/^org:/, "");
-        const orgMembersRes = await tx.q(
-          `SELECT DISTINCT principal_id FROM effective_membership
-           WHERE tenant_id = $1 AND organization_id = $2 AND (valid_to IS NULL OR valid_to > $3)`,
-          [tenantId, orgId, q.periodStart]
-        );
-        if (orgMembersRes.rowCount && orgMembersRes.rowCount > 0) {
-          memberIds = orgMembersRes.rows.map(r => r.principal_id);
+        if (/^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i.test(orgId)) {
+          const orgMembersRes = await tx.q(
+            `SELECT DISTINCT principal_id FROM effective_membership
+             WHERE tenant_id = $1 AND organization_id = $2 AND (valid_to IS NULL OR valid_to > $3)`,
+            [tenantId, orgId, q.periodStart]
+          );
+          if (orgMembersRes.rowCount && orgMembersRes.rowCount > 0) {
+            memberIds = orgMembersRes.rows.map(r => r.principal_id);
+          }
         }
       }
       // An org: cohort with no effective members must stay empty (and be suppressed by the floor). It used to fall back
@@ -167,13 +175,7 @@ export async function compileRelease(
       }
       const priorSet = new Set(priorMembers);
 
-      // (a) Symmetric Difference Check: |(A \ B) U (B \ A)| must not be 1..4
-      const symDiff = symmetricDifference(memberSet, priorSet);
-      if (symDiff.size > 0 && symDiff.size < profile.overlapMin) {
-        return suppress("OVERLAP");
-      }
-
-      // (b) Parent-Child Residual Check: e.g. Parent 14, Child 10 -> residual 4
+      // (a) Parent-Child Residual Check: e.g. Parent 14, Child 10 -> residual 4
       if (isSubset(priorSet, memberSet)) {
         const residual = memberSet.size - priorSet.size;
         if (residual > 0 && residual < profile.residualMin) {
@@ -186,13 +188,19 @@ export async function compileRelease(
           return suppress("RESIDUAL");
         }
       }
+
+      // (b) Symmetric Difference Check: |(A \ B) U (B \ A)| must not be 1..4
+      const symDiff = symmetricDifference(memberSet, priorSet);
+      if (symDiff.size > 0 && symDiff.size < profile.overlapMin) {
+        return suppress("OVERLAP");
+      }
     }
 
     // 7. Deterministic Measurement Computation
     // Retrieve work interval facts for this cohort and window
     const factsRes = await tx.q(
       `SELECT start_at, end_at FROM work_fact_revision
-       WHERE tenant_id = $1 AND start_at >= $2 AND end_at <= $3`,
+       WHERE tenant_id = $1 AND kind = 'WORK' AND start_at >= $2 AND end_at <= $3`,
       [tenantId, q.periodStart, q.periodEnd]
     );
 

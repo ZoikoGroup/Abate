@@ -13,7 +13,6 @@
   },
   "include": [
     "backend/src/**/*",
-    "backend/tools/**/*",
-    "tests/**/*"
+    "backend/tools/**/*"
   ]
 }
