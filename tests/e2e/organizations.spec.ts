@@ -44,7 +44,7 @@ test.describe("Organizations & Tenant Isolation E2E", () => {
     // 4. Switch to Tenant B (Beacon Chambers) and confirm isolation hides Tenant A's organization
     const tenantSelector = page.getByLabel(/Active Tenant Scope/i);
     await tenantSelector.selectOption(TENANT_B_ID);
-    await expect(page.getByText(/Active Tenant Organizations \(Beacon Chambers\)/i)).toBeVisible({ timeout: 10_000 });
+    await expect(page.getByText(/Active Tenant Organizations \(Beacon Chambers/i)).toBeVisible({ timeout: 10_000 });
     await expect(page.locator("table").getByText(testOrgName)).toHaveCount(0);
   });
 });
