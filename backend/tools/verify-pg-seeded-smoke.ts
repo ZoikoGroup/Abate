@@ -148,7 +148,20 @@ async function main() {
     }
   }
 
-  console.log("✔ Live PostgreSQL Seeded Parity Smoke Verification: PASSED (12 assertions)");
+  // 7. Seed parity: the in-memory seed's hazard chain and jurisdiction packs must exist in PostgreSQL too, and the
+  // package endpoint must work against real uuid columns (in-memory accepts any string, so only PG catches that)
+  const hazardsA = await expressCall("GET", "/api/v2/hazards", { token: tokenA });
+  assert.strictEqual(hazardsA.status, 200);
+  assert(hazardsA.body.length >= 1, "Tenant A must have the seeded hazard in PostgreSQL");
+
+  const coverageA = await expressCall("GET", "/api/v2/jurisdiction/coverage", { token: tokenA });
+  assert.strictEqual(coverageA.status, 200);
+  assert.strictEqual(coverageA.body.status, "COVERED", "Tenant A must be bound to its seeded jurisdiction pack in PostgreSQL");
+
+  const pkgRes = await expressCall("POST", "/api/v2/evidence-packages", { token: tokenA, body: {} });
+  assert.strictEqual(pkgRes.status, 201, `Issuing an evidence package on PostgreSQL must succeed, got ${pkgRes.status}`);
+
+  console.log("✔ Live PostgreSQL Seeded Parity Smoke Verification: PASSED (15 assertions)");
 }
 
 main().catch((err) => {

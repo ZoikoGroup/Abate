@@ -567,6 +567,106 @@ export async function seedTwoTenants(opts: SeedTwoTenantsOptions = {}) {
           }
         }
 
+        // Phase 3/4 chain for Tenant A. The in-memory seed has it, so Postgres must too: without it the hazard,
+        // evidence-package and control flows see an empty tenant and diverge from the in-memory behaviour.
+        // Insert order follows the foreign keys: snapshot + decision -> release -> artifact -> hazard -> cause -> control -> approval.
+        const br = baselineRelease;
+        const ba = baselineArtifact;
+        await client.query("BEGIN");
+        try {
+          await client.query("SELECT set_config('app.tenant_id', $1, true)", [tA.id]);
+          await client.query(
+            `INSERT INTO metric_snapshot (id, tenant_id, metric_id, metric_version, cohort_ref, period_start, period_end,
+               source_cutoff, code_digest, membership_version, value, quality, contributor_count, lineage, computed_at)
+             VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12, $13, $14::jsonb, $15)
+             ON CONFLICT (id) DO NOTHING`,
+            [br.snapshot_id, tA.id, br.metric_id, br.metric_version, "cohort:seed-baseline", ba.period_start, ba.period_end,
+             ba.period_end, "seed-baseline", "seed-v1", ba.value, ba.quality, GOLDEN_01.tenantA.cohortSize ?? 16,
+             JSON.stringify({ seeded: true }), validFrom]
+          );
+          await client.query(
+            `INSERT INTO privacy_decision (id, tenant_id, semantic_query_hash, outcome, reason_code, policy_version, decided_at)
+             VALUES ($1, $2, $3, 'RELEASED', 'SEED_BASELINE', 'seed-v1', $4)
+             ON CONFLICT (id) DO NOTHING`,
+            [br.decision_id, tA.id, "seed-baseline-query", validFrom]
+          );
+          await client.query(
+            `INSERT INTO privacy_release (id, tenant_id, decision_id, snapshot_id, metric_id, metric_version, release_class, status, superseded_by, released_at)
+             VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10)
+             ON CONFLICT (id) DO NOTHING`,
+            [br.id, tA.id, br.decision_id, br.snapshot_id, br.metric_id, br.metric_version, br.release_class, br.status, br.superseded_by, br.released_at]
+          );
+          await client.query(
+            `INSERT INTO released_artifact (release_id, tenant_id, metric_id, metric_version, value, unit, period_start, period_end,
+               quality, interpretation, status, artifact_hash)
+             VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12)
+             ON CONFLICT (release_id) DO NOTHING`,
+            [ba.release_id, tA.id, ba.metric_id, ba.metric_version, ba.value, ba.unit, ba.period_start, ba.period_end,
+             ba.quality, ba.interpretation, ba.status, ba.artifact_hash]
+          );
+          await client.query(
+            `INSERT INTO hazard (id, tenant_id, title, owner_principal_id, originating_release_id, disposition, version, created_at)
+             VALUES ($1, $2, $3, $4, $5, 'OPEN', 1, $6)
+             ON CONFLICT (id) DO NOTHING`,
+            [ac.hazardId, tA.id, "After-hours client contact intrusion (seeded)", principalA.id, baselineReleaseId, validFrom]
+          );
+          await client.query(
+            `INSERT INTO cause (id, tenant_id, hazard_id, statement, status, reviewed_by, reviewed_at, version, created_at)
+             VALUES ($1, $2, $3, $4, 'REVIEWED_ACCEPTED', $5, $6, 1, $6)
+             ON CONFLICT (id) DO NOTHING`,
+            [ac.causeId, tA.id, ac.hazardId, "Client matters are routed to individuals outside working hours with no rota.", principalA.id, validFrom]
+          );
+          await client.query(
+            `INSERT INTO intervention (id, tenant_id, hazard_id, cause_id, state, version, scope, objective, owner_principal_id,
+               due_date, verification_plan, material_hash, created_at)
+             VALUES ($1, $2, $3, $4, 'APPROVED', 1, $5, $6, $7, $8, $9::jsonb, $10, $11)
+             ON CONFLICT (id) DO NOTHING`,
+            [ac.interventionId, tA.id, ac.hazardId, ac.causeId, controlDraft.scope, controlDraft.objective, principalA.id,
+             controlDraft.dueDate, JSON.stringify(controlDraft.verificationPlan), controlHash, validFrom]
+          );
+          await client.query(
+            `INSERT INTO approval (id, tenant_id, intervention_id, approved_version, approved_material_hash, approver_principal_id,
+               authority_ref, policy_resolution, expires_at, revoked_at, approved_at)
+             VALUES ($1, $2, $3, 1, $4, $5, 'auth:playbook-b4', $6::jsonb, NULL, NULL, $7)
+             ON CONFLICT (id) DO NOTHING`,
+            [ac.approvalId, tA.id, ac.interventionId, controlHash, principalA.id, JSON.stringify({ gate: "APPROVAL", resolved: true }), validFrom]
+          );
+          await client.query("COMMIT");
+        } catch (chainErr) {
+          await client.query("ROLLBACK");
+          throw chainErr;
+        }
+
+        // Phase 5 jurisdiction/sector policy packs and the per-tenant bindings. Without them coverage reads NOT_COVERED
+        // and retention/AI authority resolve differently from the in-memory seed.
+        await client.query("BEGIN");
+        try {
+          for (const pack of seededPolicyPacks) {
+            await client.query(
+              `INSERT INTO policy_pack (id, pack_key, version, kind, effective_from, effective_to, status, source_refs,
+                 accountable_reviewer, review_date, content, content_hash)
+               VALUES ($1, $2, $3, $4, $5, $6, $7, $8::jsonb, $9, $10, $11::jsonb, $12)
+               ON CONFLICT (pack_key, version) DO NOTHING`,
+              [pack.id, pack.pack_key, pack.version, pack.kind, pack.effective_from, pack.effective_to, pack.status,
+               JSON.stringify(pack.source_refs), pack.accountable_reviewer, pack.review_date,
+               JSON.stringify(pack.content), pack.content_hash]
+            );
+          }
+          for (const b of memDb.tenantPolicyBindings as Array<{ tenant_id: string; pack_key: string; pack_version: number; applies_to: unknown; bound_from: string; bound_to: string | null }>) {
+            await client.query("SELECT set_config('app.tenant_id', $1, true)", [b.tenant_id]);
+            await client.query(
+              `INSERT INTO tenant_policy_binding (tenant_id, pack_key, pack_version, applies_to, bound_from, bound_to)
+               VALUES ($1, $2, $3, $4::jsonb, $5, $6)
+               ON CONFLICT (tenant_id, pack_key, bound_from) DO NOTHING`,
+              [b.tenant_id, b.pack_key, b.pack_version, JSON.stringify(b.applies_to), b.bound_from, b.bound_to]
+            );
+          }
+          await client.query("COMMIT");
+        } catch (packErr) {
+          await client.query("ROLLBACK");
+          throw packErr;
+        }
+
         for (const ks of defaultKillSwitches) {
           await client.query(
             `INSERT INTO ai_kill_switch (scope, active, changed_by, changed_at)

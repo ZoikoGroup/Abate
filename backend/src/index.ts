@@ -1740,7 +1740,7 @@ app.get("/api/v2/policy/resolution", async (req: Request, res: Response) => {
 app.post("/api/v2/evidence-packages", async (req: Request, res: Response) => {
   try {
     const who = await authenticate(getHeader(req, "authorization"));
-    await resolveActor(who.tenantId, who.subject, new Date(), who.role);
+    const actor = await resolveActor(who.tenantId, who.subject, new Date(), who.role);
 
     const out = await withTenant(who.tenantId, async (tx) => {
       const hRes = await tx.q("SELECT * FROM hazard WHERE tenant_id = $1 LIMIT 1", [who.tenantId]);
@@ -1750,7 +1750,8 @@ app.post("/api/v2/evidence-packages", async (req: Request, res: Response) => {
       }
       return await issuePackage(tx, {
         hazardId,
-        issuerPrincipalId: who.subject
+        // evidence_package.issuer_principal_id is a uuid: the resolved principal, never the token's subject string
+        issuerPrincipalId: actor.principalId
       });
     });
 
