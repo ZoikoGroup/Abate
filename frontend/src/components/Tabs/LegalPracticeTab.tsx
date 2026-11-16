@@ -249,7 +249,7 @@ export function LegalPracticeTab({ currentTenant, token }: LegalPracticeTabProps
                       </div>
 
                       <div style={{ marginTop: "0.5rem", display: "flex", justifyContent: "space-between", alignItems: "center" }}>
-                        <span style={{ fontSize: "0.78rem", color: "#718096" }}>
+                        <span style={{ fontSize: "0.78rem", color: "#4A5568" }}>
                           Window: {m.activeWindowStart.slice(0, 10)} to {m.activeWindowEnd.slice(0, 10)}
                         </span>
                         <button
@@ -288,7 +288,7 @@ export function LegalPracticeTab({ currentTenant, token }: LegalPracticeTabProps
                 <div>
                   <div style={{ display: "flex", alignItems: "center", justifyContent: "space-between", marginBottom: "1rem" }}>
                     <div>
-                      <span style={{ fontSize: "0.8rem", color: "#718096" }}>Matter:</span>
+                      <span style={{ fontSize: "0.8rem", color: "#4A5568" }}>Matter:</span>
                       <strong style={{ display: "block" }}>{fatigueAssessment.matterId}</strong>
                     </div>
                     <div>
@@ -309,7 +309,7 @@ export function LegalPracticeTab({ currentTenant, token }: LegalPracticeTabProps
                     <div style={{ fontSize: "1.8rem", fontWeight: 700, color: fatigueAssessment.hasFatigueSurge ? "#C53030" : "#2B6CB0" }}>
                       {fatigueAssessment.consecutiveLateNightsCount} Nights
                     </div>
-                    <p style={{ margin: "0.4rem 0 0 0", fontSize: "0.8rem", color: "#718096" }}>
+                    <p style={{ margin: "0.4rem 0 0 0", fontSize: "0.8rem", color: "#4A5568" }}>
                       SRA Threshold: &ge; 3 consecutive nights with unbuffered work past 20:00 during trial/closing triggers mandatory supervisory intervention.
                     </p>
                   </div>
@@ -396,24 +396,27 @@ export function LegalPracticeTab({ currentTenant, token }: LegalPracticeTabProps
               <div style={{ backgroundColor: "#F7FAFC", padding: "0.75rem", borderRadius: "6px", marginBottom: "1rem" }}>
                 <strong style={{ fontSize: "0.82rem", display: "block", marginBottom: "0.5rem" }}>Adversarial Decoy Injection (Physical Minimization Test):</strong>
                 <div style={{ display: "flex", flexDirection: "column", gap: "0.3rem" }}>
-                  <label style={{ fontSize: "0.82rem", display: "flex", alignItems: "center", gap: "0.5rem" }}>
+                  <label htmlFor="inject-privilege-check" style={{ fontSize: "0.82rem", display: "flex", alignItems: "center", gap: "0.5rem" }}>
                     <input
+                      id="inject-privilege-check"
                       type="checkbox"
                       checked={injectPrivilege}
                       onChange={(e) => setInjectPrivilege(e.target.checked)}
                     />
                     Inject Privileged Legal Advice (<code>privilegedAdvice</code>)
                   </label>
-                  <label style={{ fontSize: "0.82rem", display: "flex", alignItems: "center", gap: "0.5rem" }}>
+                  <label htmlFor="inject-billing-rate-check" style={{ fontSize: "0.82rem", display: "flex", alignItems: "center", gap: "0.5rem" }}>
                     <input
+                      id="inject-billing-rate-check"
                       type="checkbox"
                       checked={injectBillingRate}
                       onChange={(e) => setInjectBillingRate(e.target.checked)}
                     />
                     Inject Hourly Billing Rate (<code>billingRate: 950</code>)
                   </label>
-                  <label style={{ fontSize: "0.82rem", display: "flex", alignItems: "center", gap: "0.5rem" }}>
+                  <label htmlFor="inject-ranking-check" style={{ fontSize: "0.82rem", display: "flex", alignItems: "center", gap: "0.5rem" }}>
                     <input
+                      id="inject-ranking-check"
                       type="checkbox"
                       checked={injectRanking}
                       onChange={(e) => setInjectRanking(e.target.checked)}

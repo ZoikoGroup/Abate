@@ -789,7 +789,6 @@ export const LiveDemoConsole: React.FC<LiveDemoConsoleProps> = ({ onClose }) => 
             className="ctrl-btn btn-run-all"
             onClick={handleRunAllSteps}
             disabled={isRunning || autoPlaying}
-            aria-label="Run all demo steps sequentially"
           >
             {autoPlaying ? "▶ Playing Demo..." : "▶ Run All Steps"}
           </button>
@@ -799,7 +798,6 @@ export const LiveDemoConsole: React.FC<LiveDemoConsoleProps> = ({ onClose }) => 
             className="ctrl-btn btn-reset"
             onClick={handleResetDemo}
             disabled={isRunning || autoPlaying}
-            aria-label="Reset demo state and regenerate keys"
           >
             ↺ Reset Demo
           </button>
@@ -808,7 +806,6 @@ export const LiveDemoConsole: React.FC<LiveDemoConsoleProps> = ({ onClose }) => 
             type="button"
             className="ctrl-btn btn-summary"
             onClick={() => setShowSummary(s => !s)}
-            aria-label="Toggle demo audit summary screen"
           >
             {showSummary ? "Hide Summary" : "Audit Summary"}
           </button>
@@ -818,7 +815,6 @@ export const LiveDemoConsole: React.FC<LiveDemoConsoleProps> = ({ onClose }) => 
               type="button"
               className="ctrl-btn btn-close"
               onClick={onClose}
-              aria-label="Return to Workspace"
             >
               Back to App
             </button>

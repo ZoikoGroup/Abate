@@ -5,14 +5,14 @@
   --abate-aubergine: #2B1B38;
   --abate-aubergine-dark: #1F1229;
   --abate-aubergine-light: #3D294F;
-  --abate-coral: #E26D5A;
-  --abate-coral-hover: #D05B48;
+  --abate-coral: #B84230;
+  --abate-coral-hover: #A83828;
   --abate-graphite: #2F343A;
-  --abate-sage: #8D9A96;
+  --abate-sage: #4D5C58;
   --abate-ivory: #F6F4EF;
-  --abate-emerald: #059669;
+  --abate-emerald: #047857;
   --abate-emerald-light: #D1FAE5;
-  --abate-rose: #DC2626;
+  --abate-rose: #B91C1C;
   --abate-rose-light: #FEE2E2;
   --abate-border: rgba(43, 27, 56, 0.12);
   --abate-border-subtle: rgba(43, 27, 56, 0.08);
@@ -91,7 +91,7 @@
 
 .phase-indicator {
   font-size: 0.76rem;
-  color: var(--abate-sage);
+  color: var(--abate-ivory);
   text-transform: uppercase;
   letter-spacing: 0.05em;
 }
@@ -111,7 +111,7 @@
 
 .progress-text {
   font-size: 0.75rem;
-  color: var(--abate-sage);
+  color: var(--abate-ivory);
   font-weight: 600;
   text-transform: uppercase;
 }
@@ -173,7 +173,7 @@
 
 .btn-close {
   background-color: rgba(0, 0, 0, 0.25);
-  color: var(--abate-sage);
+  color: var(--abate-ivory);
   border-color: rgba(255, 255, 255, 0.15);
 }
 
