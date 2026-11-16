@@ -19,6 +19,7 @@ test.describe("Phase 3 Privacy Compiler & Phase 4 Hazards E2E", () => {
     await expect(page.getByText(/RELEASE SUPPRESSED \(SAFE UNAVAILABLE\)/i)).toBeVisible({ timeout: 10_000 });
 
     await page.getByRole("button", { name: /2\. Test n = 10 Valid Release/i }).click();
+    await expect(page.getByText(/PRIVACY COMPILER RELEASE APPROVED/i)).toBeVisible({ timeout: 10_000 });
     await expect(page.getByText(/STATUS: RELEASED/i)).toBeVisible({ timeout: 10_000 });
 
     // 2. Hazards & Controls (Phase 4)

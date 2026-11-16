@@ -946,6 +946,7 @@ app.get("/api/v2/hazards/:id", async (req: Request, res: Response) => {
   try {
     const who = await authenticate(getHeader(req, "authorization"));
     const actor = await resolveActor(who.tenantId, who.subject, new Date());
+    const role = who.role || actor.memberships[0]?.domain_role || "RISK_OWNER";
     const hazardId = String(req.params.id);
 
     const out = await withTenant(who.tenantId, async (tx) => {
@@ -957,12 +958,17 @@ app.get("/api/v2/hazards/:id", async (req: Request, res: Response) => {
 
       const cRes = await tx.q("SELECT * FROM cause WHERE hazard_id = $1", [hazard.id]);
       const iRes = await tx.q("SELECT * FROM intervention WHERE hazard_id = $1", [hazard.id]);
+      const controls = await Promise.all(
+        iRes.rows.map((ctrl: any) =>
+          buildControlDetailView(tx, ctrl, role, ctrl.owner_principal_id === actor.principalId)
+        )
+      );
       const rel = await getRelease(actor, hazard.originating_release_id);
 
       return {
         hazard,
         causes: cRes.rows,
-        controls: iRes.rows,
+        controls,
         originatingRelease: rel
       };
     });

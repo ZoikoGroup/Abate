@@ -1,14 +1,14 @@
 {
   "schema": "abate.simulation-30d.v1",
   "mode": "SCRIPTED_REAL_HTTP",
-  "generatedAt": "2026-11-16T11:37:44.802Z",
+  "generatedAt": "2026-11-16T11:53:07.406Z",
   "baseUrl": "express://in-process",
   "summary": {
     "totalSteps": 9,
     "passedSteps": 9,
     "failedSteps": 0,
     "passed": true,
-    "durationMs": 478
+    "durationMs": 427
   },
   "steps": [
     {
@@ -23,7 +23,7 @@
       "phase": "Org Idempotency & Cross-Tenant 404",
       "endpoint": "POST/GET /api/v2/organizations",
       "passed": true,
-      "detail": "Created org bd5825c5, verified replay, 409 conflict, and cross-tenant 404"
+      "detail": "Created org 59ff0d53, verified replay, 409 conflict, and cross-tenant 404"
     },
     {
       "dayRange": "Days 03-05",
@@ -51,14 +51,14 @@
       "phase": "Privacy Release (Class B 28d Valid vs Short Window Blocked)",
       "endpoint": "POST /api/v2/releases/query",
       "passed": true,
-      "detail": "Short Class B window suppressed (NOT_AVAILABLE); 29d release issued (3d74b59d)"
+      "detail": "Short Class B window suppressed (NOT_AVAILABLE); 29d release issued (8c7c6105)"
     },
     {
       "dayRange": "Days 17-25",
       "phase": "BE-007 Hazard -> Control -> Re-Approval -> Evidence Pack",
       "endpoint": "POST /api/v2/hazards & /controls & /evidence-packages",
       "passed": true,
-      "detail": "Closed hazard 9e068e05 via v2 re-approval; evidence pack fd38c12e"
+      "detail": "Closed hazard e86c1bbe via v2 re-approval; evidence pack 97143f46"
     },
     {
       "dayRange": "Days 26-28",
@@ -72,7 +72,7 @@
       "phase": "Plane B Isolation & Release Dossier Verification",
       "endpoint": "GET /api/v2/outcomes/releases/:id & /release/dossier",
       "passed": true,
-      "detail": "Plane B cross-read blocked (404); Plane B definition registered; dossier verified (BLOCKED_FAILING_GATES)"
+      "detail": "Plane B cross-read blocked (404); Plane B definition registered; dossier verified (READY FOR REVIEW)"
     }
   ]
 }

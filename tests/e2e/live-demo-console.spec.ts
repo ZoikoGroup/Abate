@@ -11,7 +11,7 @@ test.describe("Live Demo Console E2E", () => {
     await page.waitForLoadState("domcontentloaded");
 
     await expect(page.getByRole("heading", { name: /Live Demo Console/i })).toBeVisible({ timeout: 15_000 });
-    await expect(page.getByText(/Step 1 of 12/i)).toBeVisible();
+    await expect(page.locator(".step-count-pill")).toHaveText(/Step 1 of 12/i);
 
     const runBtn = page.locator("button.demo-run-button");
     await expect(runBtn).toBeEnabled({ timeout: 10_000 });

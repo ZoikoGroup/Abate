@@ -191,7 +191,9 @@ export async function ingestBatch(args: {
 
       await tx.q(
         `INSERT INTO watermark (tenant_id, connection_id, cursor, advanced_at)
-         VALUES ($1, $2, $3, now())`,
+         VALUES ($1, $2, $3, now())
+         ON CONFLICT (tenant_id, connection_id)
+         DO UPDATE SET cursor = EXCLUDED.cursor, advanced_at = EXCLUDED.advanced_at`,
         [tx.tenantId, conn.id, args.batch.batchId]
       );
 

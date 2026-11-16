@@ -515,7 +515,7 @@ class MemoryClient {
         resource_id: resId,
         resource_version: resVer,
         result: res,
-        evidence_refs: evidence || [],
+        evidence_refs: typeof evidence === "string" ? JSON.parse(evidence) : (evidence || []),
         occurred_at: new Date().toISOString()
       };
       memDb.auditEvents.push(event);
@@ -543,7 +543,7 @@ class MemoryClient {
         event_type: evtType,
         schema_version: schemaVer,
         purpose,
-        refs: refs || [],
+        refs: typeof refs === "string" ? JSON.parse(refs) : (refs || []),
         created_at: new Date().toISOString(),
         published_at: null,
         attempts: 0,
