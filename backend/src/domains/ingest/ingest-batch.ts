@@ -4,7 +4,9 @@ import { runCommand, computeRequestHash, Actor } from "../../platform/command";
 import { AppError } from "../../platform/errors";
 import { AuthenticatedIdentity, authorize } from "../tenant/auth";
 import { ZoikoTimeBatch } from "../../contracts/sources/zoikotime.v1";
-import { partition } from "./validate";
+import { CalendarCadenceBatch } from "../../contracts/sources/calendar-cadence.v1";
+import { SourceAdapterName } from "../../contracts/ingest";
+import { partition, partitionCalendarCadence } from "./validate";
 import { derivePseudonym } from "../work/pseudonym";
 import { recordKeyDigest } from "../work/record-key";
 import { loadConfig } from "../../platform/config";
@@ -12,26 +14,40 @@ import { isKillSwitchActive } from "../ai/kill-switch";
 
 const cfg = loadConfig();
 
+const KILL_SWITCH_BY_SOURCE: Record<string, string> = {
+  zoikotime: "connector:zoikotime",
+  calendarcadence: "connector:calendar_cadence",
+  calendar_cadence: "connector:calendar_cadence"
+};
+
 export interface IngestBatchArgs {
   who: AuthenticatedIdentity;
   actor: Actor;
-  batch: ZoikoTimeBatch;
+  batch: ZoikoTimeBatch | CalendarCadenceBatch;
   idempotencyKey: string;
+  connectorSource?: SourceAdapterName;
 }
 
 export async function ingestBatch(args: {
   who: AuthenticatedIdentity;
   actor: Actor;
-  batch: ZoikoTimeBatch;
+  batch: ZoikoTimeBatch | CalendarCadenceBatch;
   idempotencyKey?: string;
+  connectorSource?: SourceAdapterName;
 }) {
   authorize(args.actor, "ingest.batch");
 
-  // Step 1: Strict Partitioning. Never log raw payloads or error objects.
-  const { ok, rejected } = partition(args.batch.items);
+  const expectedSource: SourceAdapterName = args.connectorSource || "ZoikoTime";
+
+  // Step 1: Strict Partitioning against the active connector contract. Never log raw payloads or error objects.
+  const { ok, rejected } =
+    expectedSource === "CalendarCadence"
+      ? partitionCalendarCadence(args.batch.items)
+      : partition(args.batch.items);
 
   const batchKey = args.idempotencyKey || args.batch.batchId;
   const requestHash = computeRequestHash({
+    connectorSource: expectedSource,
     connectionId: args.batch.connectionId,
     batchId: args.batch.batchId,
     itemCount: args.batch.items.length
@@ -44,7 +60,7 @@ export async function ingestBatch(args: {
     requestHash,
     actor: args.actor,
     body: async (tx) => {
-      // Step 2: Validate Connection exists, kill switch is inactive, and connection is ACTIVE
+      // Step 2: Validate Connection exists, matches adapter source, kill switch is inactive, and connection is ACTIVE
       const connRes = await tx.q(
         `SELECT id, state, source FROM connection WHERE id = $1`,
         [args.batch.connectionId]
@@ -55,7 +71,15 @@ export async function ingestBatch(args: {
       }
 
       const conn = connRes.rows[0];
-      const connectorScope = `connector:${String(conn.source || "zoikotime").toLowerCase()}`;
+      if (args.connectorSource && String(conn.source).toLowerCase() !== expectedSource.toLowerCase()) {
+        throw new AppError(
+          "VALIDATION",
+          `Connection source mismatch: expected '${expectedSource}', got '${conn.source}'.`
+        );
+      }
+
+      const normSource = String(conn.source || expectedSource).toLowerCase();
+      const connectorScope = KILL_SWITCH_BY_SOURCE[normSource] || `connector:${normSource}`;
       if (await isKillSwitchActive(tx, connectorScope)) {
         throw new AppError("UNAVAILABLE", `Ingestion disabled by kill switch (${connectorScope}).`);
       }

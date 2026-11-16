@@ -489,7 +489,7 @@ async function runEndpointChecks() {
   md += `Total Invariant Checks Executed: ${results.length}\n`;
   md += `Passed: ${passedCount}\n`;
   md += `Failed: ${failedCount}\n`;
-  md += `Engine Status: 0 failing P0 tests\n\n`;
+  md += `P0 Check Failures: ${failedCount}\n\n`;
 
   md += "VERIFICATION RESULTS TABLE\n";
   md += "------------------------------------------------------------\n\n";

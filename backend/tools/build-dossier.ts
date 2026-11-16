@@ -159,6 +159,15 @@ export async function assembleDossier() {
     killSwitchReport.allPassed &&
     simReport.summary.passed;
 
+  let imageDigests: Record<string, string> | null = null;
+  if (process.env.ABATE_IMAGE_DIGESTS) {
+    try {
+      imageDigests = JSON.parse(process.env.ABATE_IMAGE_DIGESTS);
+    } catch {
+      imageDigests = null;
+    }
+  }
+
   const coreEvidencePayload = {
     schema: "abate.release-dossier.v1",
     commitSha,
@@ -168,7 +177,8 @@ export async function assembleDossier() {
       specification: "ZAB-ENG-001",
       version: "1.0.0",
       architecture: "Two-Plane Modular Monolith with Forced Row-Level Security",
-      postgresRequirementEnv: process.env.ABATE_REQUIRE_PG === "1" ? "LIVE_POSTGRES_REQUIRED" : "HYBRID_LOCAL_SANDBOX"
+      postgresRequirementEnv: process.env.ABATE_REQUIRE_PG === "1" ? "LIVE_POSTGRES_REQUIRED" : "HYBRID_LOCAL_SANDBOX",
+      imageDigests
     },
     constitutionalInvariants: [
       { id: "INV-01", statement: "Tenant isolation at every seam via PostgreSQL RLS + transaction-local context", verified: allGatesGreen },
@@ -224,17 +234,40 @@ export async function assembleDossier() {
 
   const dossierHash = sha256Hex(canonicalJson(coreEvidencePayload));
 
-  // 4. Check if a named human signer ratified THIS exact dossierHash; otherwise stay READY FOR REVIEW
+  // 4. Strictly validate prior sign-off: MUST match exact dossierHash, commitSha, imageDigests, and unexpired expiresAt.
+  // Any code or image change automatically invalidates prior approval back to READY FOR REVIEW.
   const signoffPath = path.join(repoRoot, "evidence/dossier-signoff.json");
   let existingSignoff: any = null;
+  let invalidationReason: string | null = null;
   if (fs.existsSync(signoffPath)) {
     try {
       const candidate = JSON.parse(fs.readFileSync(signoffPath, "utf8"));
-      if (candidate?.dossierHash === dossierHash && candidate?.signedBy && candidate?.status === "RATIFIED") {
+      const hasSigner = typeof candidate?.signedBy === "string" && candidate.signedBy.trim().length >= 3;
+      const hasScope = typeof candidate?.scope === "string" && candidate.scope.trim().length > 0;
+      const hashMatches = candidate?.dossierHash === dossierHash;
+      const shaMatches = candidate?.commitSha === commitSha;
+      const digestsMatch = canonicalJson(candidate?.imageDigests ?? null) === canonicalJson(imageDigests ?? null);
+      const expiryMs = typeof candidate?.expiresAt === "string" ? Date.parse(candidate.expiresAt) : NaN;
+      const notExpired = Number.isFinite(expiryMs) && expiryMs > Date.now();
+
+      if (candidate?.status === "RATIFIED" && hasSigner && hasScope && hashMatches && shaMatches && digestsMatch && notExpired && allGatesGreen) {
         existingSignoff = candidate;
+      } else {
+        invalidationReason = !hashMatches
+          ? "dossierHash changed"
+          : !shaMatches
+          ? "commitSha changed"
+          : !digestsMatch
+          ? "imageDigests changed"
+          : !notExpired
+          ? "signoff missing valid future expiresAt"
+          : !hasScope
+          ? "signoff missing explicit scope"
+          : "gates not green";
       }
     } catch {
       existingSignoff = null;
+      invalidationReason = "unreadable signoff JSON";
     }
   }
 
@@ -252,8 +285,14 @@ export async function assembleDossier() {
         signedBy: null,
         role: null,
         signedAt: null,
+        expiresAt: null,
+        scope: null,
+        conditions: null,
+        commitSha,
+        imageDigests,
         dossierHash,
-        instruction: 'Run `npm --prefix backend run sign-dossier -- --signer="Full Name" --role="Release Lead"` after manual review.'
+        ...(invalidationReason ? { invalidatedReason: invalidationReason } : {}),
+        instruction: 'Run `npm --prefix backend run sign-dossier -- --signer="Full Name" --role="Release Lead" --scope="synthetic-sandbox" --conditions="Sandbox evaluation only" --expiry-days=14` after manual review.'
       },
     decision: {
       outcome,

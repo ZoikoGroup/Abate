@@ -93,7 +93,7 @@ const STEPS: StepConfig[] = [
     id: 10,
     title: "Platform Release Dossier",
     badge: "GET /api/v2/release/dossier",
-    whatShowing: "Full enterprise stack verified: 8 test suites, 110 automated cases, 0 failing P0 tests, ready for stakeholder review.",
+    whatShowing: "Full synthetic verification stack: 8 test suites, 110 automated cases, zero P0 suite failures, ready for stakeholder review.",
     whatYouSay: "“All phases 0 through 8 and sector packs are live, tested, and ready for review.”",
     buttonLabel: "Inspect release dossier"
   },
@@ -584,17 +584,16 @@ export const LiveDemoConsole: React.FC<LiveDemoConsoleProps> = ({ onClose }) => 
       const isPass = inspect.status === 200 && (
         inspect.body?.status === "READY FOR REVIEW" ||
         inspect.body?.status === "RATIFIED" ||
-        inspect.body?.decision?.outcome === "READY FOR REVIEW" ||
-        inspect.body?.decision?.outcome === "GO" ||
-        inspect.body?.decision === "GO"
+        inspect.body?.decision?.outcome === "READY FOR REVIEW"
       );
       const totalSuites = inspect.body?.testSuites?.length || 8;
+      const dossierStatus = inspect.body?.status || "READY FOR REVIEW";
       const proof: StepProof = {
         status: isPass ? ("PASS" as const) : ("FAIL" as const),
         reason: isPass
-          ? `Release Evidence Dossier: ${totalSuites} test suites passed, 0 failing P0 tests. Status: READY FOR REVIEW.`
+          ? `Release Evidence Dossier: ${totalSuites} synthetic test suites passed, P0 gate clear. Status: ${dossierStatus}.`
           : `Dossier unavailable: GET /api/v2/release/dossier returned HTTP ${inspect.status}.`,
-        metric: isPass ? `Status: ${inspect.body?.decision?.outcome || inspect.body?.status || "READY FOR REVIEW"}` : "Dossier unavailable"
+        metric: isPass ? `Status: ${inspect.body?.decision?.outcome || dossierStatus}` : "Dossier unavailable"
       };
       setStepProofs(prev => ({ ...prev, 10: proof }));
       setCompletedSteps(prev => ({ ...prev, 10: isPass }));
@@ -1186,7 +1185,7 @@ export const LiveDemoConsole: React.FC<LiveDemoConsoleProps> = ({ onClose }) => 
                     <span className="r-phase">Phase 3 &bull; Cohort Analytics &amp; Privacy</span>
                     <span className="r-status-badge live">LIVE &amp; VERIFIED</span>
                   </div>
-                  <p>Non-disclosing metrics, constitutional contributor floor (n &ge; 10), and differential privacy release compiler.</p>
+                  <p>Non-disclosing metrics, constitutional contributor floor (n &ge; 10), and privacy-release suppression compiler.</p>
                 </div>
 
                 <div className="roadmap-item verified">
@@ -1336,7 +1335,7 @@ export const LiveDemoConsole: React.FC<LiveDemoConsoleProps> = ({ onClose }) => 
               <div className="modal-security-callout">
                 <strong>🛡️ Platform Security &amp; Invariants Notice:</strong>
                 <p>
-                  Every request across the demonstration executed against the authoritative backend as expected (including intentional 409 conflict detection and 400 parameter validation gates). Idempotency, Row-Level Security isolation, and immutable cryptographic audit logging are fully verified with 0 failing P0 tests.
+                  Every request across the demonstration executed against the authoritative backend as expected (including intentional 409 conflict detection and 400 parameter validation gates). Idempotency, Row-Level Security isolation, and immutable cryptographic audit logging pass all synthetic suite checks.
                 </p>
               </div>
             </div>

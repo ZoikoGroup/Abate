@@ -193,6 +193,15 @@ export async function requestToken(tenantId: string, subject: string, role = "RI
 // Phase 2: Ingestion & Work-State Ledger
 // ==========================================
 
+export interface SourceContract {
+  id: string;
+  tenant_id: string;
+  source: "ZoikoTime" | "CalendarCadence";
+  version: string;
+  contract_hash: string;
+  status: "DRAFT" | "ACTIVE" | "RETIRED";
+}
+
 export interface Connection {
   id: string;
   tenant_id: string;
@@ -247,18 +256,43 @@ export interface ZoikoTimeBatchPayload {
   }>;
 }
 
+export async function fetchSourceContracts(token: string): Promise<SourceContract[]> {
+  return api<SourceContract[]>("/api/v2/source-contracts", { token });
+}
+
 export async function fetchConnections(token: string): Promise<Connection[]> {
   return api<Connection[]>("/api/v2/connections", { token });
+}
+
+export async function registerConnection(
+  payload: {
+    source: "ZoikoTime" | "CalendarCadence";
+    contractId: string;
+    expectedCadenceSeconds?: number;
+  },
+  idempotencyKey: string,
+  token: string
+): Promise<Connection> {
+  return api<Connection>("/api/v2/connections", {
+    method: "POST",
+    token,
+    idempotencyKey,
+    body: JSON.stringify(payload)
+  });
 }
 
 export async function setConnectionState(
   connectionId: string,
   action: "pause" | "resume" | "revoke",
   token: string
-): Promise<{ success: boolean; connection: Connection }> {
-  return api<{ success: boolean; connection: Connection }>(
+): Promise<Connection> {
+  return api<Connection>(
     `/api/v2/connections/${connectionId}/${action}`,
-    { method: "POST", token }
+    {
+      method: "POST",
+      token,
+      idempotencyKey: `conn-${action}-${crypto.randomUUID()}`
+    }
   );
 }
 

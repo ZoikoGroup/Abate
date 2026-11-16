@@ -1,8 +1,10 @@
 // backend/src/domains/ingest/validate.ts
+import { ZodType } from "zod";
 import { ZoikoTimeIntervalV1, ZoikoTimeInterval } from "../../contracts/sources/zoikotime.v1";
+import { CalendarCadenceEventV1, CalendarCadenceEvent } from "../../contracts/sources/calendar-cadence.v1";
 
-export interface PartitionResult {
-  ok: ZoikoTimeInterval[];
+export interface PartitionResult<T = ZoikoTimeInterval> {
+  ok: T[];
   rejected: number;
 }
 
@@ -52,17 +54,20 @@ export function isDstTransitionAmbiguity(date: Date, timeZone: string): boolean 
 const MAX_FUTURE_ALLOWANCE_MS = 7 * 24 * 60 * 60 * 1000;
 
 /**
- * partition: Validates raw batch items against the strict ZoikoTime v1 contract.
- * Rejects invalid items, ambiguous times, future dates beyond the limit, and unknown/prohibited fields.
+ * partitionWithSchema: Validates raw batch items against a strict source contract schema.
+ * Rejects invalid items, ambiguous DST times, future dates beyond the limit, and unknown/prohibited fields.
  * CRITICAL RULE: Never log raw payloads or error contents to prevent decoy/surveillance echoes.
  */
-export function partition(items: unknown[]): PartitionResult {
-  const ok: ZoikoTimeInterval[] = [];
+export function partitionWithSchema<T extends { startUtc: string; endUtc: string; workTz: string }>(
+  items: unknown[],
+  schema: ZodType<T>
+): PartitionResult<T> {
+  const ok: T[] = [];
   let rejected = 0;
   const now = Date.now();
 
   for (const raw of items) {
-    const r = ZoikoTimeIntervalV1.safeParse(raw);
+    const r = schema.safeParse(raw);
     if (!r.success) {
       // Prohibited, unknown, or invalid kind/tz fields fail here. Never log raw or r.error.
       rejected++;
@@ -94,4 +99,18 @@ export function partition(items: unknown[]): PartitionResult {
   }
 
   return { ok, rejected };
+}
+
+/**
+ * partition: Validates raw batch items against the strict ZoikoTime v1 contract.
+ */
+export function partition(items: unknown[]): PartitionResult<ZoikoTimeInterval> {
+  return partitionWithSchema(items, ZoikoTimeIntervalV1);
+}
+
+/**
+ * partitionCalendarCadence: Validates raw batch items against the strict CalendarCadence v1 contract.
+ */
+export function partitionCalendarCadence(items: unknown[]): PartitionResult<CalendarCadenceEvent> {
+  return partitionWithSchema(items, CalendarCadenceEventV1);
 }

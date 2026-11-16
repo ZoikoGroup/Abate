@@ -65,6 +65,17 @@ jobs:
           DATABASE_URL_WORKER: postgres://abate_worker:worker_pw@localhost:5432/abate
         run: npm --prefix backend run verify-pg -- --require-live
 
+      - name: Seed live Postgres fixtures and verify RLS connection parity
+        env:
+          ABATE_REQUIRE_PG: "1"
+          DATABASE_URL_MIGRATOR: postgres://abate_migrator:migrator_pw@localhost:5432/abate
+          DATABASE_URL_APP: postgres://abate_app:app_pw@localhost:5432/abate
+          DATABASE_URL_WORKER: postgres://abate_worker:worker_pw@localhost:5432/abate
+        run: |
+          npm --prefix backend run seed-demo -- --pg
+          npm --prefix backend run verify-pg-smoke
+          npm --prefix backend run test-load -- --http --tcp
+
       - name: Typecheck and compile backend
         run: npm --prefix backend run build
 
@@ -102,7 +113,13 @@ jobs:
           npm --prefix frontend run lint
           npm --prefix frontend run build
 
-      - name: Assemble dynamic Release Dossier and verify READY FOR REVIEW state
+      - name: Validate Docker Compose config and container image builds
+        run: |
+          docker compose config --quiet
+          docker build -t abate-backend:ci ./backend
+          docker build -t abate-frontend:ci ./frontend
+
+      - name: Assemble dynamic Release Dossier and verify READY FOR REVIEW or RATIFIED state
         env:
           ABATE_REQUIRE_PG: "0"
           DATABASE_URL_MIGRATOR: postgres://disabled:disabled@127.0.0.1:1/abate
@@ -110,7 +127,7 @@ jobs:
           DATABASE_URL_WORKER: postgres://disabled:disabled@127.0.0.1:1/abate
         run: |
           npm --prefix backend run build-dossier
-          node -e "const d = require('./evidence/release-dossier.json'); if (d.status !== 'READY FOR REVIEW') { console.error('Expected READY FOR REVIEW, got', d.status); process.exit(1); }"
+          node -e "const d = require('./evidence/release-dossier.json'); if (d.status !== 'READY FOR REVIEW' && d.status !== 'RATIFIED') { console.error('Expected READY FOR REVIEW or RATIFIED, got', d.status); process.exit(1); }"
 
       - name: Upload Release Dossier artifacts
         uses: actions/upload-artifact@v4
@@ -122,6 +139,7 @@ jobs:
             evidence/sim-30d-report.json
             evidence/kill-switch-drill-report.json
             evidence/restore-rehearsal-report.json
+            evidence/slo-benchmark-report.json
             frontend/public/release-dossier.json
 
   e2e-a11y:

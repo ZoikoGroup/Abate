@@ -6,7 +6,7 @@ export const openApiSpec = {
   info: {
     title: "Zoiko Abate Authoritative API Contract Registry",
     version: "2.0.0",
-    description: "Production API specification for Zoiko Abate psychosocial-risk governance, differential privacy compiler, bounded AI, work-design outcomes, and zero-impersonation diagnostic infrastructure."
+    description: "API v2 specification for Zoiko Abate psychosocial-risk governance, privacy release compiler, bounded AI, work-design outcomes, and zero-impersonation diagnostic infrastructure."
   },
   servers: [
     { url: "/api/v2", description: "API v2 Base (Default Tenant Environment)" }
@@ -223,6 +223,73 @@ export const openApiSpec = {
         }
       }
     },
+    "/connectors/calendar-cadence/batches": {
+      post: {
+        tags: ["Ingest & Work Ledger"],
+        summary: "Ingest bounded CalendarCadence v1 batches (rejects meeting subjects, attendees, and descriptions)",
+        responses: {
+          "200": { description: "CalendarCadence batch accepted and safe receipt returned" },
+          "400": { description: "Strict contract rejection (unallowlisted field or invalid timestamp)" }
+        }
+      }
+    },
+    "/source-contracts": {
+      get: {
+        tags: ["Ingest & Work Ledger"],
+        summary: "List approved source contracts scoped to caller's tenant",
+        responses: {
+          "200": { description: "Tenant source contracts" }
+        }
+      }
+    },
+    "/connections": {
+      get: {
+        tags: ["Ingest & Work Ledger"],
+        summary: "List tenant connections with wall-clock freshness health",
+        responses: {
+          "200": { description: "Enriched connection list" }
+        }
+      },
+      post: {
+        tags: ["Ingest & Work Ledger"],
+        summary: "Idempotently register a new connection bound to an active source contract",
+        responses: {
+          "200": { description: "Registered connection" },
+          "400": { description: "Validation or missing Idempotency-Key error" },
+          "409": { description: "Idempotency conflict or inactive contract" }
+        }
+      }
+    },
+    "/connections/{id}/pause": {
+      post: {
+        tags: ["Ingest & Work Ledger"],
+        summary: "Pause connection via idempotent command pipeline with audit and outbox event",
+        responses: {
+          "200": { description: "Connection paused" },
+          "409": { description: "REVOKED connection cannot transition" }
+        }
+      }
+    },
+    "/connections/{id}/resume": {
+      post: {
+        tags: ["Ingest & Work Ledger"],
+        summary: "Resume paused connection via idempotent command pipeline",
+        responses: {
+          "200": { description: "Connection resumed" },
+          "409": { description: "REVOKED connection cannot transition" }
+        }
+      }
+    },
+    "/connections/{id}/revoke": {
+      post: {
+        tags: ["Ingest & Work Ledger"],
+        summary: "Terminally revoke connection via idempotent command pipeline",
+        responses: {
+          "200": { description: "Connection revoked" },
+          "409": { description: "Already revoked terminal connection" }
+        }
+      }
+    },
 
     // -------------------------------------------------------------
     // Phase 3: Cohort Privacy Compiler & Measurement
@@ -239,7 +306,7 @@ export const openApiSpec = {
     "/privacy/query": {
       post: {
         tags: ["Cohort Privacy & Measurement"],
-        summary: "Execute semantic query through the differential privacy compiler",
+        summary: "Execute semantic query through the privacy release compiler",
         requestBody: {
           required: true,
           content: {

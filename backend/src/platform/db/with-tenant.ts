@@ -976,6 +976,58 @@ class MemoryClient {
     // Phase 2 Ingestion & Ledger Handlers
     // -------------------------------------------------------------
 
+    // Source Contract Select & Insert
+    if (upper.includes("FROM SOURCE_CONTRACT")) {
+      let rows = Array.from(memDb.sourceContracts.values()).filter(c => c.tenant_id === this.tenantContext);
+      if (params.length > 0) {
+        rows = rows.filter(c => c.id === params[0]);
+      }
+      return { rows, rowCount: rows.length, command: "SELECT", oid: 0, fields: [] };
+    }
+
+    if (upper.includes("INSERT INTO SOURCE_CONTRACT")) {
+      const [id, tId, source, version, contractHash, status] = params;
+      if (this.tenantContext && tId !== this.tenantContext) {
+        throw new Error("RLS WITH CHECK violation: cross-tenant source_contract write rejected");
+      }
+      const existing = Array.from(memDb.sourceContracts.values()).find(
+        c => c.tenant_id === tId && c.source === source && c.version === version
+      );
+      if (existing) {
+        return { rows: [], rowCount: 0, command: "INSERT", oid: 0, fields: [] };
+      }
+      const rec = {
+        id,
+        tenant_id: tId,
+        source,
+        version,
+        contract_hash: contractHash,
+        status,
+        created_at: new Date().toISOString()
+      };
+      memDb.sourceContracts.set(id, rec);
+      return { rows: [rec], rowCount: 1, command: "INSERT", oid: 0, fields: [] };
+    }
+
+    // Connection Insert
+    if (upper.includes("INSERT INTO CONNECTION")) {
+      const [id, tId, source, contractId, state, expectedCadenceSeconds] = params;
+      if (this.tenantContext && tId !== this.tenantContext) {
+        throw new Error("RLS WITH CHECK violation: cross-tenant connection write rejected");
+      }
+      const rec = {
+        id,
+        tenant_id: tId,
+        source,
+        contract_id: contractId,
+        state: state || "ACTIVE",
+        last_success_at: null,
+        expected_cadence_seconds: Number(expectedCadenceSeconds) || 3600
+      };
+      memDb.connections.set(id, rec);
+      return { rows: [rec], rowCount: 1, command: "INSERT", oid: 0, fields: [] };
+    }
+
     // Connection Select
     if (upper.includes("FROM CONNECTION")) {
       let rows = Array.from(memDb.connections.values()).filter(c => c.tenant_id === this.tenantContext);
@@ -1050,12 +1102,20 @@ class MemoryClient {
     // Work Fact Revision Select All
     if (upper.includes("FROM WORK_FACT_REVISION")) {
       let rows = Array.from(memDb.workFactRevisions.values()).filter(r => r.tenant_id === this.tenantContext);
+      if (upper.includes("KIND = 'WORK'") || upper.includes("KIND='WORK'")) {
+        rows = rows.filter(r => r.kind === "WORK");
+      }
       if (params.length > 0) {
         if (upper.includes("RECEIPT_ID = $1") || upper.includes("RECEIPT_ID=$1")) {
           rows = rows.filter(r => r.receipt_id === params[0]);
         } else if (upper.includes("SOURCE_RECORD_ID = $1") || upper.includes("SOURCE_RECORD_ID=$1")) {
           rows = rows.filter(r => r.source_record_id === params[0]);
         }
+      }
+      if (params.length >= 3 && upper.includes("START_AT >= $2") && upper.includes("END_AT <= $3")) {
+        const pStart = new Date(params[1] as string | Date).getTime();
+        const pEnd = new Date(params[2] as string | Date).getTime();
+        rows = rows.filter(r => new Date(r.start_at).getTime() >= pStart && new Date(r.end_at).getTime() <= pEnd);
       }
       return { rows, rowCount: rows.length, command: "SELECT", oid: 0, fields: [] };
     }

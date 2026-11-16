@@ -39,7 +39,7 @@ The Four Zero-Surveillance Constitutional Invariants:
 1. Physical Minimization (No Surveillance Fields):
 The API perimeter and data ingestion engines strictly reject individual surveillance fields. Schemas use strict Zod parsing to reject keys such as keystrokeTracker, screenshotUrl, sickReason, billingRate, or individualLawyerRanking. These fields cannot enter staging, persistence, or system logs.
 
-2. Mathematical Differential Privacy (Contributor Floor n >= 10):
+2. Constitutional Privacy Thresholds (Contributor Floor n >= 10):
 Abate enforces a strict mathematical contributor floor. Metric releases require at least 10 active contributors in a cohort across a minimum 28-day measurement window. Cohorts with fewer than 10 contributors return UNAVAILABLE. Furthermore, cross-request differencing checks require a symmetric difference of at least 5 individuals, preventing re-identification via clever subtraction queries.
 
 3. Complete Multi-Tenant Database Isolation:
@@ -150,7 +150,7 @@ Phase 2: Ingestion Engine & Append-Only Work Ledger
 - Decoy Minimization Lab (tools/test-minimization.ts): Validates that rejected decoy markers leave zero traces across database tables, audit records, outbox queues, or application logs.
 - Freshness tracking: Categorizes connectors into FRESH, DELAYED, STALE, or NEVER_SYNCED based on expected delivery cadences.
 
-Phase 3: Measurement & Differential Privacy Release
+Phase 3: Measurement & Privacy Release Compiler
 - Computes non-disclosing workplace risk metrics: BOUNDARY_INTRUSION_SHARE (proportion of working hours logged outside core agreed work schedules).
 - Contributor floor: Releasing metric data requires an active cohort of at least 10 individuals (n >= 10). Cohorts with fewer than 10 individuals return HTTP 200 with status UNAVAILABLE (SUPPRESSED_CONTRIBUTOR_FLOOR).
 - Differencing attack prevention: Enforces a minimum 28-day window for Class B releases, a minimum symmetric difference of 5 individuals between overlapping queries, and a minimum residual of 5 individuals for parent/child queries.
@@ -186,7 +186,7 @@ Phase 8: Operations, SLO Manifest & Ratified Release Dossier
   - Standard reads P95 latency <= 500 ms (measured: 43 ms).
   - Peak concurrency of 150 simultaneous requests with zero privacy leaks.
 - Disaster recovery rehearsal (tools/reconcile-after-restore.ts): Proves RTO <= 4 hours and RPO <= 15 minutes.
-- Formal release evidence dossier (evidence/release-dossier.json): Aggregates all 8 automated test suites, confirms 0 failing P0 tests, and outputs the status: READY FOR REVIEW.
+- Formal release evidence dossier (evidence/release-dossier.json): Aggregates all 8 automated test suites, checks P0 gate status, and outputs the status: READY FOR REVIEW.
 
 ================================================================================
 SECTION 5: DOMAIN S13: UK LEGAL SECTOR PACK & SRA 2023 FATIGUE DETECTION
@@ -294,7 +294,7 @@ Step 9: Test Evidence
 Step 10: Platform Release Dossier
 - Action: Click the "Inspect release dossier" button.
 - What Happens: Calls GET /api/v2/release/dossier and displays the consolidated audit summary modal.
-- Wire Inspector Verification: The response confirms 8 test suites passed, 0 failing P0 tests, status: READY FOR REVIEW.
+- Wire Inspector Verification: The response confirms 8 synthetic test suites passed, P0 gate clear, status: READY FOR REVIEW.
 - Talking Point: "All phases 0 through 8 and sector packs are live, tested, and ready for stakeholder review."
 - Status: 200 OK | Proof: PASS (Ready for Review)
 
@@ -429,7 +429,7 @@ Summary of Automated Test Suites:
 Release Dossier Aggregation:
 - Execution Command: npm --prefix backend run build-dossier
 - Aggregated Results: 8 test suites, 110 verified test cases, 0 failures.
-- P0 Open Defects: 0 failing P0 tests.
+- P0 Open Defects: Zero P0 failures in synthetic sandbox suite run.
 - Release Dossier Digest: SHA-256 041103d0c9d8847b85ae710bd24fa313ad775ff5522849c0289eeffdd79181b7
 - Release Decision: READY FOR REVIEW (Awaiting Named Steering Sign-Off).
 
