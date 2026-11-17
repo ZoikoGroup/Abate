@@ -2165,6 +2165,15 @@ class MemoryClient {
       return { rows: [], rowCount: 0, command: "UPDATE", oid: 0, fields: [] };
     }
 
+    // AI Run monthly spend (budget): params = [tenantId, useCaseKey, monthStartIso]
+    if (upper.includes("FROM AI_RUN") && upper.includes("SUM(COST_MINOR)")) {
+      const [, ucKey, monthStart] = params;
+      const spent = Array.from(memDb.aiRuns.values())
+        .filter(r => r.tenant_id === this.tenantContext && r.use_case_key === ucKey && r.created_at >= monthStart)
+        .reduce((acc, r) => acc + Number(r.cost_minor || 0), 0);
+      return { rows: [{ spent }], rowCount: 1, command: "SELECT", oid: 0, fields: [] };
+    }
+
     // AI Run Select
     if (upper.includes("FROM AI_RUN")) {
       let rows = Array.from(memDb.aiRuns.values()).filter(r => r.tenant_id === this.tenantContext);

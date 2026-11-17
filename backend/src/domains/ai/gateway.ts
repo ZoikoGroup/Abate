@@ -38,19 +38,12 @@ export interface UseCaseConfig {
   evalThresholds: Record<string, number>;
 }
 
-// In-memory budget tracker per use case
-const monthlySpendTracker = new Map<string, number>();
-
-export async function assertBudget(uc: UseCaseConfig, estimatedCost = 10): Promise<void> {
-  const current = monthlySpendTracker.get(uc.key) || 0;
-  if (current + estimatedCost > uc.monthlyBudgetMinor) {
+// Budget is enforced per tenant from durable spend (SUM of ai_run.cost_minor for the current month, read inside the
+// caller's tenant transaction), so it survives restarts and one tenant's usage never consumes another's allowance.
+export function assertBudget(uc: UseCaseConfig, spentMinor: number, estimatedCost = 10): void {
+  if (spentMinor + estimatedCost > uc.monthlyBudgetMinor) {
     throw new AppError("UNAVAILABLE", `Monthly budget exceeded for AI use-case ${uc.key}.`);
   }
-}
-
-export function recordSpend(useCaseKey: string, costMinor: number): void {
-  const current = monthlySpendTracker.get(useCaseKey) || 0;
-  monthlySpendTracker.set(useCaseKey, current + costMinor);
 }
 
 // Mock deterministic provider that satisfies tests and respects constitutional bounds
@@ -165,14 +158,15 @@ export const providers: Record<string, ModelProvider> = {
 export async function callModel(
   uc: UseCaseConfig,
   input: { system: string; messages: ModelMessage[]; schema?: any },
-  providerRegistry: Record<string, ModelProvider> = providers
+  providerRegistry: Record<string, ModelProvider> = providers,
+  spentMinor = 0
 ): Promise<{ text: string; usage: { tokensIn: number; tokensOut: number; costMinor: number } }> {
   const p = providerRegistry[uc.providerName];
   if (!p || p.region !== uc.providerRegion) {
     throw new AppError("UNAVAILABLE", `Model provider ${uc.providerName} in region ${uc.providerRegion} is not available.`);
   }
 
-  await assertBudget(uc);
+  assertBudget(uc, spentMinor);
 
   const ctl = new AbortController();
   const timer = setTimeout(() => ctl.abort(), uc.timeoutMs);
@@ -186,7 +180,6 @@ export async function callModel(
       maxOutputTokens: uc.maxOutputTokens,
       signal: ctl.signal
     });
-    recordSpend(uc.key, res.usage.costMinor);
     return res;
   } finally {
     clearTimeout(timer);

@@ -161,6 +161,17 @@ export function assertNotProhibitedRequest(question?: string): void {
   }
 }
 
+/** Spend so far this calendar month (UTC) for one use case in the current tenant, across every run status. */
+export async function getMonthlySpendMinor(tx: Tx, useCaseKey: string, now: Date = new Date()): Promise<number> {
+  const monthStart = new Date(Date.UTC(now.getUTCFullYear(), now.getUTCMonth(), 1)).toISOString();
+  const res = await tx.q(
+    "SELECT COALESCE(SUM(cost_minor), 0) AS spent FROM ai_run WHERE tenant_id = $1 AND use_case_key = $2 AND created_at >= $3",
+    [tx.tenantId, useCaseKey, monthStart]
+  );
+  // bigint SUM comes back as a string from Postgres
+  return Number(res.rows[0]?.spent ?? 0);
+}
+
 export async function runAiUseCase(
   tx: Tx,
   actor: Actor,
@@ -185,7 +196,8 @@ export async function runAiUseCase(
 
   // 5. Call model through provider gateway abstraction
   const prompt = buildPrompt(uc, items, input.question || "");
-  const raw = await callModel(uc, prompt);
+  const spentMinor = await getMonthlySpendMinor(tx, uc.key);
+  const raw = await callModel(uc, prompt, undefined, spentMinor);
 
   let parsedRaw: unknown = null;
   try {
