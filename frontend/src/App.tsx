@@ -543,6 +543,7 @@ export default function App() {
 
         {activeTab === "outbox" && (
           <OutboxTab
+            token={token}
             currentTenant={currentTenant}
             onRefresh={() => fetchTenantData(activeTenantId, activeRole)}
           />

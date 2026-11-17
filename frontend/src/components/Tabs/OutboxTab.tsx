@@ -5,9 +5,10 @@ import { api, ApiError, type OutboxDrainReport, PRESET_TENANTS } from "../../api
 interface OutboxTabProps {
   currentTenant: typeof PRESET_TENANTS[0];
   onRefresh: () => void;
+  token: string | null;
 }
 
-export function OutboxTab({ currentTenant, onRefresh }: OutboxTabProps) {
+export function OutboxTab({ currentTenant, onRefresh, token }: OutboxTabProps) {
   const [draining, setDraining] = useState(false);
   const [drainReport, setDrainReport] = useState<OutboxDrainReport | null>(null);
   const [errorBanner, setErrorBanner] = useState<{ message: string; requestId?: string } | null>(null);
@@ -17,7 +18,8 @@ export function OutboxTab({ currentTenant, onRefresh }: OutboxTabProps) {
     setErrorBanner(null);
     try {
       const res = await api<OutboxDrainReport>("/api/v2/outbox/drain", {
-        method: "POST"
+        method: "POST",
+        token
       });
       setDrainReport(res);
       onRefresh();
