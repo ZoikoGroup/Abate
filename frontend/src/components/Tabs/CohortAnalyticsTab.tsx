@@ -1,6 +1,7 @@
 // frontend/src/components/Tabs/CohortAnalyticsTab.tsx
 import { useState, useEffect } from "react";
 import {
+  ApiError,
   type SemanticQuery,
   type ReleaseView,
   type MetricDefinition,
@@ -75,19 +76,12 @@ export function CohortAnalyticsTab({ currentTenant, token }: CohortAnalyticsTabP
         setSelectedMetricId(prev => (prev && defs.some(d => d.id === prev)) ? prev : defs[0].id);
       })
       .catch(err => {
-        console.warn("Could not fetch metric definitions:", err);
-        const fallbackDefs = [{
-          id: "BOUNDARY_INTRUSION_SHARE",
-          version: 1,
-          name: "Boundary Intrusion Share",
-          hazard_domain: "Working Time Quality & Rest Deficits",
-          formula_id: "boundaryIntrusionShare",
-          contributor_floor: 10,
-          min_window_days: 28,
-          created_at: new Date().toISOString()
-        }];
-        setMetricDefs(fallbackDefs);
-        setSelectedMetricId("BOUNDARY_INTRUSION_SHARE");
+        const reqId = err instanceof ApiError ? ` (Request ID: ${err.requestId})` : "";
+        setFeedback({
+          type: "error",
+          title: "✖ FAILED TO LOAD METRIC DEFINITIONS",
+          details: `${err?.message || "Could not fetch metric definitions."}${reqId}`
+        });
       });
   }, [token]);
 
@@ -152,10 +146,11 @@ export function CohortAnalyticsTab({ currentTenant, token }: CohortAnalyticsTabP
         });
       }
     } catch (err: any) {
+      const reqId = err instanceof ApiError ? ` Request ID: ${err.requestId}` : "";
       setFeedback({
         type: "error",
         title: "✖ QUERY EXECUTION FAILED",
-        details: err.message || "An error occurred during query execution."
+        details: `${err.message || "An error occurred during query execution."}${reqId}`
       });
     } finally {
       setLoading(false);
@@ -165,6 +160,7 @@ export function CohortAnalyticsTab({ currentTenant, token }: CohortAnalyticsTabP
   // Export CSV
   const handleExportCsv = async () => {
     if (!token || !lastReleaseId) return;
+    setLoading(true);
     try {
       const csvText = await downloadReleaseCsv(lastReleaseId, token);
       const blob = new Blob([csvText], { type: "text/csv" });
@@ -174,8 +170,20 @@ export function CohortAnalyticsTab({ currentTenant, token }: CohortAnalyticsTabP
       a.download = `release-${lastReleaseId.slice(0, 8)}.csv`;
       a.click();
       URL.revokeObjectURL(url);
+      setFeedback({
+        type: "success",
+        title: "✔ RELEASE CSV EXPORTED",
+        details: `Downloaded suppressed aggregate release CSV for ${lastReleaseId}.`
+      });
     } catch (err: any) {
-      alert(`Export failed: ${err.message}`);
+      const reqId = err instanceof ApiError ? ` Request ID: ${err.requestId}` : "";
+      setFeedback({
+        type: "error",
+        title: "✖ CSV EXPORT FAILED",
+        details: `${err.message || "Failed to export release CSV."}${reqId}`
+      });
+    } finally {
+      setLoading(false);
     }
   };
 
@@ -195,10 +203,11 @@ export function CohortAnalyticsTab({ currentTenant, token }: CohortAnalyticsTabP
         setActiveRelease(updated);
       }
     } catch (err: any) {
+      const reqId = err instanceof ApiError ? ` Request ID: ${err.requestId}` : "";
       setFeedback({
         type: "error",
         title: "✖ RECALCULATION FAILED",
-        details: err.message
+        details: `${err.message || "Recalculation failed."}${reqId}`
       });
     } finally {
       setLoading(false);
@@ -219,15 +228,73 @@ export function CohortAnalyticsTab({ currentTenant, token }: CohortAnalyticsTabP
 
   // Reconstruction Attack Lab: Test Overlap Differencing Attack (symmetric diff = 1 < 5)
   const handleTestOverlapDifferencing = async () => {
+    if (!token) return;
+    setLoading(true);
+    setFeedback(null);
     const tenMembers = Array.from({ length: 10 }, (_, i) => `emp-test-cohort-${i + 1}`);
     const offByOneMembers = [...tenMembers.slice(0, 9), "emp-test-target-person"];
-    await handleQuery(offByOneMembers, { cohortRef: "org:test-cohort-differencing-attack" });
+    const isoStart = periodStart.includes("T") ? periodStart : `${periodStart}T00:00:00.000Z`;
+    const isoEnd = periodEnd.includes("T") ? periodEnd : `${periodEnd}T00:00:00.000Z`;
+
+    try {
+      await queryRelease(
+        {
+          metricId: selectedMetricId || "BOUNDARY_INTRUSION_SHARE",
+          metricVersion: 1,
+          cohortRef: "org:test-cohort-10-threshold",
+          periodStart: isoStart,
+          periodEnd: isoEnd,
+          releaseClass
+        },
+        tenMembers,
+        token
+      );
+      await handleQuery(offByOneMembers, { cohortRef: "org:test-cohort-differencing-attack" });
+    } catch (err: any) {
+      const reqId = err instanceof ApiError ? ` Request ID: ${err.requestId}` : "";
+      setFeedback({
+        type: "error",
+        title: "✖ OVERLAP TEST FAILED",
+        details: `${err?.message || "Failed to execute overlap differencing check."}${reqId}`
+      });
+      setLoading(false);
+    }
   };
 
-  // Reconstruction Attack Lab: Test Residual Differencing Attack (parent 14, child 10 -> residual 4)
+  // Reconstruction Attack Lab: Test Residual Differencing Attack (parent 14, child 10 -> residual 4 < 5)
   const handleTestResidualDifferencing = async () => {
-    const childMembers = Array.from({ length: 10 }, (_, i) => `emp-synthetic-member-${i + 1}`);
-    await handleQuery(childMembers, { cohortRef: "org:test-cohort-child-residual" });
+    if (!token) return;
+    setLoading(true);
+    setFeedback(null);
+    const parentMembers = Array.from({ length: 14 }, (_, i) => `emp-residual-cohort-${i + 1}`);
+    const childMembers = parentMembers.slice(0, 10);
+    const isoStart = periodStart.includes("T") ? periodStart : `${periodStart}T00:00:00.000Z`;
+    const isoEnd = periodEnd.includes("T") ? periodEnd : `${periodEnd}T00:00:00.000Z`;
+
+    try {
+      // Ensure 14-member parent cohort release exists in disclosure ledger first
+      await queryRelease(
+        {
+          metricId: selectedMetricId || "BOUNDARY_INTRUSION_SHARE",
+          metricVersion: 1,
+          cohortRef: "org:test-cohort-parent-residual",
+          periodStart: isoStart,
+          periodEnd: isoEnd,
+          releaseClass
+        },
+        parentMembers,
+        token
+      );
+      await handleQuery(childMembers, { cohortRef: "org:test-cohort-child-residual" });
+    } catch (err: any) {
+      const reqId = err instanceof ApiError ? ` Request ID: ${err.requestId}` : "";
+      setFeedback({
+        type: "error",
+        title: "✖ RESIDUAL TEST FAILED",
+        details: `${err?.message || "Failed to execute parent/child residual attack check."}${reqId}`
+      });
+      setLoading(false);
+    }
   };
 
   return (
@@ -440,7 +507,7 @@ export function CohortAnalyticsTab({ currentTenant, token }: CohortAnalyticsTabP
             disabled={loading || !token}
             className="btn btn-primary"
           >
-            {loading ? "Compiling Differential Release..." : "Execute Semantic Query"}
+            {loading ? "Compiling Privacy-Safe Release..." : "Execute Semantic Query"}
           </button>
         </div>
       </div>

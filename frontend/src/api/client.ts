@@ -40,7 +40,7 @@ export async function api<T>(endpoint: string, options: ApiRequestOptions = {}):
   const headers = new Headers(options.headers);
   headers.set("Content-Type", "application/json");
 
-  if (options.token) {
+  if (options.token && options.token !== COOKIE_SESSION_TOKEN) {
     headers.set("Authorization", `Bearer ${options.token}`);
   }
 
@@ -56,30 +56,15 @@ export async function api<T>(endpoint: string, options: ApiRequestOptions = {}):
   try {
     res = await fetch(url, {
       ...options,
+      credentials: "same-origin",
       headers
     });
-  } catch (netErr: any) {
-    // Fallback: If proxy request fails, try direct loopback
-    if (!endpoint.startsWith("http")) {
-      try {
-        res = await fetch(`http://127.0.0.1:5000${endpoint}`, {
-          ...options,
-          headers
-        });
-      } catch {
-        throw new ApiError(0, {
-          code: "UNAVAILABLE",
-          message: `Cannot reach Abate backend at ${endpoint}.`,
-          requestId: "offline"
-        });
-      }
-    } else {
-      throw new ApiError(0, {
-        code: "UNAVAILABLE",
-        message: netErr.message || "Network error",
-        requestId: "offline"
-      });
-    }
+  } catch {
+    throw new ApiError(0, {
+      code: "UNAVAILABLE",
+      message: `Cannot reach Abate backend at ${endpoint}. Ensure the backend service is running.`,
+      requestId: "offline"
+    });
   }
 
   if (!res.ok) {
@@ -99,6 +84,8 @@ export async function api<T>(endpoint: string, options: ApiRequestOptions = {}):
   return (await res.json()) as T;
 }
 
+export const COOKIE_SESSION_TOKEN = "__ABATE_HTTPONLY_COOKIE_SESSION__";
+
 export interface SystemHealth {
   status: string;
   app: string;
@@ -106,6 +93,29 @@ export interface SystemHealth {
   environment: string;
   timestamp: string;
   constitutionalBoundaries: Record<string, string>;
+  database?: { mode: string; required: boolean; ok: boolean };
+  objectStore?: { mode: string; ok: boolean; detail: string };
+}
+
+export interface OidcConfig {
+  devTokenEnabled: boolean;
+  oidcConfigured: boolean;
+  authorizationEndpoint: string | null;
+  clientId: string | null;
+  issuer: string;
+  audience: string;
+  scope: string;
+  pkceRequired: boolean;
+  pkceMethod: string;
+}
+
+export interface OidcExchangeResult {
+  authenticated: boolean;
+  tenantId: string;
+  subject: string;
+  role: string;
+  expiresIn: string;
+  authMethod: string;
 }
 
 export interface SystemInfo {
@@ -187,6 +197,63 @@ export async function requestToken(tenantId: string, subject: string, role = "RI
     method: "POST",
     body: JSON.stringify({ tenantId, subject, role, purpose: "WORKPLACE_RISK_ASSESSMENT" })
   });
+}
+
+export async function fetchOidcConfig(): Promise<OidcConfig> {
+  return api<OidcConfig>("/api/v2/auth/oidc/config");
+}
+
+export async function fetchCurrentPrincipal(): Promise<{
+  principalId: string;
+  tenantId: string;
+  tenantName: string;
+  subject: string;
+  role: string;
+}> {
+  return api("/api/v2/me");
+}
+
+export async function exchangeOidcAuth(body: {
+  code?: string;
+  codeVerifier?: string;
+  redirectUri?: string;
+  idToken?: string;
+}): Promise<OidcExchangeResult> {
+  return api<OidcExchangeResult>("/api/v2/auth/oidc/exchange", {
+    method: "POST",
+    body: JSON.stringify(body)
+  });
+}
+
+export async function logoutSession(): Promise<void> {
+  await fetch("/api/v2/auth/logout", {
+    method: "POST",
+    credentials: "same-origin"
+  });
+}
+
+function toBase64Url(bytes: Uint8Array): string {
+  let bin = "";
+  for (let i = 0; i < bytes.length; i++) {
+    bin += String.fromCharCode(bytes[i]!);
+  }
+  return btoa(bin).replace(/\+/g, "-").replace(/\//g, "_").replace(/=+$/, "");
+}
+
+export async function createPkceAuthorizationParams(): Promise<{
+  state: string;
+  verifier: string;
+  challenge: string;
+}> {
+  const verifierBytes = new Uint8Array(32);
+  crypto.getRandomValues(verifierBytes);
+  const verifier = toBase64Url(verifierBytes);
+  const digest = await crypto.subtle.digest("SHA-256", new TextEncoder().encode(verifier));
+  const challenge = toBase64Url(new Uint8Array(digest));
+  const stateBytes = new Uint8Array(16);
+  crypto.getRandomValues(stateBytes);
+  const state = toBase64Url(stateBytes);
+  return { state, verifier, challenge };
 }
 
 // ==========================================
@@ -403,8 +470,10 @@ export async function recalculateMetric(
 export async function downloadReleaseCsv(releaseId: string, token: string): Promise<string> {
   const url = `/api/v2/releases/${releaseId}/export.csv`;
   const headers = new Headers();
-  if (token) headers.set("Authorization", `Bearer ${token}`);
-  const res = await fetch(url, { headers });
+  if (token && token !== COOKIE_SESSION_TOKEN) {
+    headers.set("Authorization", `Bearer ${token}`);
+  }
+  const res = await fetch(url, { credentials: "same-origin", headers });
   if (!res.ok) {
     throw new Error(`Export failed: ${res.statusText}`);
   }
@@ -632,12 +701,12 @@ export async function recordImplementation(
 export async function pinVerificationPlan(
   controlId: string,
   plan: {
-    primaryMetric: string;
     baselineReleaseId: string;
-    targetDelta?: number;
+    postReleaseId?: string;
     adjacentReleaseIds?: string[];
+    direction?: "DECREASE" | "INCREASE";
+    criteria?: number;
     adjacentTolerance?: number;
-    minDays?: number;
     seriesBreak?: boolean;
   },
   token: string
@@ -654,6 +723,7 @@ export async function concludeVerification(
   data: {
     outcome: "EFFECTIVE" | "PARTIALLY_EFFECTIVE" | "NOT_EFFECTIVE" | "INCONCLUSIVE";
     residualRisk: string;
+    postReleaseId: string;
   },
   token: string
 ): Promise<ControlDetailView> {
@@ -1306,7 +1376,7 @@ export async function advanceAiAssessment(
   return api<AiWorkDesignAssessmentView>(`/api/v2/ai-changes/${id}/advance`, {
     method: "POST",
     headers: { "if-match": `"${version}"` },
-    body: JSON.stringify({ to: toStage, version, ...data }),
+    body: JSON.stringify({ to: toStage, ...data }),
     token
   });
 }

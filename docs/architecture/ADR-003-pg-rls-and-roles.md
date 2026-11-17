@@ -1,6 +1,6 @@
 # ADR-003: PostgreSQL Forced Row-Level Security & Least-Privilege Role Boundaries
 
-- **Status**: Accepted (Requires Live PG CI Enforcement)
+- **Status**: **DRAFT — Pending Human Review** (agent-authored from codebase inspection; awaiting BE spec holder acceptance)
 - **Date**: 2026-11-16
 - **Scope**: Database Security (`backend/src/platform/db/with-tenant.ts`, `backend/db/migrations/`)
 

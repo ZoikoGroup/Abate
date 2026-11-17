@@ -80,7 +80,7 @@ export function OrganizationsTab({
           setFeedback({
             type: "conflict",
             message: `409 CONFLICT: Idempotency Key collision with modified payload.`,
-            details: `The server detected request hash mutation for key "${keyToUse}". Last-write-wins is strictly forbidden.`
+            details: `The server detected request hash mutation for key "${keyToUse}". Last-write-wins is strictly forbidden. Request ID: ${err.requestId}`
           });
         } else if (err.code === "VALIDATION") {
           setFeedback({
@@ -88,13 +88,13 @@ export function OrganizationsTab({
             message: injectProhibitedField
               ? `✔ CONSTITUTIONAL BOUNDARY DEFENDED (HTTP 400 VALIDATION)`
               : `400 VALIDATION ERROR: Schema rejected invalid/prohibited fields!`,
-            details: `Schema strictly rejected unknown/prohibited fields (${injectProhibitedField ? "keystroke_tracker" : "invalid payload"}). Surveillance and keystroke tracking cannot enter persistence, staging, or logs.`
+            details: `Schema strictly rejected unknown/prohibited fields (${injectProhibitedField ? "keystroke_tracker" : "invalid payload"}). Surveillance and keystroke tracking cannot enter persistence, staging, or logs. Request ID: ${err.requestId}`
           });
         } else {
           setFeedback({
             type: "error",
             message: `[${err.code}] ${err.message}`,
-            details: `Audit Request ID: ${err.requestId}`
+            details: `Request ID: ${err.requestId}`
           });
         }
       } else {

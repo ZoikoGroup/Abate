@@ -1,6 +1,7 @@
 // frontend/src/components/Tabs/OutcomesAiChangeTab.tsx
 import { useState, useEffect } from "react";
 import {
+  ApiError,
   PRESET_TENANTS,
   type OutcomeDefinitionView,
   type OutcomeEvaluationView,
@@ -11,6 +12,8 @@ import {
   fetchOutcomeDefinitions,
   evaluateOutcome,
   fetchOutcomeEvaluations,
+  fetchRelease,
+  queryRelease,
   createAiChange,
   fetchAiAssessments,
   advanceAiAssessment,
@@ -18,6 +21,13 @@ import {
 } from "../../api/client";
 import { PlaneBadge } from "../PlaneBadge";
 import { PermittedClaims } from "../PermittedClaims";
+
+function fmtOutcomeErr(err: unknown): string {
+  if (err instanceof ApiError) {
+    return `${err.message} (Request ID: ${err.requestId})`;
+  }
+  return err instanceof Error ? err.message : "Operation failed.";
+}
 
 interface OutcomesAiChangeTabProps {
   currentTenant: typeof PRESET_TENANTS[0];
@@ -43,7 +53,7 @@ export function OutcomesAiChangeTab({ currentTenant, token }: OutcomesAiChangeTa
   // Outcomes state
   const [outcomeDefs, setOutcomeDefs] = useState<OutcomeDefinitionView[]>([]);
   const [evaluations, setEvaluations] = useState<OutcomeEvaluationView[]>([]);
-  const [selectedOutcomeId, setSelectedOutcomeId] = useState("OUTCOME_WORKLOAD_SUSTAINABILITY");
+  const [selectedOutcomeId, setSelectedOutcomeId] = useState("WORKLOAD_SUSTAINABILITY");
   const [evalReleaseId, setEvalReleaseId] = useState(BASELINE_RELEASE_ID);
   const [claimText, setClaimText] = useState("Observed 18% improvement in protected focus blocks across litigation associates.");
   const [evalConfidence, setEvalConfidence] = useState<"HIGH" | "MEDIUM" | "LOW">("MEDIUM");
@@ -72,23 +82,31 @@ export function OutcomesAiChangeTab({ currentTenant, token }: OutcomesAiChangeTa
     setLoading(true);
     try {
       const [flags, defs, evals, assms] = await Promise.all([
-        fetchFeatureFlags(token).catch(() => ({ outcomes_plane_b: false })),
-        fetchOutcomeDefinitions(token).catch(() => []),
-        fetchOutcomeEvaluations(token).catch(() => []),
-        fetchAiAssessments(token).catch(() => [])
+        fetchFeatureFlags(token),
+        fetchOutcomeDefinitions(token),
+        fetchOutcomeEvaluations(token),
+        fetchAiAssessments(token)
       ]);
       setPlaneBEnabled(Boolean(flags.outcomes_plane_b));
       setOutcomeDefs(defs);
       if (defs.length > 0) {
-        setSelectedOutcomeId(prev => prev || defs[0].outcomeId);
+        setSelectedOutcomeId(prev =>
+          prev && defs.some(d => d.outcomeId === prev) ? prev : defs[0].outcomeId
+        );
       }
       setEvaluations(evals);
       setAssessments(assms);
       if (assms.length > 0) {
-        setActiveAssessmentId(prev => prev || assms[0].id);
+        setActiveAssessmentId(prev =>
+          prev && assms.some(a => a.id === prev) ? prev : assms[0].id
+        );
       }
-    } catch (err: any) {
-      console.warn("Error loading Phase 7 data:", err);
+    } catch (err: unknown) {
+      setFeedback({
+        type: "error",
+        title: "✖ FAILED TO LOAD PHASE 7 DATA",
+        details: fmtOutcomeErr(err)
+      });
     } finally {
       setLoading(false);
     }
@@ -99,23 +117,36 @@ export function OutcomesAiChangeTab({ currentTenant, token }: OutcomesAiChangeTa
     if (!token) return;
     let cancelled = false;
     void Promise.all([
-      fetchFeatureFlags(token).catch(() => ({ outcomes_plane_b: false })),
-      fetchOutcomeDefinitions(token).catch(() => []),
-      fetchOutcomeEvaluations(token).catch(() => []),
-      fetchAiAssessments(token).catch(() => [])
-    ]).then(([flags, defs, evals, assms]) => {
-      if (cancelled) return;
-      setPlaneBEnabled(Boolean(flags.outcomes_plane_b));
-      setOutcomeDefs(defs);
-      if (defs.length > 0) {
-        setSelectedOutcomeId(prev => prev || defs[0].outcomeId);
-      }
-      setEvaluations(evals);
-      setAssessments(assms);
-      if (assms.length > 0) {
-        setActiveAssessmentId(prev => prev || assms[0].id);
-      }
-    });
+      fetchFeatureFlags(token),
+      fetchOutcomeDefinitions(token),
+      fetchOutcomeEvaluations(token),
+      fetchAiAssessments(token)
+    ])
+      .then(([flags, defs, evals, assms]) => {
+        if (cancelled) return;
+        setPlaneBEnabled(Boolean(flags.outcomes_plane_b));
+        setOutcomeDefs(defs);
+        if (defs.length > 0) {
+          setSelectedOutcomeId(prev =>
+            prev && defs.some(d => d.outcomeId === prev) ? prev : defs[0].outcomeId
+          );
+        }
+        setEvaluations(evals);
+        setAssessments(assms);
+        if (assms.length > 0) {
+          setActiveAssessmentId(prev =>
+            prev && assms.some(a => a.id === prev) ? prev : assms[0].id
+          );
+        }
+      })
+      .catch((err: unknown) => {
+        if (cancelled) return;
+        setFeedback({
+          type: "error",
+          title: "✖ FAILED TO LOAD PHASE 7 DATA",
+          details: fmtOutcomeErr(err)
+        });
+      });
     return () => {
       cancelled = true;
     };
@@ -136,15 +167,44 @@ export function OutcomesAiChangeTab({ currentTenant, token }: OutcomesAiChangeTa
           : "Plane B writes are disabled. Fail-closed gates active."
       });
       await loadAll();
-    } catch (err: any) {
+    } catch (err: unknown) {
       setFeedback({
         type: "error",
         title: "✖ Failed to toggle feature flag",
-        details: err.message
+        details: fmtOutcomeErr(err)
       });
     } finally {
       setLoadingFlags(false);
     }
+  };
+
+  const ensureReleasedArtifactId = async (): Promise<string> => {
+    if (!token) return evalReleaseId;
+    try {
+      const existing = await fetchRelease(evalReleaseId, token);
+      if (existing && existing.status === "RELEASED") {
+        return evalReleaseId;
+      }
+    } catch {
+      // Fallback below when baseline release was invalidated/superseded
+    }
+    const compiled = await queryRelease(
+      {
+        metricId: "BOUNDARY_INTRUSION_SHARE",
+        metricVersion: 1,
+        cohortRef: `org:outcomes-plane-b-${Date.now().toString(36)}`,
+        periodStart: "2026-01-01T00:00:00.000Z",
+        periodEnd: "2026-02-05T00:00:00.000Z",
+        releaseClass: "CLASS_B"
+      },
+      Array.from({ length: 10 }, (_, i) => `emp-plane-b-${i + 1}`),
+      token
+    );
+    if (compiled.status === "RELEASED") {
+      setEvalReleaseId(compiled.releaseId);
+      return compiled.releaseId;
+    }
+    return evalReleaseId;
   };
 
   const handleEvaluateOutcome = async () => {
@@ -152,11 +212,12 @@ export function OutcomesAiChangeTab({ currentTenant, token }: OutcomesAiChangeTa
     setLoading(true);
     setFeedback(null);
     try {
+      const validReleaseId = await ensureReleasedArtifactId();
       const res = await evaluateOutcome(
         {
           outcomeId: selectedOutcomeId,
           outcomeVersion: 1,
-          releaseId: evalReleaseId,
+          releaseId: validReleaseId,
           comparisonBasis: { method: "PRE_POST_INTERVENTION", windowDays: 28 },
           confounders: { seasonalCourtFilingDeadline: false },
           seriesBreak: false,
@@ -176,7 +237,7 @@ export function OutcomesAiChangeTab({ currentTenant, token }: OutcomesAiChangeTa
       setFeedback({
         type: "error",
         title: "✖ EVALUATION REJECTED",
-        details: err.message
+        details: fmtOutcomeErr(err)
       });
     } finally {
       setLoading(false);
@@ -210,11 +271,11 @@ export function OutcomesAiChangeTab({ currentTenant, token }: OutcomesAiChangeTa
       });
       await loadAll();
       setActiveAssessmentId(res.assessment.id);
-    } catch (err: any) {
+    } catch (err: unknown) {
       setFeedback({
         type: "error",
         title: "✖ PROFILE CREATION FAILED",
-        details: err.message
+        details: fmtOutcomeErr(err)
       });
     } finally {
       setLoading(false);
@@ -255,11 +316,11 @@ export function OutcomesAiChangeTab({ currentTenant, token }: OutcomesAiChangeTa
         details: `Assessment version is now ${res.version}. Stage guards verified.`
       });
       await loadAll();
-    } catch (err: any) {
+    } catch (err: unknown) {
       setFeedback({
         type: "error",
         title: `✖ STAGE TRANSITION REJECTED (${targetStage})`,
-        details: err.message
+        details: fmtOutcomeErr(err)
       });
     } finally {
       setLoading(false);
@@ -271,12 +332,18 @@ export function OutcomesAiChangeTab({ currentTenant, token }: OutcomesAiChangeTa
     if (!token) return;
     setLoading(true);
     setFeedback(null);
+    const validOutcomeId =
+      outcomeDefs.find(d => d.outcomeId === selectedOutcomeId)?.outcomeId ||
+      outcomeDefs[0]?.outcomeId ||
+      "WORKLOAD_SUSTAINABILITY";
+
     try {
+      const validReleaseId = await ensureReleasedArtifactId();
       await evaluateOutcome(
         {
-          outcomeId: selectedOutcomeId,
+          outcomeId: validOutcomeId,
           outcomeVersion: 1,
-          releaseId: evalReleaseId,
+          releaseId: validReleaseId,
           comparisonBasis: { method: "TEST" },
           confounders: {},
           seriesBreak: false,
@@ -291,36 +358,73 @@ export function OutcomesAiChangeTab({ currentTenant, token }: OutcomesAiChangeTa
         title: "SECURITY FAILURE: PROHIBITED CLAIM ACCEPTED",
         details: "The system should have rejected claims asserting employee resilience or hazard mitigation."
       });
-    } catch (err: any) {
-      setFeedback({
-        type: "success",
-        title: "✔ LAB 2 PASSED: PROHIBITED CLAIM REJECTED (FAIL-CLOSED)",
-        details: `Under ZAB-ENG-001, performance outcomes cannot claim hazard mitigation. Rejected: "${err.message}"`
-      });
+    } catch (err: unknown) {
+      if (err instanceof ApiError && (err.status === 400 || err.code === "VALIDATION")) {
+        setFeedback({
+          type: "success",
+          title: "✔ LAB 2 PASSED: PROHIBITED CLAIM REJECTED (HTTP 400 FAIL-CLOSED)",
+          details: `The backend refused this on purpose (Expected 400). Under ZAB-ENG-001, Plane B outcomes cannot claim hazard mitigation: ${fmtOutcomeErr(err)}`
+        });
+      } else {
+        setFeedback({
+          type: "error",
+          title: "✖ PROHIBITED CLAIM TEST ERROR",
+          details: fmtOutcomeErr(err)
+        });
+      }
     } finally {
       setLoading(false);
     }
   };
 
   const handleAdversarialPrematureClosure = async () => {
-    if (!token || !activeAssessmentId) return;
-    const current = assessments.find(a => a.id === activeAssessmentId);
-    if (!current) return;
+    if (!token) return;
     setLoading(true);
     setFeedback(null);
     try {
-      await advanceAiAssessment(current.id, "CLOSED", current.version, {}, token);
+      let target = assessments.find(a => a.id === activeAssessmentId && a.stage !== "CLOSED") ||
+        assessments.find(a => a.stage !== "CLOSED");
+      if (!target) {
+        const created = await createAiChange(
+          {
+            title: profileTitle || "Litigation Research & Synthesis Agent",
+            affectedRoles: affectedRoles.split(",").map(s => s.trim()).filter(Boolean),
+            affectedTasks: affectedTasks.split(",").map(s => s.trim()).filter(Boolean),
+            automationMode,
+            decisionRights,
+            humanOverride: "Any associate can dismiss AI generation or file an objection",
+            monitoringChanges: "Weekly time-budget and review audit",
+            throughputAssumptions: "Target 15% reduction in brief review cycle time",
+            rolloutDate: "2026-06-01",
+            trainingSupport: "Mandatory human-in-the-loop review calibration"
+          },
+          token
+        );
+        target = created.assessment;
+        setActiveAssessmentId(target.id);
+        await loadAll();
+      }
+
+      await advanceAiAssessment(target.id, "CLOSED", target.version, {}, token);
       setFeedback({
         type: "error",
         title: "SECURITY FAILURE: PREMATURE ASSESSMENT CLOSURE",
         details: "Assessment was closed while stage prerequisites were not met."
       });
-    } catch (err: any) {
-      setFeedback({
-        type: "success",
-        title: "✔ LAB 5 PASSED: STAGE GUARD INTEGRITY ENFORCED",
-        details: `Assessment workflow rejected premature transition to CLOSED: "${err.message}"`
-      });
+    } catch (err: unknown) {
+      if (err instanceof ApiError && (err.status === 409 || err.code === "CONFLICT")) {
+        setFeedback({
+          type: "success",
+          title: `✔ LAB 5 PASSED: STAGE GUARD INTEGRITY ENFORCED (HTTP ${err.status})`,
+          details: `The backend refused this on purpose (Expected 409). Assessment rejected premature transition to CLOSED: ${fmtOutcomeErr(err)}`
+        });
+      } else {
+        setFeedback({
+          type: "error",
+          title: "✖ PREMATURE CLOSURE TEST ERROR",
+          details: fmtOutcomeErr(err)
+        });
+      }
     } finally {
       setLoading(false);
     }
@@ -428,6 +532,7 @@ export function OutcomesAiChangeTab({ currentTenant, token }: OutcomesAiChangeTa
         <div
           className={`callout-${feedback.type === "success" ? "success" : feedback.type === "warning" ? "alert" : "error"}`}
           style={{ marginBottom: "1.25rem" }}
+          role={feedback.type === "error" ? "alert" : "status"}
         >
           <strong>{feedback.title}</strong>
           <p style={{ marginTop: "0.35rem", fontSize: "0.825rem" }}>{feedback.details}</p>
@@ -466,7 +571,7 @@ export function OutcomesAiChangeTab({ currentTenant, token }: OutcomesAiChangeTa
           <button
             type="button"
             onClick={handleAdversarialPrematureClosure}
-            disabled={loading || !token || !activeAssessmentId}
+            disabled={loading || !token}
             className="lab-card-btn border-amber"
           >
             <div className="lab-btn-title" style={{ color: "#FCD34D" }}>

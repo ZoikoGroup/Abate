@@ -5,11 +5,13 @@ import { type DemoInspectResult, maskToken } from "./demoApi";
 interface RequestInspectorProps {
   inspection: DemoInspectResult | null;
   title?: string;
+  expectedRefusalCode?: 400 | 409;
 }
 
 export const RequestInspector: React.FC<RequestInspectorProps> = ({
   inspection,
-  title = "HTTP Request & Response Inspector"
+  title = "HTTP Request & Response Inspector",
+  expectedRefusalCode
 }) => {
   const [copiedCurl, setCopiedCurl] = useState(false);
   const [activeTab, setActiveTab] = useState<"response" | "request" | "curl">("response");
@@ -53,6 +55,7 @@ export const RequestInspector: React.FC<RequestInspectorProps> = ({
 
   const getStatusClass = (code: number) => {
     if (code >= 200 && code < 300) return "status-2xx";
+    if (expectedRefusalCode && code === expectedRefusalCode) return "status-expected-refusal";
     if (code === 409) return "status-409";
     if (code >= 400 && code < 500) return "status-4xx";
     if (code >= 500) return "status-5xx";
@@ -79,6 +82,9 @@ export const RequestInspector: React.FC<RequestInspectorProps> = ({
           <span className="url-badge" title={url}>{url}</span>
         </div>
         <div className="inspector-right-meta">
+          {expectedRefusalCode && (
+            <span className="expected-refusal-badge">Expected: {expectedRefusalCode}</span>
+          )}
           <span className={`status-badge ${getStatusClass(status)}`}>
             {status} {statusText}
           </span>
@@ -94,6 +100,11 @@ export const RequestInspector: React.FC<RequestInspectorProps> = ({
           </button>
         </div>
       </div>
+      {expectedRefusalCode && (
+        <div className="expected-refusal-note" role="status">
+          Expected: {expectedRefusalCode} &mdash; The backend refused this on purpose.
+        </div>
+      )}
 
       <div className="inspector-subbar">
         <div className="request-id-display">

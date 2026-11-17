@@ -3,8 +3,20 @@ import express, { Request, Response, NextFunction } from "express";
 import cors from "cors";
 import fs from "node:fs";
 import path from "node:path";
-import { loadConfig } from "./platform/config";
+import { loadConfig, isDevTokenEnabled, isHardenedEnv } from "./platform/config";
 import { getObjectStore } from "./platform/object-store";
+import {
+  verifyOidcJwt,
+  extractTenantClaimsFromOidc,
+  verifyPkceS256,
+  exchangeOidcAuthorizationCode,
+  createSessionCookieToken,
+  formatSessionCookie,
+  formatClearSessionCookie,
+  readCookieFromHeader,
+  SESSION_COOKIE_NAME
+} from "./platform/oidc";
+import { recordPrivacyOutcome, renderPrometheusMetrics, evaluateOperationalAlerts } from "./platform/monitoring";
 import { toErrorResponse, AppError } from "./platform/errors";
 import { openApiSpec, CreateOrganizationBody, TokenRequestBody, ZoikoTimeBatchV1, CalendarCadenceBatchV1, CreateConnectionInput, SourceAdapterName, SemanticQueryV1 } from "./contracts";
 import { GOLDEN_01 } from "./fixtures/golden01";
@@ -100,7 +112,7 @@ import {
   releaseLegalHold,
   runRetention
 } from "./domains/lifecycle";
-import { telemetry, telemetryMiddleware } from "./platform/telemetry";
+import { telemetry, telemetryMiddleware, classifyRoute } from "./platform/telemetry";
 import { buildSloReport } from "./platform/slo";
 import { SupportTokenRequestBody } from "./contracts/support";
 import {
@@ -109,7 +121,7 @@ import {
   generateDiagnosticReceipt,
   verifyDiagnosticReceipt
 } from "./domains/support";
-import { withTenant, withPlatform, withWorker, QueryFn } from "./platform/db/with-tenant";
+import { withTenant, withPlatform, withWorker, QueryFn, checkPgHealth, isPostgresRequired } from "./platform/db/with-tenant";
 import { getWorkerMetrics } from "./worker/daemon";
 import { drainOnce } from "./worker/outbox-publisher";
 import { seedTwoTenants } from "./fixtures/seed";
@@ -120,12 +132,54 @@ const app = express();
 // B8: per-request id, latency and status for SLOs (route templates only, no content)
 app.use(telemetryMiddleware);
 
+// Pilot structured JSON request logging (B8-safe: routeClass only, zero tenant IDs/PII)
+app.use((req: Request, res: Response, next: NextFunction) => {
+  const started = process.hrtime.bigint();
+  res.on("finish", () => {
+    const runtimeCfg = loadConfig();
+    if (!runtimeCfg.structuredLogs) return;
+    const durationMs = Math.round((Number(process.hrtime.bigint() - started) / 1e6) * 100) / 100;
+    console.log(JSON.stringify({
+      level: res.statusCode >= 500 ? "error" : "info",
+      at: new Date().toISOString(),
+      requestId: res.locals.requestId || null,
+      method: req.method,
+      routeClass: classifyRoute(req.method, req.route?.path ? `${req.baseUrl || ""}${req.route.path}` : req.path),
+      status: res.statusCode,
+      durationMs
+    }));
+  });
+  next();
+});
+
 app.use(cors({
   origin: cfg.clientUrl,
   credentials: true
 }));
 
 app.use(express.json());
+
+// Translate HttpOnly abate_session cookies into internal CookieSession credentials for tenant routes.
+// Client-supplied CookieSession headers are stripped first, and /api/v2/ops/* never consumes tenant cookies.
+app.use((req: Request, res: Response, next: NextFunction) => {
+  if (typeof req.headers.authorization === "string" && req.headers.authorization.startsWith("CookieSession ")) {
+    delete req.headers.authorization;
+  }
+  if (!req.headers.authorization && !req.path.startsWith("/api/v2/ops/") && req.headers.cookie) {
+    const cookieToken = readCookieFromHeader(req.headers.cookie, SESSION_COOKIE_NAME);
+    if (cookieToken) {
+      const runtimeCfg = loadConfig();
+      if (["POST", "PUT", "PATCH", "DELETE"].includes(req.method)) {
+        const origin = getHeader(req, "origin");
+        if (origin && origin !== runtimeCfg.clientUrl && isHardenedEnv(runtimeCfg.appEnv)) {
+          return toErrorResponse(new AppError("FORBIDDEN", "Cross-origin state mutation refused."), res);
+        }
+      }
+      req.headers.authorization = `CookieSession ${cookieToken}`;
+    }
+  }
+  next();
+});
 
 // Initialize fixtures for development environment
 if (cfg.appEnv === "local" || cfg.appEnv === "test") {
@@ -140,23 +194,46 @@ function getHeader(req: Request, name: string): string | null {
   return Array.isArray(val) ? val[0] ?? null : val;
 }
 
+async function checkPgHealthSafe(): Promise<boolean> {
+  try {
+    return await checkPgHealth();
+  } catch {
+    return false;
+  }
+}
+
 // -------------------------------------------------------------
 // Health and Metadata Endpoints
 // -------------------------------------------------------------
 
 app.get("/api/health", async (_req: Request, res: Response) => {
-  const store = getObjectStore(cfg);
-  const objectStoreHealth = await store.health();
-  const overallOk = objectStoreHealth.ok || (cfg.appEnv !== "production" && cfg.appEnv !== "staging");
+  const runtimeCfg = loadConfig();
+  const store = getObjectStore(runtimeCfg);
+  const [objectStoreHealth, pgOk] = await Promise.all([store.health(), checkPgHealthSafe()]);
+  const workerMetrics = getWorkerMetrics();
+  const pgRequired = isPostgresRequired() || isHardenedEnv(runtimeCfg.appEnv);
+  const storeRequired = runtimeCfg.objectStoreMode === "s3" || isHardenedEnv(runtimeCfg.appEnv);
+  const overallOk = (!pgRequired || pgOk) && (!storeRequired || objectStoreHealth.ok) && objectStoreHealth.ok;
+
   res.status(overallOk ? 200 : 503).json({
-    status: objectStoreHealth.ok ? "ok" : "degraded",
+    status: overallOk ? "ok" : "degraded",
     app: "Zoiko Abate",
     version: "1.0.0",
-    environment: cfg.appEnv,
+    environment: runtimeCfg.appEnv,
+    database: {
+      mode: pgOk ? "postgres" : "memory",
+      required: pgRequired,
+      ok: pgOk
+    },
     objectStore: {
       mode: store.mode,
       ok: objectStoreHealth.ok,
       detail: objectStoreHealth.detail
+    },
+    worker: {
+      state: workerMetrics.state,
+      queueDepth: workerMetrics.queueDepth,
+      totalDeadLetters: workerMetrics.totalDeadLetters
     },
     timestamp: new Date().toISOString(),
     constitutionalBoundaries: {
@@ -168,6 +245,40 @@ app.get("/api/health", async (_req: Request, res: Response) => {
       supportModel: "ZERO_IMPERSONATION_SIGNED_DIAGNOSTICS"
     }
   });
+});
+
+// B8-safe Prometheus metrics endpoint (zero tenant IDs, subjects, or PII)
+app.get("/metrics", async (req: Request, res: Response) => {
+  try {
+    const runtimeCfg = loadConfig();
+    const authHeader = getHeader(req, "authorization");
+    if (runtimeCfg.metricsAuthToken) {
+      if (authHeader !== `Bearer ${runtimeCfg.metricsAuthToken}`) {
+        await authenticateSupport(authHeader);
+      }
+    } else if (isHardenedEnv(runtimeCfg.appEnv)) {
+      await authenticateSupport(authHeader);
+    }
+
+    const [objectStoreHealth, pgOk] = await Promise.all([
+      getObjectStore(runtimeCfg).health(),
+      checkPgHealthSafe()
+    ]);
+    const text = renderPrometheusMetrics({
+      sloReport: buildSloReport(telemetry.snapshot()),
+      workerMetrics: getWorkerMetrics(),
+      deps: {
+        databaseOk: pgOk,
+        databaseRequired: isPostgresRequired(),
+        objectStoreOk: objectStoreHealth.ok,
+        objectStoreMode: runtimeCfg.objectStoreMode
+      }
+    });
+    res.setHeader("Content-Type", "text/plain; version=0.0.4; charset=utf-8");
+    res.status(200).send(text);
+  } catch (err) {
+    toErrorResponse(err, res);
+  }
 });
 
 app.get("/api/info", (_req: Request, res: Response) => {
@@ -262,7 +373,7 @@ app.get(["/docs", "/swagger", "/api-docs"], (_req: Request, res: Response) => {
 // Dev-only issuance; staging and production tokens come from the identity provider
 app.post("/api/v2/auth/token", (req: Request, res: Response) => {
   try {
-    if (cfg.appEnv !== "local" && cfg.appEnv !== "test") {
+    if (!isDevTokenEnabled(loadConfig())) {
       throw new AppError("NOT_FOUND", "Not found.");
     }
     const body = TokenRequestBody.parse(req.body);
@@ -280,9 +391,12 @@ app.post("/api/v2/auth/token", (req: Request, res: Response) => {
   }
 });
 
-// Refresh authentication token
+// Refresh dev authentication token (disabled alongside /api/v2/auth/token outside local/test)
 app.post("/api/v2/auth/refresh", async (req: Request, res: Response) => {
   try {
+    if (!isDevTokenEnabled(loadConfig())) {
+      throw new AppError("NOT_FOUND", "Not found.");
+    }
     const who = await authenticate(getHeader(req, "authorization"));
     const token = createDevToken({
       tenantId: who.tenantId,
@@ -303,8 +417,92 @@ app.post("/api/v2/auth/refresh", async (req: Request, res: Response) => {
   }
 });
 
-// Terminate session (204 No Content per Guide §C.3 & §D.1)
+// Public OIDC discovery metadata (non-secret) so frontend knows whether to render OIDC login
+app.get("/api/v2/auth/oidc/config", (_req: Request, res: Response) => {
+  const runtimeCfg = loadConfig();
+  res.status(200).json({
+    devTokenEnabled: isDevTokenEnabled(runtimeCfg),
+    oidcConfigured: Boolean(runtimeCfg.oidcJwksUri || runtimeCfg.oidcJwksJson || runtimeCfg.oidcPublicKeyPem),
+    authorizationEndpoint: runtimeCfg.oidcAuthorizationEndpoint || null,
+    clientId: runtimeCfg.oidcClientId || null,
+    issuer: runtimeCfg.authIssuer,
+    audience: runtimeCfg.authAudience,
+    scope: "openid profile email",
+    pkceRequired: true,
+    pkceMethod: "S256"
+  });
+});
+
+// Exchange OIDC PKCE authorization code or verified OIDC JWT into an HttpOnly abate_session cookie
+app.post("/api/v2/auth/oidc/exchange", async (req: Request, res: Response) => {
+  try {
+    const runtimeCfg = loadConfig();
+    const body = req.body && typeof req.body === "object" ? req.body : {};
+    const code = typeof body.code === "string" ? body.code : "";
+    const codeVerifier = typeof body.codeVerifier === "string" ? body.codeVerifier : "";
+    const redirectUri = typeof body.redirectUri === "string" ? body.redirectUri : runtimeCfg.clientUrl;
+    const codeChallenge = typeof body.codeChallenge === "string" ? body.codeChallenge : "";
+    const directJwt = typeof body.idToken === "string"
+      ? body.idToken
+      : typeof body.token === "string"
+        ? body.token
+        : "";
+
+    if (codeChallenge && (!codeVerifier || !verifyPkceS256(codeVerifier, codeChallenge))) {
+      throw new AppError("UNAUTHENTICATED", "PKCE verification failed.");
+    }
+
+    let rawOidcJwt = directJwt;
+    if (code) {
+      if (!codeVerifier) {
+        throw new AppError("VALIDATION", "PKCE codeVerifier is required for authorization code exchange.");
+      }
+      rawOidcJwt = await exchangeOidcAuthorizationCode({
+        code,
+        codeVerifier,
+        redirectUri,
+        cfg: runtimeCfg
+      });
+    }
+
+    if (!rawOidcJwt) {
+      throw new AppError("VALIDATION", "Provide an OIDC authorization code + codeVerifier or an OIDC JWT.");
+    }
+
+    const claims = await verifyOidcJwt(rawOidcJwt, { cfg: runtimeCfg });
+    const identity = extractTenantClaimsFromOidc(claims, runtimeCfg);
+    const remainingSec = typeof claims.exp === "number"
+      ? Math.max(60, Math.min(3600, Math.floor(claims.exp - Date.now() / 1000)))
+      : 3600;
+
+    const sessionJwt = createSessionCookieToken(
+      {
+        tenantId: identity.tenantId,
+        subject: identity.subject,
+        role: identity.role,
+        authMethod: "oidc"
+      },
+      remainingSec,
+      runtimeCfg
+    );
+
+    res.setHeader("Set-Cookie", formatSessionCookie(sessionJwt, remainingSec, runtimeCfg));
+    res.status(200).json({
+      authenticated: true,
+      tenantId: identity.tenantId,
+      subject: identity.subject,
+      role: identity.role,
+      expiresIn: `${remainingSec}s`,
+      authMethod: "oidc"
+    });
+  } catch (err) {
+    toErrorResponse(err, res);
+  }
+});
+
+// Terminate session and clear HttpOnly OIDC cookie
 app.post("/api/v2/auth/logout", (_req: Request, res: Response) => {
+  res.setHeader("Set-Cookie", formatClearSessionCookie(loadConfig()));
   res.status(204).send();
 });
 
@@ -716,12 +914,17 @@ app.post("/api/v2/releases/query", async (req: Request, res: Response) => {
 
     // Playbook mandate: Identical body shape for every suppression reason (FLOOR, OVERLAP, RESIDUAL, QUALITY)
     if (out.status === "RELEASED" && out.releaseId) {
+      recordPrivacyOutcome("RELEASED");
       const release = await getRelease(actor, out.releaseId);
       res.status(200).json(release);
     } else {
+      recordPrivacyOutcome("SUPPRESSED");
       res.status(200).json({ status: "UNAVAILABLE", code: "NOT_AVAILABLE" });
     }
   } catch (err) {
+    if (!(err instanceof AppError)) {
+      recordPrivacyOutcome("ERROR");
+    }
     toErrorResponse(err, res);
   }
 });
@@ -1019,15 +1222,19 @@ app.post("/api/v2/hazards/:id/causes/:causeId/review", async (req: Request, res:
   try {
     const who = await authenticate(getHeader(req, "authorization"));
     const actor = await resolveActor(who.tenantId, who.subject, new Date());
+    const hazardId = String(req.params.id);
     const causeId = String(req.params.causeId);
     const input = ReviewCauseInput.parse(req.body);
 
     const out = await withTenant(who.tenantId, async (tx) => {
       const now = new Date().toISOString();
-      await tx.q(
-        "UPDATE cause SET status = $1, reviewed_by = $2, reviewed_at = $3 WHERE id = $4",
-        [input.status, actor.principalId, now, causeId]
+      const upd = await tx.q(
+        "UPDATE cause SET status = $1, reviewed_by = $2, reviewed_at = $3 WHERE id = $4 AND hazard_id = $5 AND tenant_id = $6",
+        [input.status, actor.principalId, now, causeId, hazardId, who.tenantId]
       );
+      if (!upd.rowCount || upd.rowCount === 0) {
+        throw new AppError("NOT_FOUND", "Cause not found.");
+      }
 
       return {
         id: causeId,
@@ -1538,7 +1745,7 @@ app.post(["/api/v2/legal-holds/:id/release", "/api/v2/lifecycle/holds/:id/releas
 // Dev-only issuance; production support credentials come from the identity provider
 app.post("/api/v2/auth/support-token", (req: Request, res: Response) => {
   try {
-    if (cfg.appEnv !== "local" && cfg.appEnv !== "test") {
+    if (!isDevTokenEnabled(loadConfig())) {
       throw new AppError("NOT_FOUND", "Not found.");
     }
     const { operator } = SupportTokenRequestBody.parse(req.body);
@@ -1548,9 +1755,9 @@ app.post("/api/v2/auth/support-token", (req: Request, res: Response) => {
   }
 });
 
-app.get("/api/v2/ops/slo", (req: Request, res: Response) => {
+app.get("/api/v2/ops/slo", async (req: Request, res: Response) => {
   try {
-    authenticateSupport(getHeader(req, "authorization"));
+    await authenticateSupport(getHeader(req, "authorization"));
     res.status(200).json(buildSloReport(telemetry.snapshot()));
   } catch (err) {
     toErrorResponse(err, res);
@@ -1558,9 +1765,9 @@ app.get("/api/v2/ops/slo", (req: Request, res: Response) => {
 });
 
 // Look up what happened to a request a tenant reported (by the requestId in their error)
-app.get("/api/v2/ops/requests/:requestId", (req: Request, res: Response) => {
+app.get("/api/v2/ops/requests/:requestId", async (req: Request, res: Response) => {
   try {
-    authenticateSupport(getHeader(req, "authorization"));
+    await authenticateSupport(getHeader(req, "authorization"));
     const record = telemetry.find(String(req.params.requestId));
     if (!record) {
       throw new AppError("NOT_FOUND", "Not found.");
@@ -1572,19 +1779,45 @@ app.get("/api/v2/ops/requests/:requestId", (req: Request, res: Response) => {
   }
 });
 
-app.get("/api/v2/ops/errors", (req: Request, res: Response) => {
+app.get("/api/v2/ops/errors", async (req: Request, res: Response) => {
   try {
-    authenticateSupport(getHeader(req, "authorization"));
+    await authenticateSupport(getHeader(req, "authorization"));
     res.status(200).json(telemetry.errorLog.slice(-50).reverse());
   } catch (err) {
     toErrorResponse(err, res);
   }
 });
 
-app.post("/api/v2/ops/diagnostic-receipts/verify", (req: Request, res: Response) => {
+app.post("/api/v2/ops/diagnostic-receipts/verify", async (req: Request, res: Response) => {
   try {
-    authenticateSupport(getHeader(req, "authorization"));
+    await authenticateSupport(getHeader(req, "authorization"));
     res.status(200).json(verifyDiagnosticReceipt(req.body));
+  } catch (err) {
+    toErrorResponse(err, res);
+  }
+});
+
+app.get("/api/v2/ops/alerts", async (req: Request, res: Response) => {
+  try {
+    await authenticateSupport(getHeader(req, "authorization"));
+    const runtimeCfg = loadConfig();
+    const pgOk = await checkPgHealthSafe();
+    const storeHealth = await getObjectStore(runtimeCfg).health();
+    const workerMetrics = getWorkerMetrics();
+    const sloReport = buildSloReport(telemetry.snapshot());
+    res.status(200).json(
+      evaluateOperationalAlerts({
+        cfg: runtimeCfg,
+        sloReport,
+        workerMetrics,
+        deps: {
+          databaseOk: pgOk,
+          databaseRequired: isPostgresRequired(),
+          objectStoreOk: storeHealth.ok,
+          objectStoreMode: runtimeCfg.objectStoreMode
+        }
+      })
+    );
   } catch (err) {
     toErrorResponse(err, res);
   }
@@ -1890,7 +2123,7 @@ app.get("/api/v2/ai/runs", async (req: Request, res: Response) => {
 // Kill Switches: Ops/Support and Tenant Inspection
 app.get("/api/v2/ops/kill-switches", async (req: Request, res: Response) => {
   try {
-    authenticateSupport(getHeader(req, "authorization"));
+    await authenticateSupport(getHeader(req, "authorization"));
     res.status(200).json(await withPlatform(tx => getKillSwitches(tx)));
   } catch (err) {
     toErrorResponse(err, res);
@@ -1900,7 +2133,7 @@ app.get("/api/v2/ops/kill-switches", async (req: Request, res: Response) => {
 // Global effect: only a support operator may flip a switch, and the operator is recorded
 app.post("/api/v2/ops/kill-switches", async (req: Request, res: Response) => {
   try {
-    const support = authenticateSupport(getHeader(req, "authorization"));
+    const support = await authenticateSupport(getHeader(req, "authorization"));
     const input = KillSwitchInput.parse(req.body);
     res.status(200).json(await withPlatform(tx => setKillSwitch(tx, input.scope, input.active, support.operator)));
   } catch (err) {
@@ -1911,7 +2144,7 @@ app.post("/api/v2/ops/kill-switches", async (req: Request, res: Response) => {
 // Phase 8 Operations Console: Release Readiness Gate Report (Guide §8.8 / Page 95)
 app.get("/api/v2/ops/release-readiness", async (req: Request, res: Response) => {
   try {
-    authenticateSupport(getHeader(req, "authorization"));
+    await authenticateSupport(getHeader(req, "authorization"));
     res.status(200).json({
       decision: "READY FOR REVIEW",
       schemaVersion: "abate.release-dossier.v1",
@@ -1967,7 +2200,7 @@ app.get(["/api/v2/release/dossier", "/api/v2/release/dossier/", "/api/v2/release
 // Phase 8 Operations Console: Connector Status Overview without payloads (Guide §8.8 / Page 95)
 app.get("/api/v2/ops/connectors", async (req: Request, res: Response) => {
   try {
-    authenticateSupport(getHeader(req, "authorization"));
+    await authenticateSupport(getHeader(req, "authorization"));
     const data = await withPlatform(async (tx) => {
       const connRes = await tx.q("SELECT id, source, state, last_success_at, expected_cadence_seconds FROM connection");
       return connRes.rows.map((c: any) => {
@@ -1994,7 +2227,7 @@ app.get("/api/v2/ops/connectors", async (req: Request, res: Response) => {
 // Phase 8 Operations Console: Async Job Queue and Background Worker Overview (Guide §C.6 & §D.8)
 app.get("/api/v2/ops/jobs", async (req: Request, res: Response) => {
   try {
-    authenticateSupport(getHeader(req, "authorization"));
+    await authenticateSupport(getHeader(req, "authorization"));
     const metrics = getWorkerMetrics();
 
     // Fetch live counts and entries from db using worker role

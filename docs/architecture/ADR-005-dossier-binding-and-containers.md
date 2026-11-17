@@ -1,6 +1,6 @@
 # ADR-005: Cryptographic Dossier Binding & Container Hardening
 
-- **Status**: Accepted
+- **Status**: **DRAFT — Pending Human Review** (agent-authored from codebase inspection; awaiting BE spec holder acceptance)
 - **Date**: 2026-11-16
 - **Scope**: Release Evidence (`backend/tools/build-dossier.ts`, `sign-dossier.ts`) & Containers (`Dockerfile`, `.dockerignore`, `docker-compose.yml`)
 

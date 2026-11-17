@@ -1,9 +1,17 @@
 // frontend/src/App.tsx
-import { useState, useEffect, useCallback } from "react";
+import { useState, useEffect, useCallback, useRef, type FormEvent } from "react";
 import {
   api,
+  ApiError,
   requestToken,
+  fetchOidcConfig,
+  fetchCurrentPrincipal,
+  exchangeOidcAuth,
+  logoutSession,
+  createPkceAuthorizationParams,
+  COOKIE_SESSION_TOKEN,
   PRESET_TENANTS,
+  type OidcConfig,
   type SystemHealth,
   type SystemInfo,
   type TenantInfo,
@@ -37,12 +45,20 @@ export default function App() {
 
   const [health, setHealth] = useState<SystemHealth | null>(null);
   const [info, setInfo] = useState<SystemInfo | null>(null);
+  const [oidcConfig, setOidcConfig] = useState<OidcConfig | null>(null);
   const [token, setToken] = useState<string | null>(null);
+  const [authenticatedSubject, setAuthenticatedSubject] = useState<string | null>(null);
+  const [requiresOidcLogin, setRequiresOidcLogin] = useState(false);
+  const [oidcJwtInput, setOidcJwtInput] = useState("");
+  const [oidcLoginError, setOidcLoginError] = useState<string | null>(null);
   const [tenantInfo, setTenantInfo] = useState<TenantInfo | null>(null);
   const [organizations, setOrganizations] = useState<Organization[]>([]);
   const [auditEvents, setAuditEvents] = useState<AuditEvent[]>([]);
   const [loading, setLoading] = useState(false);
   const [errorMsg, setErrorMsg] = useState<string | null>(null);
+  const oidcConfigRef = useRef<OidcConfig | null>(null);
+
+  const devTokenEnabled = oidcConfig ? oidcConfig.devTokenEnabled : true;
 
   const [showDemoConsole, setShowDemoConsole] = useState(() => {
     if (typeof window !== "undefined") {
@@ -73,59 +89,123 @@ export default function App() {
 
   const currentTenant = PRESET_TENANTS.find(t => t.id === activeTenantId) || PRESET_TENANTS[0];
 
-  // Load system-level metadata (health & info)
-  const fetchSystemMetadata = useCallback(async () => {
+  // Load system-level metadata (health, info, and OIDC auth mode)
+  const fetchSystemMetadata = useCallback(async (): Promise<OidcConfig | null> => {
     try {
-      const [h, i] = await Promise.all([
+      const [h, i, authCfg] = await Promise.all([
         api<SystemHealth>("/api/health"),
-        api<SystemInfo>("/api/info")
+        api<SystemInfo>("/api/info"),
+        fetchOidcConfig().catch(() => null)
       ]);
       setHealth(h);
       setInfo(i);
+      if (authCfg) {
+        oidcConfigRef.current = authCfg;
+        setOidcConfig(authCfg);
+      }
       setErrorMsg(null);
+      return authCfg;
     } catch (err: any) {
-      console.warn("Could not reach backend health endpoint:", err.message);
+      const ref = err instanceof ApiError && err.requestId ? ` [Request ID: ${err.requestId}]` : "";
+      console.warn("Could not reach backend health endpoint:", err?.code || err?.message);
       setHealth(null);
-      setErrorMsg("Backend server appears offline at http://localhost:5000. Start backend to view live data.");
+      setErrorMsg(`Backend server appears unavailable. Ensure backend is running.${ref}`);
+      return null;
     }
   }, []);
 
-  // Authenticate and load tenant-scoped data
-  const fetchTenantData = useCallback(async (tenantId: string, role: string) => {
+  const loadTenantWorkspace = useCallback(async (sessionToken: string) => {
+    const [currTenant, orgs, audits] = await Promise.all([
+      api<TenantInfo>("/api/v2/tenants/current", { token: sessionToken }),
+      api<Organization[]>("/api/v2/organizations", { token: sessionToken }),
+      api<AuditEvent[]>("/api/v2/audit-events", { token: sessionToken })
+    ]);
+
+    setTenantInfo(currTenant);
+    setOrganizations(orgs);
+    setAuditEvents(audits);
+    setErrorMsg(null);
+  }, []);
+
+  // Authenticate (dev token in local/test, or OIDC PKCE/HttpOnly session cookie outside local/test) and load tenant-scoped data
+  const fetchTenantData = useCallback(async (tenantId: string, role: string, resolvedAuthCfg?: OidcConfig | null) => {
     setLoading(true);
     const tenantPreset = PRESET_TENANTS.find(t => t.id === tenantId) || PRESET_TENANTS[0];
 
     try {
-      // 1. Issue signed token for this tenant and principal
-      const tokenResp = await requestToken(tenantPreset.id, tenantPreset.subject, role);
-      setToken(tokenResp.token);
+      const effectiveCfg = resolvedAuthCfg ?? oidcConfigRef.current ?? (await fetchOidcConfig().catch(() => null));
+      if (effectiveCfg && !oidcConfigRef.current) {
+        oidcConfigRef.current = effectiveCfg;
+        setOidcConfig(effectiveCfg);
+      }
 
-      // 2. Query tenant-scoped endpoints using the Bearer token
-      const [currTenant, orgs, audits] = await Promise.all([
-        api<TenantInfo>("/api/v2/tenants/current", { token: tokenResp.token }),
-        api<Organization[]>("/api/v2/organizations", { token: tokenResp.token }),
-        api<AuditEvent[]>("/api/v2/audit-events", { token: tokenResp.token })
-      ]);
+      if (!effectiveCfg || effectiveCfg.devTokenEnabled) {
+        // Local/test dev mode: issue signed dev token for selected persona
+        const tokenResp = await requestToken(tenantPreset.id, tenantPreset.subject, role);
+        setToken(tokenResp.token);
+        setAuthenticatedSubject(tokenResp.subject);
+        setRequiresOidcLogin(false);
+        await loadTenantWorkspace(tokenResp.token);
+      } else {
+        // Pilot/hardened OIDC mode: never call /api/v2/auth/token
+        if (typeof window !== "undefined") {
+          const params = new URLSearchParams(window.location.search);
+          const code = params.get("code");
+          const state = params.get("state");
+          if (code && state) {
+            const expectedState = sessionStorage.getItem("abate_pkce_state");
+            const codeVerifier = sessionStorage.getItem("abate_pkce_verifier") || "";
+            sessionStorage.removeItem("abate_pkce_state");
+            sessionStorage.removeItem("abate_pkce_verifier");
+            window.history.replaceState(null, "", window.location.pathname);
+            if (!expectedState || state !== expectedState || !codeVerifier) {
+              throw new Error("OIDC login state mismatch. Please retry sign-in.");
+            }
+            await exchangeOidcAuth({
+              code,
+              codeVerifier,
+              redirectUri: window.location.origin
+            });
+          }
+        }
 
-      setTenantInfo(currTenant);
-      setOrganizations(orgs);
-      setAuditEvents(audits);
-      setErrorMsg(null);
+        try {
+          const me = await fetchCurrentPrincipal();
+          setActiveTenantId(me.tenantId);
+          setActiveRole(me.role);
+          setAuthenticatedSubject(me.subject);
+          setToken(COOKIE_SESSION_TOKEN);
+          setRequiresOidcLogin(false);
+          setOidcLoginError(null);
+          await loadTenantWorkspace(COOKIE_SESSION_TOKEN);
+        } catch (authErr: any) {
+          if (authErr?.status === 401) {
+            setToken(null);
+            setAuthenticatedSubject(null);
+            setRequiresOidcLogin(true);
+            setErrorMsg(null);
+          } else {
+            throw authErr;
+          }
+        }
+      }
     } catch (err: any) {
-      console.error("Error loading tenant data:", err);
-      setErrorMsg(`Failed to load tenant data: ${err.message}`);
+      const ref = err instanceof ApiError && err.requestId ? ` [Request ID: ${err.requestId}]` : "";
+      console.error("Error loading tenant data:", err?.code || err?.message);
+      setErrorMsg(`Failed to load tenant data: ${err?.message || "Unexpected error"}${ref}`);
     } finally {
       setLoading(false);
     }
-  }, []);
+  }, [loadTenantWorkspace]);
 
-  // Initial load
+  // Initial load & persona change refresh (in OIDC mode, role/tenant selection comes from the IdP claim)
   useEffect(() => {
     let cancelled = false;
-    void Promise.resolve().then(() => {
+    void Promise.resolve().then(async () => {
       if (cancelled) return;
-      void fetchSystemMetadata();
-      void fetchTenantData(activeTenantId, activeRole);
+      const authCfg = await fetchSystemMetadata();
+      if (cancelled) return;
+      await fetchTenantData(activeTenantId, activeRole, authCfg);
     });
     return () => {
       cancelled = true;
@@ -140,12 +220,56 @@ export default function App() {
     setActiveRole(role);
   };
 
-  const handleRefreshAll = () => {
-    fetchSystemMetadata();
-    fetchTenantData(activeTenantId, activeRole);
+  const handleRefreshAll = async () => {
+    const authCfg = await fetchSystemMetadata();
+    await fetchTenantData(activeTenantId, activeRole, authCfg);
   };
 
-  if (showDemoConsole) {
+  const handleStartPkceLogin = async () => {
+    if (!oidcConfig?.authorizationEndpoint || !oidcConfig?.clientId) return;
+    setOidcLoginError(null);
+    const pkce = await createPkceAuthorizationParams();
+    sessionStorage.setItem("abate_pkce_state", pkce.state);
+    sessionStorage.setItem("abate_pkce_verifier", pkce.verifier);
+    const authUrl = new URL(oidcConfig.authorizationEndpoint);
+    authUrl.searchParams.set("response_type", "code");
+    authUrl.searchParams.set("client_id", oidcConfig.clientId);
+    authUrl.searchParams.set("redirect_uri", window.location.origin);
+    authUrl.searchParams.set("scope", oidcConfig.scope || "openid profile email");
+    authUrl.searchParams.set("code_challenge", pkce.challenge);
+    authUrl.searchParams.set("code_challenge_method", "S256");
+    authUrl.searchParams.set("state", pkce.state);
+    window.location.assign(authUrl.toString());
+  };
+
+  const handleOidcTokenExchange = async (e: FormEvent) => {
+    e.preventDefault();
+    const raw = oidcJwtInput.trim();
+    if (!raw) return;
+    setLoading(true);
+    setOidcLoginError(null);
+    try {
+      await exchangeOidcAuth({ idToken: raw });
+      setOidcJwtInput("");
+      await fetchTenantData(activeTenantId, activeRole, oidcConfig);
+    } catch (err: any) {
+      setOidcLoginError(err?.message || "OIDC verification failed.");
+    } finally {
+      setLoading(false);
+    }
+  };
+
+  const handleSignOut = async () => {
+    await logoutSession();
+    setToken(null);
+    setAuthenticatedSubject(null);
+    setTenantInfo(null);
+    setOrganizations([]);
+    setAuditEvents([]);
+    setRequiresOidcLogin(true);
+  };
+
+  if (showDemoConsole && devTokenEnabled) {
     return (
       <div className="app-container">
         <LiveDemoConsole onClose={() => handleToggleDemo(false)} />
@@ -163,18 +287,73 @@ export default function App() {
         health={health}
         onRefresh={handleRefreshAll}
         loading={loading}
-        onOpenDemo={() => handleToggleDemo(true)}
+        onOpenDemo={devTokenEnabled ? () => handleToggleDemo(true) : undefined}
+        devTokenEnabled={devTokenEnabled}
+        authenticatedSubject={authenticatedSubject}
+        onSignOut={handleSignOut}
       />
 
-      <nav className="tabs-navigation" aria-label="Abate Workspaces">
-        <button
-          type="button"
-          className="tab-button demo-tab-btn"
-          onClick={() => handleToggleDemo(true)}
-          style={{ borderColor: "#A83828", color: "#A83828", fontWeight: 700 }}
-        >
-          ✨ Live Demo Console
-        </button>
+      {!devTokenEnabled && requiresOidcLogin ? (
+        <main className="main-content">
+          <section className="card" aria-labelledby="oidc-signin-heading" style={{ maxWidth: 640, margin: "2rem auto" }}>
+            <h1 id="oidc-signin-heading" style={{ color: "#2B1B38", marginBottom: "0.75rem" }}>
+              Sign in with your Identity Provider
+            </h1>
+            <p style={{ marginBottom: "1rem", color: "#2F343A" }}>
+              Development token issuance is disabled in this environment. Authenticate via OIDC to establish an HttpOnly session.
+            </p>
+            {oidcLoginError && (
+              <div className="error-banner" role="alert" style={{ marginBottom: "1rem" }}>
+                <span>{oidcLoginError}</span>
+              </div>
+            )}
+            {oidcConfig?.authorizationEndpoint && oidcConfig?.clientId && (
+              <div style={{ marginBottom: "1.5rem" }}>
+                <button
+                  type="button"
+                  className="btn btn-primary"
+                  onClick={() => void handleStartPkceLogin()}
+                  disabled={loading}
+                >
+                  Continue with OIDC Provider (PKCE)
+                </button>
+              </div>
+            )}
+            <form onSubmit={(e) => void handleOidcTokenExchange(e)}>
+              <div style={{ marginBottom: "0.75rem" }}>
+                <label htmlFor="oidc-jwt-input" className="context-label" style={{ display: "block", marginBottom: "0.35rem" }}>
+                  Verified OIDC ID / Access JWT (Pilot Session Exchange)
+                </label>
+                <input
+                  id="oidc-jwt-input"
+                  type="password"
+                  className="select-control"
+                  style={{ width: "100%" }}
+                  value={oidcJwtInput}
+                  onChange={(e) => setOidcJwtInput(e.target.value)}
+                  placeholder="eyJhbGciOiJSUzI1NiIs..."
+                  autoComplete="off"
+                />
+              </div>
+              <button type="submit" className="btn btn-secondary" disabled={loading || !oidcJwtInput.trim()}>
+                {loading ? "Verifying..." : "Exchange OIDC JWT for Session Cookie"}
+              </button>
+            </form>
+          </section>
+        </main>
+      ) : (
+        <>
+          <nav className="tabs-navigation" aria-label="Abate Workspaces">
+            {devTokenEnabled && (
+              <button
+                type="button"
+                className="tab-button demo-tab-btn"
+                onClick={() => handleToggleDemo(true)}
+                style={{ borderColor: "#A83828", color: "#A83828", fontWeight: 700 }}
+              >
+                ✨ Live Demo Console
+              </button>
+            )}
         <button
           type="button"
           className={`tab-button ${activeTab === "organizations" ? "active" : ""}`}
@@ -384,6 +563,8 @@ export default function App() {
           />
         )}
       </main>
+        </>
+      )}
 
       <footer className="app-footer">
         <p>

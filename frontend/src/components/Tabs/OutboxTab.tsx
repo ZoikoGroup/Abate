@@ -1,6 +1,6 @@
 // frontend/src/components/Tabs/OutboxTab.tsx
 import { useState } from "react";
-import { api, type OutboxDrainReport, PRESET_TENANTS } from "../../api/client";
+import { api, ApiError, type OutboxDrainReport, PRESET_TENANTS } from "../../api/client";
 
 interface OutboxTabProps {
   currentTenant: typeof PRESET_TENANTS[0];
@@ -10,17 +10,28 @@ interface OutboxTabProps {
 export function OutboxTab({ currentTenant, onRefresh }: OutboxTabProps) {
   const [draining, setDraining] = useState(false);
   const [drainReport, setDrainReport] = useState<OutboxDrainReport | null>(null);
+  const [errorBanner, setErrorBanner] = useState<{ message: string; requestId?: string } | null>(null);
 
   const handleDrain = async () => {
     setDraining(true);
+    setErrorBanner(null);
     try {
       const res = await api<OutboxDrainReport>("/api/v2/outbox/drain", {
         method: "POST"
       });
       setDrainReport(res);
       onRefresh();
-    } catch (err: any) {
-      alert(`Outbox drain error: ${err.message}`);
+    } catch (err: unknown) {
+      if (err instanceof ApiError) {
+        setErrorBanner({
+          message: `[${err.code}] ${err.message}`,
+          requestId: err.requestId
+        });
+      } else {
+        setErrorBanner({
+          message: err instanceof Error ? err.message : "Outbox drain failed."
+        });
+      }
     } finally {
       setDraining(false);
     }
@@ -70,6 +81,16 @@ export function OutboxTab({ currentTenant, onRefresh }: OutboxTabProps) {
             </button>
           </div>
         </div>
+
+        {errorBanner && (
+          <div className="feedback-alert alert-error" role="alert">
+            <div className="feedback-title">✖ OUTBOX DRAIN FAILED</div>
+            <p>{errorBanner.message}</p>
+            {errorBanner.requestId && (
+              <p className="text-sm monospace">Request ID: {errorBanner.requestId}</p>
+            )}
+          </div>
+        )}
 
         {drainReport && (
           <div className="feedback-alert alert-success" role="status">

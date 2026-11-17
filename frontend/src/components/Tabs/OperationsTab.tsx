@@ -398,10 +398,13 @@ export function OperationsTab({ currentTenant, token }: OperationsTabProps) {
             <div>
               <h3>Disaster Recovery &amp; Deletion-Resurrection Lab (Playbook B8 §8.5)</h3>
               <p className="card-desc">
-                Verified recovery rehearsal proving that restoring from backup snapshots does not resurrect erased subjects. Reconciles external tombstones and UNKNOWN_OUTCOME actions before traffic approval.
+                Simulation / reference rehearsal template illustrating backup snapshot validation so erased subjects cannot resurrect. Reconciles external tombstones and UNKNOWN_OUTCOME actions before traffic approval.
               </p>
             </div>
-            <span className="badge badge-success">RTO: 8ms • RPO: 0m</span>
+            <div style={{ display: "flex", gap: "0.4rem", alignItems: "center" }}>
+              <span className="badge badge-secondary">Simulation (Reference Target)</span>
+              <span className="badge badge-success">Target: RTO &le; 4h &bull; RPO &le; 15m</span>
+            </div>
           </div>
           <div className="table-responsive">
             <table className="data-table">
@@ -460,12 +463,12 @@ export function OperationsTab({ currentTenant, token }: OperationsTabProps) {
         <div className="card">
           <div className="card-header">
             <div>
-              <h3>SLO Capacity &amp; Concurrency Benchmark (Peak Concurrency: 150)</h3>
+              <h3>SLO Capacity &amp; Concurrency Benchmark (Reference Profile: Peak 150)</h3>
               <p className="card-desc">
-                Empirical latency and tenant-isolation metrics measured under burst load matching <code>ops/slo-manifest.v1.yaml</code>.
+                Simulation / baseline manifest reference metrics aligned with <code>ops/slo-manifest.v1.yaml</code> (live runtime requests are tracked above under Support Console: SLOs).
               </p>
             </div>
-            <span className="badge badge-success">0 LEAKS • ALL SLOs MET</span>
+            <span className="badge badge-secondary">Simulation (Baseline Reference)</span>
           </div>
           <div className="table-responsive">
             <table className="data-table">
@@ -519,11 +522,11 @@ export function OperationsTab({ currentTenant, token }: OperationsTabProps) {
             <div>
               <h3>Release Evidence Dossier Gates (P0 = 0 Check)</h3>
               <p className="card-desc">
-                Constitutional and operational readiness criteria evaluated before release. A single P0 constitutional failure enforces an irrevocable NO-GO decision.
+                Constitutional and operational readiness criteria loaded dynamically from the release dossier. A single open P0 blocks release approval.
               </p>
             </div>
-            <span className="badge badge-success">
-              STATUS: {dossier?.status || "READY FOR REVIEW"} (P0 GATE: {dossier?.p0Failures ?? 0} FAILURES)
+            <span className={`badge ${dossier?.status === "READY FOR REVIEW" || dossier?.status === "RATIFIED" || dossier?.decision?.outcome === "READY FOR REVIEW" ? "badge-success" : "badge-warning"}`}>
+              STATUS: {dossier?.decision?.outcome || dossier?.status || "UNAVAILABLE"} (OPEN P0: {dossier?.openFindingsBySeverity?.P0 ?? 0})
             </span>
           </div>
           {dossier?.signOff?.signedBy && (
@@ -559,22 +562,33 @@ export function OperationsTab({ currentTenant, token }: OperationsTabProps) {
                 </tr>
               </thead>
               <tbody>
-                {[
-                  { name: "1. Scope Gate", scope: "Pilot plan, Phase 5 jurisdiction bindings, Phase 7 flags", status: "PASSED" },
-                  { name: "2. Build Gate", scope: "Git commit SHA, immutable digests, pinned SBOM, rollback target", status: "PASSED" },
-                  { name: "3. Correctness Gate", scope: "17/17 Golden Demo Cycle steps, interval math, event deduplication", status: "PASSED" },
-                  { name: "4. Privacy & Security Gate", scope: "57/57 boundary tests, forced RLS, n≥10 floor, single read path", status: "PASSED" },
-                  { name: "5. Minimization Gate", scope: "Decoy minimization lab: 0 traces across DB, logs, error telemetry", status: "PASSED" },
-                  { name: "6. AI & Strategy Gate", scope: "Bounded AI output validators, prompt boundaries, Plane A/B trigger", status: "PASSED" },
-                  { name: "7. Operations Gate", scope: "Signed SLO manifest, 5 kill switches drilled, restore rehearsal verified", status: "PASSED" },
-                  { name: "8. Authorization Gate", scope: "Named authority sign-off confirmed without waivers", status: "PASSED" }
-                ].map(g => (
-                  <tr key={g.name}>
-                    <td><strong>{g.name}</strong></td>
-                    <td>{g.scope}</td>
-                    <td><span className="badge badge-success">✔ {g.status}</span></td>
-                  </tr>
-                ))}
+                {(() => {
+                  const suites: any[] = Array.isArray(dossier?.testSuites) ? dossier.testSuites : [];
+                  const suitesOk = suites.length > 0 && suites.every(s => Number(s.failed ?? 0) === 0);
+                  const openP0 = Number(dossier?.openFindingsBySeverity?.P0 ?? 0);
+                  const signed = Boolean(dossier?.signOff?.signedBy || dossier?.decision?.signedBy);
+                  const gateRows = [
+                    { name: "1. Scope Gate", scope: "Pilot plan, Phase 5 jurisdiction bindings, Phase 7 flags", status: dossier ? "READY" : "UNAVAILABLE" },
+                    { name: "2. Build Gate", scope: `Git commit SHA (${dossier?.commitSha ? String(dossier.commitSha).slice(0, 8) : "unloaded"}), SBOM, rollback target`, status: dossier?.commitSha ? "PASSED" : "PENDING" },
+                    { name: "3. Correctness Gate", scope: `${suites.length} test suites (${dossier?.totalChecksPassed ?? 0} checks)`, status: suitesOk ? "PASSED" : "PENDING" },
+                    { name: "4. Privacy & Security Gate", scope: `Open P0 findings: ${openP0}, forced RLS, n>=10 floor`, status: dossier && openP0 === 0 && suitesOk ? "PASSED" : "PENDING" },
+                    { name: "5. Minimization Gate", scope: "Decoy minimization: 0 traces across DB, logs, error telemetry", status: suitesOk ? "PASSED" : "PENDING" },
+                    { name: "6. AI & Strategy Gate", scope: "Bounded AI validators, prompt boundaries, Plane A/B trigger", status: suitesOk ? "PASSED" : "PENDING" },
+                    { name: "7. Operations Gate", scope: `SLO mode: ${dossier?.sloMode || dossier?.environment || "synthetic"}`, status: dossier ? "READY FOR REVIEW" : "PENDING" },
+                    { name: "8. Authorization Gate", scope: "Named release authority human sign-off", status: signed ? "RATIFIED" : "PENDING HUMAN SIGN-OFF" }
+                  ];
+                  return gateRows.map(g => (
+                    <tr key={g.name}>
+                      <td><strong>{g.name}</strong></td>
+                      <td>{g.scope}</td>
+                      <td>
+                        <span className={`badge ${g.status === "PASSED" || g.status === "RATIFIED" || g.status === "READY" ? "badge-success" : "badge-warning"}`}>
+                          {g.status}
+                        </span>
+                      </td>
+                    </tr>
+                  ));
+                })()}
               </tbody>
             </table>
           </div>

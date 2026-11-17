@@ -108,17 +108,7 @@ export async function demoApi<T = any>(
       fetchInit.body = typeof options.body === "string" ? options.body : JSON.stringify(options.body);
     }
 
-    let response: Response;
-    try {
-      response = await fetch(resolvedUrl, fetchInit);
-    } catch (netErr: any) {
-      // In case Vite proxy isn't reachable, try direct loopback
-      if (!endpoint.startsWith("http")) {
-        response = await fetch(`http://127.0.0.1:5000${endpoint}`, fetchInit);
-      } else {
-        throw netErr;
-      }
-    }
+    const response = await fetch(resolvedUrl, fetchInit);
 
     const elapsedMs = Math.round(performance.now() - startTime);
     status = response.status;
@@ -144,15 +134,20 @@ export async function demoApi<T = any>(
       bodyData = await response.text();
     }
 
-    // Build reproducible cURL command
+    const origin =
+      typeof window !== "undefined" && window.location?.origin
+        ? window.location.origin
+        : "http://localhost:5000";
+
+    // Build reproducible cURL command with Bearer token masked (never expose raw JWTs)
     const curlCommand = buildCurlCommand(
       typeof window !== "undefined" && !endpoint.startsWith("http")
-        ? `http://localhost:5000${endpoint}`
+        ? `${origin}${endpoint}`
         : resolvedUrl,
       method,
       reqHeaders,
       options.body,
-      false
+      true
     );
 
     return {
@@ -179,10 +174,10 @@ export async function demoApi<T = any>(
       status: 0,
       statusText: "Connection Failed",
       responseHeaders: {},
-      body: { error: err.message || "Failed to fetch from backend" } as any,
+      body: { error: err?.code || "Could not reach backend endpoint" } as any,
       ms: elapsedMs,
       requestId: "offline",
-      curlCommand: buildCurlCommand(resolvedUrl, method, reqHeaders, options.body, false),
+      curlCommand: buildCurlCommand(resolvedUrl, method, reqHeaders, options.body, true),
       timestamp: new Date().toISOString()
     };
   }

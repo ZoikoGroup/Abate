@@ -1,7 +1,13 @@
 // tests/playwright.config.ts
 import { defineConfig, devices } from "@playwright/test";
 
-const baseURL = process.env.PLAYWRIGHT_TEST_BASE_URL || "http://127.0.0.1:5173";
+const isCi = Boolean(process.env.CI);
+const backendPort = process.env.PLAYWRIGHT_BACKEND_PORT || (isCi ? "5000" : "5055");
+const frontendPort = process.env.PLAYWRIGHT_FRONTEND_PORT || (isCi ? "5173" : "5174");
+const baseURL = process.env.PLAYWRIGHT_TEST_BASE_URL || `http://127.0.0.1:${frontendPort}`;
+if (!process.env.PLAYWRIGHT_TEST_BASE_URL) {
+  process.env.PLAYWRIGHT_TEST_BASE_URL = baseURL;
+}
 const skipWebServer = process.env.PLAYWRIGHT_SKIP_WEBSERVER === "1";
 
 export default defineConfig({
@@ -27,20 +33,25 @@ export default defineConfig({
     : [
       {
         command: "npm --prefix ../backend run serve",
-        url: "http://127.0.0.1:5000/api/health",
-        reuseExistingServer: !process.env.CI,
+        url: `http://127.0.0.1:${backendPort}/api/health`,
+        reuseExistingServer: false,
         timeout: 60_000,
         env: {
           ...process.env,
           APP_ENV: process.env.APP_ENV || "test",
-          PORT: "5000"
+          PORT: backendPort
         }
       },
       {
-        command: "npm --prefix ../frontend run dev -- --host 127.0.0.1 --port 5173 --strictPort",
+        command: `npm --prefix ../frontend run dev -- --host 127.0.0.1 --port ${frontendPort} --strictPort`,
         url: baseURL,
-        reuseExistingServer: !process.env.CI,
-        timeout: 60_000
+        reuseExistingServer: false,
+        timeout: 60_000,
+        env: {
+          ...process.env,
+          VITE_API_TARGET: `http://127.0.0.1:${backendPort}`,
+          VITE_PORT: frontendPort
+        }
       }
     ]
 });
