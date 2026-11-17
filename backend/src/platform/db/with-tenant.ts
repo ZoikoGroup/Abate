@@ -309,60 +309,66 @@ class MemoryClient {
     this.heldLocks = [];
   }
 
+  // Captures the state ROLLBACK restores to. Re-taken right after an advisory lock is acquired, because by then every
+  // earlier holder has committed or rolled back and a snapshot from BEGIN would silently undo their committed work.
+  private takeSnapshot() {
+    this.snapshotState = JSON.stringify({
+      tenants: Array.from(memDb.tenants.entries()),
+      principals: Array.from(memDb.principals.entries()),
+      organizations: Array.from(memDb.organizations.entries()),
+      memberships: Array.from(memDb.memberships.entries()),
+      idempotency: Array.from(memDb.idempotency.entries()),
+      auditCount: memDb.auditEvents.length,
+      outboxCount: memDb.outboxEvents.length,
+      deadLetterCount: memDb.deadLetterEvents.length,
+      inbox: Array.from(memDb.inboxEvents.entries()),
+      sourceContracts: Array.from(memDb.sourceContracts.entries()),
+      connections: Array.from(memDb.connections.entries()),
+      watermarks: Array.from(memDb.watermarks.entries()),
+      ingestReceipts: Array.from(memDb.ingestReceipts.entries()),
+      workFactRevisions: Array.from(memDb.workFactRevisions.entries()),
+      metricDefinitions: Array.from(memDb.metricDefinitions.entries()),
+      metricSnapshots: Array.from(memDb.metricSnapshots.entries()),
+      privacyDecisions: Array.from(memDb.privacyDecisions.entries()),
+      privacyReleases: Array.from(memDb.privacyReleases.entries()),
+      releasedArtifacts: Array.from(memDb.releasedArtifacts.entries()),
+      disclosureCount: memDb.disclosureLedger.length,
+      hazards: Array.from(memDb.hazards.entries()),
+      causes: Array.from(memDb.causes.entries()),
+      interventions: Array.from(memDb.interventions.entries()),
+      approvals: Array.from(memDb.approvals.entries()),
+      implementationReceipts: Array.from(memDb.implementationReceipts.entries()),
+      evaluations: Array.from(memDb.evaluations.entries()),
+      retentionClasses: Array.from(memDb.retentionClasses.entries()),
+      legalHolds: Array.from(memDb.legalHolds.entries()),
+      retentionRuns: Array.from(memDb.retentionRuns.entries()),
+      deletionTombstones: Array.from(memDb.deletionTombstones.entries()),
+      corrections: Array.from(memDb.corrections.entries()),
+      policyPacks: Array.from(memDb.policyPacks.entries()),
+      decisionEnvelopes: Array.from(memDb.decisionEnvelopes.entries()),
+      evidencePackages: Array.from(memDb.evidencePackages.entries()),
+      rightsRequests: Array.from(memDb.rightsRequests.entries()),
+      aiUseCases: Array.from(memDb.aiUseCases.entries()),
+      aiRuns: Array.from(memDb.aiRuns.entries()),
+      aiKillSwitches: Array.from(memDb.aiKillSwitches.entries()),
+      toolCatalog: Array.from(memDb.toolCatalog.entries()),
+      actionAttempts: Array.from(memDb.actionAttempts.entries()),
+      featureFlags: Array.from(memDb.featureFlags.entries()),
+      outcomeDefinitions: Array.from(memDb.outcomeDefinitions.entries()),
+      outcomeEvaluations: Array.from(memDb.outcomeEvaluations.entries()),
+      aiChangeProfiles: Array.from(memDb.aiChangeProfiles.entries()),
+      aiWorkDesignAssessments: Array.from(memDb.aiWorkDesignAssessments.entries()),
+      tenantPolicyBindings: memDb.tenantPolicyBindings,
+      evidenceItems: memDb.evidenceItems
+      });
+  }
+
   async query(text: string, params: any[] = []): Promise<QueryResult<any>> {
     const trimmed = text.trim();
     const upper = trimmed.toUpperCase();
 
     if (upper === "BEGIN") {
-      this.snapshotState = JSON.stringify({
-        tenants: Array.from(memDb.tenants.entries()),
-        principals: Array.from(memDb.principals.entries()),
-        organizations: Array.from(memDb.organizations.entries()),
-        memberships: Array.from(memDb.memberships.entries()),
-        idempotency: Array.from(memDb.idempotency.entries()),
-        auditCount: memDb.auditEvents.length,
-        outboxCount: memDb.outboxEvents.length,
-        deadLetterCount: memDb.deadLetterEvents.length,
-        inbox: Array.from(memDb.inboxEvents.entries()),
-        sourceContracts: Array.from(memDb.sourceContracts.entries()),
-        connections: Array.from(memDb.connections.entries()),
-        watermarks: Array.from(memDb.watermarks.entries()),
-        ingestReceipts: Array.from(memDb.ingestReceipts.entries()),
-        workFactRevisions: Array.from(memDb.workFactRevisions.entries()),
-        metricDefinitions: Array.from(memDb.metricDefinitions.entries()),
-        metricSnapshots: Array.from(memDb.metricSnapshots.entries()),
-        privacyDecisions: Array.from(memDb.privacyDecisions.entries()),
-        privacyReleases: Array.from(memDb.privacyReleases.entries()),
-        releasedArtifacts: Array.from(memDb.releasedArtifacts.entries()),
-        disclosureCount: memDb.disclosureLedger.length,
-        hazards: Array.from(memDb.hazards.entries()),
-        causes: Array.from(memDb.causes.entries()),
-        interventions: Array.from(memDb.interventions.entries()),
-        approvals: Array.from(memDb.approvals.entries()),
-        implementationReceipts: Array.from(memDb.implementationReceipts.entries()),
-        evaluations: Array.from(memDb.evaluations.entries()),
-        retentionClasses: Array.from(memDb.retentionClasses.entries()),
-        legalHolds: Array.from(memDb.legalHolds.entries()),
-        retentionRuns: Array.from(memDb.retentionRuns.entries()),
-        deletionTombstones: Array.from(memDb.deletionTombstones.entries()),
-        corrections: Array.from(memDb.corrections.entries()),
-        policyPacks: Array.from(memDb.policyPacks.entries()),
-        decisionEnvelopes: Array.from(memDb.decisionEnvelopes.entries()),
-        evidencePackages: Array.from(memDb.evidencePackages.entries()),
-        rightsRequests: Array.from(memDb.rightsRequests.entries()),
-        aiUseCases: Array.from(memDb.aiUseCases.entries()),
-        aiRuns: Array.from(memDb.aiRuns.entries()),
-        aiKillSwitches: Array.from(memDb.aiKillSwitches.entries()),
-        toolCatalog: Array.from(memDb.toolCatalog.entries()),
-        actionAttempts: Array.from(memDb.actionAttempts.entries()),
-        featureFlags: Array.from(memDb.featureFlags.entries()),
-        outcomeDefinitions: Array.from(memDb.outcomeDefinitions.entries()),
-        outcomeEvaluations: Array.from(memDb.outcomeEvaluations.entries()),
-        aiChangeProfiles: Array.from(memDb.aiChangeProfiles.entries()),
-        aiWorkDesignAssessments: Array.from(memDb.aiWorkDesignAssessments.entries()),
-        tenantPolicyBindings: memDb.tenantPolicyBindings,
-        evidenceItems: memDb.evidenceItems
-      });
+      this.takeSnapshot();
       return { rows: [], rowCount: 0, command: "BEGIN", oid: 0, fields: [] };
     }
 
@@ -435,6 +441,8 @@ class MemoryClient {
       const lockKey = params[0] || "default_lock";
       const unlock = await advisoryLockMgr.acquire(lockKey);
       this.heldLocks.push(unlock);
+      // Contract (same as Postgres usage here): take the lock before this transaction writes anything
+      if (this.snapshotState) this.takeSnapshot();
       return { rows: [{ pg_advisory_xact_lock: null }], rowCount: 1, command: "SELECT", oid: 0, fields: [] };
     }
 
@@ -2163,6 +2171,15 @@ class MemoryClient {
         return { rows: [rec], rowCount: 1, command: "UPDATE", oid: 0, fields: [] };
       }
       return { rows: [], rowCount: 0, command: "UPDATE", oid: 0, fields: [] };
+    }
+
+    // AI Run monthly spend (budget): params = [tenantId, useCaseKey, monthStartIso]
+    if (upper.includes("FROM AI_RUN") && upper.includes("SUM(COST_MINOR)")) {
+      const [, ucKey, monthStart] = params;
+      const spent = Array.from(memDb.aiRuns.values())
+        .filter(r => r.tenant_id === this.tenantContext && r.use_case_key === ucKey && r.created_at >= monthStart)
+        .reduce((acc, r) => acc + Number(r.cost_minor || 0), 0);
+      return { rows: [{ spent }], rowCount: 1, command: "SELECT", oid: 0, fields: [] };
     }
 
     // AI Run Select

@@ -20,7 +20,7 @@ import { seedTwoTenants } from "../src/fixtures/seed";
 import { createDevToken, authenticate, resolveActor } from "../src/domains/tenant/auth";
 import { withTenant, memDb } from "../src/platform/db/with-tenant";
 import { seedApprovedKnowledge } from "../src/domains/ai/retrieve";
-import { runAiUseCase, isProhibitedRequest } from "../src/domains/ai/run";
+import { runAiUseCase, isProhibitedRequest, getMonthlySpendMinor } from "../src/domains/ai/run";
 import { validateOutput } from "../src/domains/ai/validate";
 import { DEFAULT_AI_USE_CASES } from "../src/domains/ai/run";
 import type { ContextItem } from "../src/domains/ai/retrieve";
@@ -305,7 +305,77 @@ async function main() {
     assert.strictEqual(frank.ok, true, "'Frank' must not trigger the 'rank' keyword");
   });
 
-  console.log(`\n\x1b[32m✔ Completed Phase 6 Bounded AI & Safety Test Suite: ${passed - 1}/11 tests passed.\x1b[0m\n`);
+  // Test 12: Budget is durable (derived from ai_run) and per tenant
+  await runTest("Test 12: Monthly AI budget is read from ai_run per tenant; one tenant exhausting it does not block another", async () => {
+    // loadUseCase prefers the seeded ai_use_case row over the code default, so adjust the row the run will actually read
+    const ucRow = memDb.aiUseCases.get("explain_release:1");
+    assert.ok(ucRow, "seeded explain_release use case row must exist");
+    const originalBudget = ucRow.monthly_budget_minor;
+    const tenantBId = GOLDEN_01.tenantB.id;
+    const whoB = await authenticate(`Bearer ${createDevToken({ tenantId: tenantBId, subject: "auth0|user-tenant-b-risk-owner", role: "RISK_OWNER" })}`);
+    const actorB = await resolveActor(whoB.tenantId, whoB.subject);
+    const refs = [{ type: "RELEASE" as const, id: "00000000-0000-4000-a003-000000000001" }];
+
+    try {
+      const spentA = await withTenant(tenantAId, tx => getMonthlySpendMinor(tx, "explain_release"));
+      assert.ok(spentA > 0, "earlier runs in this suite must already show up as durable spend");
+
+      // Room for exactly one more call (estimate is 10, a default-run costs 3)
+      ucRow.monthly_budget_minor = spentA + 12;
+
+      await withTenant(tenantAId, async (tx) => {
+        const first = await runAiUseCase(tx, actorA, "explain_release", { contextRefs: refs, question: "Explain" });
+        assert.ok(first.costMinor > 0);
+      });
+      await withTenant(tenantAId, async (tx) => {
+        await assert.rejects(
+          () => runAiUseCase(tx, actorA, "explain_release", { contextRefs: refs, question: "Explain" }),
+          isCode("UNAVAILABLE"),
+          "Tenant A must be refused once its own monthly spend reaches the budget"
+        );
+      });
+
+      // Tenant B has spent nothing of its own, so Tenant A's usage must not consume B's allowance
+      const spentB = await withTenant(tenantBId, tx => getMonthlySpendMinor(tx, "explain_release"));
+      assert.ok(spentB < spentA, "Tenant B spend must be independent of Tenant A");
+      await withTenant(tenantBId, async (tx) => {
+        const res = await runAiUseCase(tx, actorB, "explain_release", { contextRefs: refs, question: "Explain" });
+        assert.ok(res.id, "Tenant B call must go through");
+      });
+    } finally {
+      ucRow.monthly_budget_minor = originalBudget;
+    }
+  });
+
+  // Test 13: Strict budget under concurrency (advisory lock serialises reads of the remaining budget)
+  await runTest("Test 13: Concurrent AI calls cannot overshoot the monthly budget (strict lock)", async () => {
+    const ucRow = memDb.aiUseCases.get("explain_release:1");
+    assert.ok(ucRow);
+    const originalBudget = ucRow.monthly_budget_minor;
+    const refs = [{ type: "RELEASE" as const, id: "00000000-0000-4000-a003-000000000001" }];
+    try {
+      const spent = await withTenant(tenantAId, tx => getMonthlySpendMinor(tx, "explain_release"));
+      // Room for exactly one more call (estimate 10, a default run costs 3)
+      ucRow.monthly_budget_minor = spent + 12;
+
+      const results = await Promise.allSettled(
+        Array.from({ length: 4 }, () =>
+          withTenant(tenantAId, tx => runAiUseCase(tx, actorA, "explain_release", { contextRefs: refs, question: "Explain" }))
+        )
+      );
+      const ok = results.filter(r => r.status === "fulfilled").length;
+      const refused = results.filter(r => r.status === "rejected" && isCode("UNAVAILABLE")((r as PromiseRejectedResult).reason)).length;
+      assert.strictEqual(ok, 1, `exactly one concurrent call may fit the budget, got ${ok}`);
+      assert.strictEqual(refused, 3, "the rest must be refused with UNAVAILABLE");
+
+      const after = await withTenant(tenantAId, tx => getMonthlySpendMinor(tx, "explain_release"));
+      assert.ok(after <= spent + 12, `spend ${after} must not exceed budget ${spent + 12}`);
+    } finally {
+      ucRow.monthly_budget_minor = originalBudget;
+    }
+  });
+
+  console.log(`\n\x1b[32m✔ Completed Phase 6 Bounded AI & Safety Test Suite: ${passed - 1}/13 tests passed.\x1b[0m\n`);
 }
 
 main().catch(err => {
