@@ -12,7 +12,7 @@ export function ConstitutionalTab({ health, info }: ConstitutionalTabProps) {
       <div className="card hero-banner">
         <h2>Zoiko Abate Core Mission & Architecture Baseline</h2>
         <p className="lead">
-          Organizational work-design and psychosocial-risk infrastructure for legal services. 
+          Organizational work-design and psychosocial-risk infrastructure for legal services.
           Abate measures work conditions at cohort level (never individuals), helps companies identify hazards, review organizational causes, approve controls, and compile independently checkable evidence packages.
         </p>
         <div className="tagline-quote">
@@ -81,10 +81,10 @@ export function ConstitutionalTab({ health, info }: ConstitutionalTabProps) {
       <div className="card">
         <div className="card-header">
           <h3>The Twelve Core Domains (S01 &ndash; S12)</h3>
-          <a 
-            href="http://localhost:5000/api/v2/contracts/openapi.json" 
-            target="_blank" 
-            rel="noreferrer" 
+          <a
+            href="/api/v2/contracts/openapi.json"
+            target="_blank"
+            rel="noreferrer"
             className="btn btn-secondary btn-sm"
           >
             OpenAPI 3.1 Contract Registry &rarr;
@@ -123,11 +123,34 @@ export function ConstitutionalTab({ health, info }: ConstitutionalTabProps) {
           </div>
           <div className="domain-item">
             <span className="domain-code">S10</span>
-            <div className="domain-name">Governance & Jurisdiction</div>
+            <div className="domain-name">Governance &amp; Jurisdiction</div>
             <div className="domain-desc">Legal sector policy packs, evidence manifests, cryptographic hashes.</div>
             <span className="status-pill">Phase 5</span>
           </div>
         </div>
+      </div>
+
+      <div className="card" style={{ marginTop: "1.25rem" }}>
+        <div className="card-header">
+          <h3>Why Abate Exists &amp; Plain-English Phase Guide (Phases 0&ndash;8)</h3>
+          <span className="badge badge-aubergine">SYSTEM OVERVIEW</span>
+        </div>
+        <p className="card-desc">
+          Employers often either ignore psychosocial workload risk (burnout, attrition, regulatory liability) or deploy
+          invasive monitoring (&ldquo;bossware&rdquo; screenshots, keystrokes, personal scores) that damages trust and violates privacy law.
+          Abate solves this by redesigning work patterns at cohort level while making surveillance technically impossible.
+        </p>
+        <ul className="rule-list">
+          <li><strong>Phase 0 &ndash; Foundation:</strong> Separates database roles (<code>abate_migrator</code> vs restricted <code>abate_app</code>), seeds synthetic fixtures (Apex Legal Partners &amp; Beacon Chambers), and freezes OpenAPI contracts. <em>Why:</em> Prevents privilege mistakes and environment drift before any business data exists.</li>
+          <li><strong>Phase 1 &ndash; Tenancy, RLS &amp; Command Pipeline:</strong> Enforces PostgreSQL Forced Row-Level Security per transaction (<code>withTenant</code>) and atomic <code>runCommand</code> (idempotency + audit + outbox). <em>Why:</em> Guarantees Firm A can never see Firm B and retries never duplicate records.</li>
+          <li><strong>Phase 2 &ndash; Ingestion &amp; Work Ledger:</strong> Validates ZoikoTime and CalendarCadence batches with strict <code>.strict()</code> schemas, rejects forbidden decoys, derives HMAC pseudonyms, and tracks STALE feeds. <em>Why:</em> Blocks surveillance fields before storage and ensures outages show &ldquo;stale,&rdquo; never fake &ldquo;zero risk.&rdquo;</li>
+          <li><strong>Phase 3 &ndash; Deterministic Measurement &amp; Privacy Release:</strong> Computes interval math without double-counting and gates every export/UI/AI channel through <code>n &ge; 10</code> contributors, overlap (&ge; 5), and residual (&ge; 5) checks. <em>Why:</em> Stops differential reconstruction attacks that isolate individuals across overlapping cohorts.</li>
+          <li><strong>Phase 4 &ndash; Hazards, Controls &amp; Verification:</strong> Separates organizational causes, control lifecycle, version-bound approvals (<code>If-Match</code> + <code>materialHash</code>), and verification outcomes (<code>EFFECTIVE</code> vs <code>TRANSFER_OF_RISK</code>). <em>Why:</em> Completing a checklist task never counts as closing a risk until verified.</li>
+          <li><strong>Phase 5 &ndash; Jurisdiction Packs, Evidence &amp; Lifecycle:</strong> Keeps cloud region, legal jurisdiction, and billing entitlements separate; adds SHA-256/Merkle verification, legal holds, and anti-resurrection deletion tombstones across restores. <em>Why:</em> Makes compliance portable across legal systems without losing deleted-data proofs on backup restore.</li>
+          <li><strong>Phase 6 &ndash; Bounded AI &amp; Safe Actions:</strong> Runs proposal-only AI behind released-evidence retrieval, output validators, and 5 kill switches. <em>Why:</em> AI can explain or draft, never hallucinate numbers or execute silent approvals; full manual mode works with AI off.</li>
+          <li><strong>Phase 7 &ndash; Outcomes &amp; AI-Change Assurance (Plane B):</strong> Measures workload sustainability, role clarity, fragmentation, and AI rework behind disabled-by-default flags and SQL triggers blocking Plane B from closing Plane A hazards. <em>Why:</em> Higher productivity never overrules open safety obligations.</li>
+          <li><strong>Phase 8 &ndash; Operations, Support &amp; Release Dossier:</strong> Provides zero-impersonation diagnostic receipts, live SLO targets, measured load/restore drills, and a hash-bound dossier waiting for named human sign-off. <em>Why:</em> Shipping decisions rest on executed proof, never undocumented promises.</li>
+        </ul>
       </div>
     </div>
   );

@@ -1,6 +1,6 @@
 # ADR-002: Deterministic Cohort Privacy Compiler & Suppression Gates
 
-- **Status**: Accepted for Aggregation Suppression — **Open Privacy-Owner Decision on Laplace Noise**
+- **Status**: **DRAFT — Pending Human Review** (agent-authored from codebase inspection; awaiting BE spec holder & Privacy Owner acceptance)
 - **Date**: 2026-11-16
 - **Scope**: Phase 3 (`backend/src/domains/privacy/compile-release.ts`)
 

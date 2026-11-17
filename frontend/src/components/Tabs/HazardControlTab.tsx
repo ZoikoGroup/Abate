@@ -2,6 +2,7 @@
 import { useState, useEffect } from "react";
 import { AiPanel } from "../AiPanel";
 import {
+  ApiError,
   type Hazard,
   type ControlDetailView,
   type HazardDetail,
@@ -27,6 +28,13 @@ import {
   BASELINE_RELEASE_ID
 } from "../../api/client";
 
+function fmtHazardErr(err: unknown): string {
+  if (err instanceof ApiError) {
+    return `${err.message} (Request ID: ${err.requestId})`;
+  }
+  return err instanceof Error ? err.message : "Operation failed.";
+}
+
 interface HazardControlTabProps {
   currentTenant: typeof PRESET_TENANTS[0];
   token: string | null;
@@ -47,7 +55,7 @@ export function HazardControlTab({ currentTenant, token }: HazardControlTabProps
   const [newControlScope, setNewControlScope] = useState("Corporate Litigation practice group");
   const [newControlObjective, setNewControlObjective] = useState("Enforce scheduled delivery windows and silent night servers");
   const [newControlDueDate, setNewControlDueDate] = useState("2026-05-15");
-  const [newImplementationKind, setNewImplementationKind] = useState("ORGANIZATIONAL_POLICY");
+  const [newImplementationKind, setNewImplementationKind] = useState("MANUAL");
   const [newEvidenceRef, setNewEvidenceRef] = useState("doc:policy-scheduled-delivery-v1");
   const [concludeOutcome, setConcludeOutcome] = useState<"EFFECTIVE" | "PARTIALLY_EFFECTIVE" | "NOT_EFFECTIVE" | "INCONCLUSIVE">("EFFECTIVE");
   const [concludeResidualRisk, setConcludeResidualRisk] = useState("Residual boundary intrusion reduced below 15% threshold; monitor during quarterly filing cycle.");
@@ -80,8 +88,12 @@ export function HazardControlTab({ currentTenant, token }: HazardControlTabProps
       setLoading(true);
       const assessment = await checkLegalFatigue(matterId, token);
       setFatigueAssessment(assessment);
-    } catch (err: any) {
-      console.warn("Fatigue assessment failed:", err);
+    } catch (err: unknown) {
+      setFeedback({
+        type: "error",
+        title: "✖ FATIGUE ASSESSMENT FAILED",
+        details: fmtHazardErr(err)
+      });
     } finally {
       setLoading(false);
     }
@@ -97,8 +109,12 @@ export function HazardControlTab({ currentTenant, token }: HazardControlTabProps
       if (list.length > 0 && !selectedHazardId) {
         setSelectedHazardId(list[0].id);
       }
-    } catch (err: any) {
-      console.warn("Could not load hazards:", err);
+    } catch (err: unknown) {
+      setFeedback({
+        type: "error",
+        title: "✖ FAILED TO LOAD HAZARDS",
+        details: fmtHazardErr(err)
+      });
     } finally {
       setLoading(false);
     }
@@ -115,8 +131,13 @@ export function HazardControlTab({ currentTenant, token }: HazardControlTabProps
           setSelectedHazardId((prev) => prev || list[0].id);
         }
       })
-      .catch((err) => {
-        console.warn("Could not load hazards:", err);
+      .catch((err: unknown) => {
+        if (cancelled) return;
+        setFeedback({
+          type: "error",
+          title: "✖ FAILED TO LOAD HAZARDS",
+          details: fmtHazardErr(err)
+        });
       });
     void fetchLegalMatters(token)
       .then(async (matters) => {
@@ -132,8 +153,13 @@ export function HazardControlTab({ currentTenant, token }: HazardControlTabProps
           setFatigueAssessment(null);
         }
       })
-      .catch((err) => {
-        console.warn("Could not load legal sector matters:", err);
+      .catch((err: unknown) => {
+        if (cancelled) return;
+        setFeedback({
+          type: "error",
+          title: "✖ FAILED TO LOAD LEGAL MATTERS",
+          details: fmtHazardErr(err)
+        });
       });
     return () => {
       cancelled = true;
@@ -154,8 +180,12 @@ export function HazardControlTab({ currentTenant, token }: HazardControlTabProps
           setSelectedControl(null);
         }
       })
-      .catch(err => {
-        console.warn("Could not load hazard detail:", err);
+      .catch((err: unknown) => {
+        setFeedback({
+          type: "error",
+          title: "✖ FAILED TO LOAD HAZARD DETAIL",
+          details: fmtHazardErr(err)
+        });
       });
   }, [selectedHazardId, token]);
 
@@ -181,7 +211,7 @@ export function HazardControlTab({ currentTenant, token }: HazardControlTabProps
       setFeedback({
         type: "error",
         title: "✖ HAZARD REGISTRATION REJECTED",
-        details: err.message
+        details: fmtHazardErr(err)
       });
     } finally {
       setLoading(false);
@@ -207,7 +237,7 @@ export function HazardControlTab({ currentTenant, token }: HazardControlTabProps
       setFeedback({
         type: "error",
         title: "✖ CAUSE PROPOSAL FAILED",
-        details: err.message
+        details: fmtHazardErr(err)
       });
     } finally {
       setLoading(false);
@@ -232,7 +262,7 @@ export function HazardControlTab({ currentTenant, token }: HazardControlTabProps
       setFeedback({
         type: "error",
         title: "✖ CAUSE REVIEW FAILED",
-        details: err.message
+        details: fmtHazardErr(err)
       });
     } finally {
       setLoading(false);
@@ -277,7 +307,7 @@ export function HazardControlTab({ currentTenant, token }: HazardControlTabProps
       setFeedback({
         type: "error",
         title: "✖ CONTROL DRAFT FAILED",
-        details: err.message
+        details: fmtHazardErr(err)
       });
     } finally {
       setLoading(false);
@@ -305,7 +335,7 @@ export function HazardControlTab({ currentTenant, token }: HazardControlTabProps
       setFeedback({
         type: err.status === 409 ? "conflict" : "error",
         title: err.status === 409 ? "⚠ VERSION MISMATCH / STALE CONFLICT (409)" : "✖ APPROVAL FAILED",
-        details: err.message
+        details: fmtHazardErr(err)
       });
     } finally {
       setLoading(false);
@@ -337,8 +367,8 @@ export function HazardControlTab({ currentTenant, token }: HazardControlTabProps
     } catch (err: any) {
       setFeedback({
         type: err.status === 409 ? "conflict" : "error",
-        title: "✖ STALE CONFLICT (409)",
-        details: err.message
+        title: err.status === 409 ? "✖ STALE CONFLICT (409)" : "✖ MATERIAL MODIFICATION FAILED",
+        details: fmtHazardErr(err)
       });
     } finally {
       setLoading(false);
@@ -374,7 +404,7 @@ export function HazardControlTab({ currentTenant, token }: HazardControlTabProps
       setFeedback({
         type: "error",
         title: "✖ IMPLEMENTATION RECEIPT FAILED",
-        details: err.message
+        details: fmtHazardErr(err)
       });
     } finally {
       setLoading(false);
@@ -388,11 +418,10 @@ export function HazardControlTab({ currentTenant, token }: HazardControlTabProps
       setLoading(true);
       setFeedback(null);
       const plan = {
-        primaryMetric: "BOUNDARY_INTRUSION_SHARE",
         baselineReleaseId: hazardDetail?.hazard.originating_release_id || BASELINE_RELEASE_ID,
-        targetDelta: -10.0,
+        direction: "DECREASE" as const,
+        criteria: 10.0,
         adjacentTolerance: 5.0,
-        minDays: 28,
         seriesBreak: false
       };
       const updated = await pinVerificationPlan(selectedControl.id, plan, token);
@@ -400,7 +429,7 @@ export function HazardControlTab({ currentTenant, token }: HazardControlTabProps
       setFeedback({
         type: "success",
         title: "✔ VERIFICATION PLAN PINNED (STATE: VERIFYING)",
-        details: `Pre-analysis plan pinned prior to observing post-implementation data. Evaluates primary target (-10% delta) and guards against transfer-of-risk to adjacent cohorts.`
+        details: `Pre-analysis plan pinned prior to observing post-implementation data. Evaluates 10% target reduction and guards against transfer-of-risk to adjacent cohorts.`
       });
       if (selectedHazardId) {
         const detail = await fetchHazardDetail(selectedHazardId, token);
@@ -410,7 +439,7 @@ export function HazardControlTab({ currentTenant, token }: HazardControlTabProps
       setFeedback({
         type: "error",
         title: "✖ PINNING VERIFICATION FAILED",
-        details: err.message
+        details: fmtHazardErr(err)
       });
     } finally {
       setLoading(false);
@@ -423,9 +452,14 @@ export function HazardControlTab({ currentTenant, token }: HazardControlTabProps
     try {
       setLoading(true);
       setFeedback(null);
+      const postReleaseId =
+        selectedControl.verificationPlan?.postReleaseId ||
+        selectedControl.verificationPlan?.baselineReleaseId ||
+        hazardDetail?.hazard.originating_release_id ||
+        BASELINE_RELEASE_ID;
       const updated = await concludeVerification(
         selectedControl.id,
-        { outcome: concludeOutcome, residualRisk: concludeResidualRisk },
+        { outcome: concludeOutcome, residualRisk: concludeResidualRisk, postReleaseId },
         token
       );
       setSelectedControl(updated);
@@ -442,7 +476,7 @@ export function HazardControlTab({ currentTenant, token }: HazardControlTabProps
       setFeedback({
         type: "error",
         title: "✖ CONCLUSION FAILED",
-        details: err.message
+        details: fmtHazardErr(err)
       });
     } finally {
       setLoading(false);
@@ -478,7 +512,7 @@ export function HazardControlTab({ currentTenant, token }: HazardControlTabProps
       setFeedback({
         type: "error",
         title: "✖ DISPOSITION UPDATE FAILED",
-        details: err.message
+        details: fmtHazardErr(err)
       });
     } finally {
       setLoading(false);
@@ -502,7 +536,7 @@ export function HazardControlTab({ currentTenant, token }: HazardControlTabProps
       setFeedback({
         type: "error",
         title: "✖ EVIDENCE EXPORT FAILED",
-        details: err.message
+        details: fmtHazardErr(err)
       });
     } finally {
       setLoading(false);
@@ -524,25 +558,112 @@ export function HazardControlTab({ currentTenant, token }: HazardControlTabProps
   // Refusal Lab adversarial handlers
   const handleTestStateRejection = async () => {
     if (!token || !selectedHazardId) return;
-    setFeedback({
-      type: "conflict",
-      title: "✔ REFUSAL GATE 1: PROPOSED -> IMPLEMENTING BLOCKED",
-      details: "State machine rejects jump from PROPOSED directly to IMPLEMENTING. Control must satisfy APPROVAL gate before implementation can commence."
-    });
+    try {
+      setLoading(true);
+      setFeedback(null);
+
+      let targetCtrl = hazardDetail?.controls.find(
+        c => c.state === "PROPOSED" || c.state === "APPROVAL_REQUIRED" || c.state === "DRAFT"
+      );
+
+      if (!targetCtrl) {
+        const firstAccepted = hazardDetail?.causes.find(c => c.status === "REVIEWED_ACCEPTED");
+        if (!firstAccepted) {
+          setFeedback({
+            type: "warning",
+            title: "✖ PREREQUISITE MISSING",
+            details: "Accept an organizational cause first so the lab can test skipping the approval gate on an unapproved control."
+          });
+          return;
+        }
+        targetCtrl = await createControl(
+          {
+            hazardId: selectedHazardId,
+            causeId: firstAccepted.id,
+            scope: newControlScope || "Unapproved Skip-Gate Probe",
+            objective: newControlObjective || "Verify PROPOSED -> IMPLEMENTING refusal",
+            dueDate: newControlDueDate,
+            verificationPlan: {
+              primaryMetric: "BOUNDARY_INTRUSION_SHARE",
+              baselineReleaseId: hazardDetail?.hazard.originating_release_id || BASELINE_RELEASE_ID,
+              targetDelta: -10.0,
+              adjacentTolerance: 5.0,
+              minDays: 28
+            }
+          },
+          token
+        );
+        const refreshed = await fetchHazardDetail(selectedHazardId, token);
+        setHazardDetail(refreshed);
+      }
+
+      await recordImplementation(
+        targetCtrl.id,
+        {
+          kind: "MANUAL",
+          completedOn: new Date().toISOString().slice(0, 10),
+          evidenceRefs: ["doc:skip-approval-probe"]
+        },
+        token
+      );
+
+      setFeedback({
+        type: "error",
+        title: "SECURITY FAILURE: UNAPPROVED IMPLEMENTATION ACCEPTED",
+        details: "Backend allowed implementation receipt without prior approval."
+      });
+    } catch (err: unknown) {
+      if (err instanceof ApiError && (err.status === 409 || err.code === "CONFLICT")) {
+        setFeedback({
+          type: "conflict",
+          title: "✔ REFUSAL GATE 1: PROPOSED -> IMPLEMENTING BLOCKED (409 CONFLICT)",
+          details: `The backend refused this on purpose: ${fmtHazardErr(err)}`
+        });
+      } else {
+        setFeedback({
+          type: "error",
+          title: "✖ REFUSAL GATE 1 TEST ERROR",
+          details: fmtHazardErr(err)
+        });
+      }
+    } finally {
+      setLoading(false);
+    }
   };
 
   const handleTestVersionBoundRejection = async () => {
-    if (!token || !selectedControl) return;
+    if (!token || !selectedControl) {
+      setFeedback({
+        type: "warning",
+        title: "✖ NO CONTROL SELECTED",
+        details: "Create or select a control first to test version-bound If-Match conflict detection."
+      });
+      return;
+    }
     try {
       setLoading(true);
-      // Attempt approval with intentionally stale If-Match (e.g. current + 99)
+      setFeedback(null);
+      // Attempt approval with intentionally stale If-Match (current + 99)
       await approveControl(selectedControl.id, selectedControl.version + 99, token);
-    } catch (err: any) {
       setFeedback({
-        type: "conflict",
-        title: "✔ REFUSAL GATE 2: STALE VERSION REJECTED (409 CONFLICT)",
-        details: `Playbook invariant verified: ${err.message}. An approval targeting version ${selectedControl.version + 99} cannot approve current version ${selectedControl.version}.`
+        type: "error",
+        title: "SECURITY FAILURE: STALE VERSION APPROVAL SUCCEEDED",
+        details: "Backend accepted stale If-Match version without 409 Conflict."
       });
+    } catch (err: unknown) {
+      if (err instanceof ApiError && (err.status === 409 || err.code === "CONFLICT")) {
+        setFeedback({
+          type: "conflict",
+          title: "✔ REFUSAL GATE 2: STALE VERSION REJECTED (409 CONFLICT)",
+          details: `The backend refused this on purpose (version ${selectedControl.version + 99} != ${selectedControl.version}): ${fmtHazardErr(err)}`
+        });
+      } else {
+        setFeedback({
+          type: "error",
+          title: "✖ STALE VERSION TEST FAILED",
+          details: fmtHazardErr(err)
+        });
+      }
     } finally {
       setLoading(false);
     }
@@ -551,8 +672,8 @@ export function HazardControlTab({ currentTenant, token }: HazardControlTabProps
   const handleTestTransferOfRisk = () => {
     setFeedback({
       type: "warning",
-      title: "✔ REFUSAL GATE 3: TRANSFER OF RISK FLAGGED",
-      details: "Simulated scenario: Primary cohort boundary intrusion dropped 20%, but adjacent on-call cohort worsened by +12% (> 5% tolerance). Suggestion Engine flagged TRANSFER_OF_RISK and blocked automatic EFFECTIVE recommendation."
+      title: "SIMULATION — REFUSAL GATE 3: TRANSFER OF RISK PREVIEW",
+      details: "Simulation preview (client-side scenario): Primary cohort boundary intrusion dropped 20%, while adjacent on-call cohort worsened by +12% (> 5% tolerance). Demonstrates how TRANSFER_OF_RISK blocks an automatic EFFECTIVE conclusion."
     });
   };
 
@@ -659,10 +780,12 @@ export function HazardControlTab({ currentTenant, token }: HazardControlTabProps
               {legalMatters.map(m => {
                 const isSelected = m.matterId === selectedMatterId;
                 return (
-                  <div
+                  <button
                     key={m.matterId}
+                    type="button"
                     onClick={() => handleSelectMatter(m.matterId)}
                     style={{
+                      textAlign: "left",
                       padding: "0.85rem",
                       borderRadius: "6px",
                       border: isSelected ? "2px solid var(--aubergine)" : "1px solid var(--border-color)",
@@ -679,7 +802,7 @@ export function HazardControlTab({ currentTenant, token }: HazardControlTabProps
                     <div style={{ fontSize: "0.75rem", color: "var(--muted-text)" }}>
                       Area: <strong>{m.practiceArea.replace("_", " ")}</strong> &bull; Court: <strong>{m.jurisdiction}</strong>
                     </div>
-                  </div>
+                  </button>
                 );
               })}
             </div>
@@ -774,7 +897,15 @@ export function HazardControlTab({ currentTenant, token }: HazardControlTabProps
                     token={token}
                     onDraftAccepted={() => {
                       if (selectedHazardId && token) {
-                        fetchHazardDetail(selectedHazardId, token).then(setHazardDetail);
+                        fetchHazardDetail(selectedHazardId, token)
+                          .then(setHazardDetail)
+                          .catch((err: unknown) => {
+                            setFeedback({
+                              type: "error",
+                              title: "✖ FAILED TO REFRESH HAZARD DETAIL",
+                              details: fmtHazardErr(err)
+                            });
+                          });
                       }
                     }}
                   />
@@ -1088,10 +1219,8 @@ export function HazardControlTab({ currentTenant, token }: HazardControlTabProps
                             className="select-control"
                             style={{ width: "100%", background: "#FFFFFF", fontSize: "0.8rem" }}
                           >
-                            <option value="ORGANIZATIONAL_POLICY">ORGANIZATIONAL_POLICY</option>
-                            <option value="WORKFLOW_RECONFIGURATION">WORKFLOW_RECONFIGURATION</option>
-                            <option value="TOOL_CONFIGURATION">TOOL_CONFIGURATION</option>
-                            <option value="STAFFING_ALLOCATION">STAFFING_ALLOCATION</option>
+                            <option value="MANUAL">MANUAL (Organizational Policy / Workflow)</option>
+                            <option value="INTEGRATED">INTEGRATED (Tool / System Configuration)</option>
                           </select>
                         </div>
                         <div>
@@ -1188,24 +1317,34 @@ export function HazardControlTab({ currentTenant, token }: HazardControlTabProps
               <div>
                 <div style={{ display: "grid", gridTemplateColumns: "1fr 1fr", gap: "1rem", marginBottom: "1rem" }}>
                   <div style={{ background: "var(--ivory)", padding: "0.75rem", borderRadius: "6px" }}>
-                    <div style={{ fontSize: "0.75rem", color: "var(--muted-text)" }}>BASELINE VALUE</div>
-                    <div style={{ fontSize: "1.25rem", fontWeight: 700 }}>32.5%</div>
-                    <div style={{ fontSize: "0.75rem" }}>Boundary Intrusion Share</div>
+                    <div style={{ fontSize: "0.75rem", color: "var(--muted-text)" }}>TARGET CRITERIA (PINNED PLAN)</div>
+                    <div style={{ fontSize: "1.25rem", fontWeight: 700 }}>
+                      -{selectedControl.verificationPlan?.criteria ?? 10}%
+                    </div>
+                    <div style={{ fontSize: "0.75rem" }}>
+                      {selectedControl.verificationPlan?.direction || "DECREASE"} BOUNDARY_INTRUSION_SHARE
+                    </div>
                   </div>
                   <div style={{ background: "var(--success-bg)", padding: "0.75rem", borderRadius: "6px" }}>
-                    <div style={{ fontSize: "0.75rem", color: "var(--muted-text)" }}>POST-IMPLEMENTATION</div>
-                    <div style={{ fontSize: "1.25rem", fontWeight: 700, color: "var(--success)" }}>14.0%</div>
-                    <div style={{ fontSize: "0.75rem", color: "var(--success)" }}>&Delta; -18.5% (Target met)</div>
+                    <div style={{ fontSize: "0.75rem", color: "var(--muted-text)" }}>EVALUATION OUTCOME</div>
+                    <div style={{ fontSize: "1.1rem", fontWeight: 700, color: "var(--success)" }}>
+                      {selectedControl.evaluation?.outcome || "AWAITING CONCLUSION"}
+                    </div>
+                    <div style={{ fontSize: "0.75rem", color: "var(--success)" }}>
+                      Pre-analysis plan locked
+                    </div>
                   </div>
                 </div>
 
                 {/* Transfer of Risk Indicator */}
                 <div style={{ background: "#F0FDF4", border: "1px solid #BBF7D0", padding: "0.75rem", borderRadius: "6px", marginBottom: "1rem" }}>
                   <div style={{ fontWeight: 700, fontSize: "0.85rem", color: "#166534" }}>
-                    ✔ No Transfer of Risk to Adjacent Cohorts
+                    Adjacent Cohort Guard (Tolerance &le; {selectedControl.verificationPlan?.adjacentTolerance ?? 5}%)
                   </div>
                   <div style={{ fontSize: "0.8rem", color: "#15803D" }}>
-                    Adjacent On-Call Group: 8.0% &rarr; 9.0% (&Delta; +1.0% &le; 5.0% tolerance).
+                    {selectedControl.evaluation?.residualRisk
+                      ? selectedControl.evaluation.residualRisk
+                      : "Pending human reviewer evaluation conclusion."}
                   </div>
                 </div>
 
@@ -1359,10 +1498,10 @@ export function HazardControlTab({ currentTenant, token }: HazardControlTabProps
             className="lab-card-btn border-cyan"
           >
             <div className="lab-btn-title" style={{ color: "#7DD3FC" }}>
-              3. Transfer of Risk Flag
+              3. Transfer of Risk Flag (Simulation)
             </div>
             <div className="lab-btn-desc">
-              Evaluates suggestion when adjacent cohort worsens &gt; tolerance. Blocks clean EFFECTIVE outcome.
+              Simulation preview: illustrates adjacent cohort degradation &gt; tolerance blocking clean EFFECTIVE conclusion.
             </div>
           </button>
         </div>

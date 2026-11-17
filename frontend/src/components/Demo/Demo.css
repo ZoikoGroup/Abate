@@ -795,12 +795,50 @@
 
 .status-409 {
   background-color: #FEF3C7;
-  color: #B45309;
+  color: #92400E;
 }
 
 .status-4xx {
   background-color: var(--abate-rose-light);
   color: var(--abate-rose);
+}
+
+.status-expected-refusal,
+.expected-refusal-badge {
+  background-color: #EFF6FF;
+  color: #1D4ED8;
+  border: 1px solid #93C5FD;
+  border-radius: 4px;
+  padding: 2px 7px;
+  font-size: 0.74rem;
+  font-weight: 700;
+  display: inline-flex;
+  align-items: center;
+  gap: 0.3rem;
+  white-space: nowrap;
+  line-height: 1.3;
+}
+
+.expected-refusal-banner {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: 0.55rem;
+  width: 100%;
+  padding: 0.45rem 0.75rem;
+  background-color: #EFF6FF;
+  border: 1px solid #93C5FD;
+  border-left: 3px solid #1D4ED8;
+  border-radius: 6px;
+}
+
+.expected-refusal-note {
+  margin: 0;
+  padding: 0;
+  color: #1E3A8A;
+  font-size: 0.78rem;
+  font-weight: 600;
+  line-height: 1.35;
 }
 
 .status-5xx {
@@ -1174,6 +1212,15 @@
   background-color: rgba(43, 27, 56, 0.08);
   padding: 2px 6px;
   border-radius: 4px;
+  white-space: nowrap;
+  display: inline-block;
+}
+
+.http-status-pill.status-expected-refusal {
+  background-color: #EFF6FF;
+  color: #1D4ED8;
+  border: 1px solid #93C5FD;
+  font-weight: 700;
 }
 
 .http-status-pill.guarded {
@@ -1421,4 +1468,56 @@
   .demo-header-title {
     font-size: 1rem;
   }
+}
+
+
+/* Plain-English Reason & Abate Purpose Banner */
+.abate-intro-details {
+  margin: 14px 28px 0 28px;
+  background-color: #FFFFFF;
+  border: 1px solid var(--abate-border);
+  border-left: 4px solid var(--abate-aubergine);
+  border-radius: 6px;
+  padding: 10px 16px;
+  color: var(--abate-graphite);
+}
+
+.abate-intro-details summary {
+  cursor: pointer;
+  font-weight: 700;
+  color: var(--abate-aubergine);
+  font-size: 0.92rem;
+}
+
+.abate-intro-body {
+  margin-top: 10px;
+  display: grid;
+  gap: 6px;
+  font-size: 0.9rem;
+  line-height: 1.45;
+  color: #1F242A;
+}
+
+.why-used-box {
+  margin-top: 12px;
+  background-color: #F6F4EF;
+  border-left: 4px solid var(--abate-aubergine);
+  padding: 10px 16px;
+  border-radius: 0 6px 6px 0;
+}
+
+.why-used-label {
+  display: block;
+  font-size: 0.72rem;
+  font-weight: 800;
+  letter-spacing: 0.08em;
+  color: var(--abate-aubergine);
+  margin-bottom: 4px;
+}
+
+.why-used-text {
+  font-size: 0.92rem;
+  color: #1F242A;
+  margin: 0;
+  line-height: 1.45;
 }

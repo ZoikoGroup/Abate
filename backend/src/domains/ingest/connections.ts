@@ -201,6 +201,12 @@ export async function setConnectionState(args: {
         throw new AppError("NOT_FOUND", "Not found.");
       }
 
+      const verRes = await tx.q(
+        `SELECT COALESCE(MAX(aggregate_version), 0)::int AS max_ver FROM outbox_event WHERE aggregate_id = $1 AND aggregate = 'connection'`,
+        [args.connectionId]
+      );
+      const nextVersion = Number(verRes.rows[0]?.max_ver ?? 0) + 1;
+
       const enriched = enrichConnectionRow(updateRes.rows[0], new Date());
 
       return {
@@ -210,7 +216,7 @@ export async function setConnectionState(args: {
           command: "connection.state_change",
           resourceType: "connection",
           resourceId: args.connectionId,
-          resourceVersion: 1,
+          resourceVersion: nextVersion,
           result: "SUCCESS",
           evidenceRefs: [`connection/${args.connectionId}`, `state/${args.newState}`]
         },
@@ -218,7 +224,7 @@ export async function setConnectionState(args: {
           {
             aggregate: "connection",
             aggregateId: args.connectionId,
-            aggregateVersion: 1,
+            aggregateVersion: nextVersion,
             eventType: "connection.state_changed",
             schemaVersion: "v1.0",
             purpose: args.who.purpose,

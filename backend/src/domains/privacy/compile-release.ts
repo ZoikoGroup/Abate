@@ -192,9 +192,9 @@ export async function compileRelease(
     }
 
     // 7. Deterministic Measurement Computation
-    // Retrieve work interval facts for this cohort and window
+    // Retrieve distinct work interval bounds for this cohort and window (union is idempotent)
     const factsRes = await tx.q(
-      `SELECT start_at, end_at FROM work_fact_revision
+      `SELECT DISTINCT start_at, end_at FROM work_fact_revision
        WHERE tenant_id = $1 AND kind = 'WORK' AND start_at >= $2 AND end_at <= $3`,
       [tenantId, q.periodStart, q.periodEnd]
     );

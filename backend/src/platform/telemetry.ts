@@ -112,6 +112,9 @@ export function telemetryMiddleware(req: Request, res: Response, next: NextFunct
   const started = process.hrtime.bigint();
   res.locals.requestId = requestId;
   res.setHeader("X-Request-Id", requestId);
+  if (req.path.startsWith("/api/v2/")) {
+    res.setHeader("Cache-Control", "no-store");
+  }
 
   res.on("finish", () => {
     const route = req.route ? `${req.baseUrl}${req.route.path}` : "UNMATCHED";

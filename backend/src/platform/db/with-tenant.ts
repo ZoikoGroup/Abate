@@ -659,6 +659,16 @@ class MemoryClient {
       return { rows: ev ? [ev] : [], rowCount: ev ? 1 : 0, command: "SELECT", oid: 0, fields: [] };
     }
 
+    // Outbox aggregate max version lookup
+    if (upper.includes("FROM OUTBOX_EVENT") && upper.includes("MAX(AGGREGATE_VERSION)")) {
+      const aggId = params[0];
+      const matching = memDb.outboxEvents.filter(
+        e => e.aggregate_id === aggId && (this.workerMode || e.tenant_id === this.tenantContext)
+      );
+      const maxVer = matching.reduce((max, e) => Math.max(max, Number(e.aggregate_version || 0)), 0);
+      return { rows: [{ max_ver: maxVer }], rowCount: 1, command: "SELECT", oid: 0, fields: [] };
+    }
+
     // Outbox count
     if (upper.includes("FROM OUTBOX_EVENT") && upper.includes("COUNT(")) {
       const matching = memDb.outboxEvents.filter(e => {
@@ -1192,7 +1202,13 @@ class MemoryClient {
 
     // Metric Definition Select
     if (upper.includes("FROM METRIC_DEFINITION")) {
-      let rows = Array.from(memDb.metricDefinitions.values());
+      const seen = new Set<string>();
+      let rows = Array.from(memDb.metricDefinitions.values()).filter(d => {
+        const k = `${d.metric_id}:${d.version}`;
+        if (seen.has(k)) return false;
+        seen.add(k);
+        return true;
+      });
       if (params.length >= 2) {
         rows = rows.filter(d => d.metric_id === params[0] && d.version === params[1]);
       } else if (params.length === 1) {
@@ -1572,15 +1588,21 @@ class MemoryClient {
 
     // Cause Update
     if (upper.includes("UPDATE CAUSE")) {
-      const [status, reviewedBy, reviewedAt, cId] = params;
+      const [status, reviewedBy, reviewedAt, cId, hazardId, tId] = params;
+      const expectedTenant = tId || this.tenantContext;
       const rec = memDb.causes.get(cId);
-      if (rec && rec.tenant_id === this.tenantContext) {
+      if (
+        rec &&
+        rec.tenant_id === expectedTenant &&
+        (!hazardId || rec.hazard_id === hazardId)
+      ) {
         rec.status = status;
         rec.reviewed_by = reviewedBy;
         rec.reviewed_at = reviewedAt;
         rec.version += 1;
         return { rows: [rec], rowCount: 1, command: "UPDATE", oid: 0, fields: [] };
       }
+      return { rows: [], rowCount: 0, command: "UPDATE", oid: 0, fields: [] };
     }
 
     // Cause Select
@@ -2428,7 +2450,7 @@ class MemoryClient {
       });
       if (upper.includes("VERSION = $3") && params.length >= 3) {
         rows = rows.filter(p => p.id === params[0] && p.version === Number(params[2]));
-      } else if (params.length > 0) {
+      } else if (upper.includes("WHERE ID = $1") && params.length > 0) {
         rows = rows.filter(p => p.id === params[0]);
       }
       return { rows, rowCount: rows.length, command: "SELECT", oid: 0, fields: [] };
@@ -2482,8 +2504,10 @@ class MemoryClient {
     // AI Work-Design Assessment Select
     if (upper.includes("FROM AI_WORKDESIGN_ASSESSMENT")) {
       let rows = Array.from(memDb.aiWorkDesignAssessments.values()).filter(a => a.tenant_id === this.tenantContext);
-      if (params.length > 0) {
+      if (upper.includes("WHERE ID = $1") && params.length > 0) {
         rows = rows.filter(a => a.id === params[0]);
+      } else if (upper.includes("ORDER BY VERSION DESC")) {
+        rows = rows.sort((a, b) => (b.version || 0) - (a.version || 0));
       }
       return { rows, rowCount: rows.length, command: "SELECT", oid: 0, fields: [] };
     }

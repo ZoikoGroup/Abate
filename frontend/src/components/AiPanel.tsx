@@ -1,6 +1,7 @@
 // frontend/src/components/AiPanel.tsx
 import { useState } from "react";
 import {
+  ApiError,
   type AiRunView,
   explainReleaseAi,
   acceptAiRun,
@@ -12,9 +13,17 @@ interface AiPanelProps {
   hazardId?: string;
   token: string | null;
   onDraftAccepted?: (result: any) => void;
+  onActionStart?: () => void;
 }
 
-export function AiPanel({ releaseId, hazardId, token, onDraftAccepted }: AiPanelProps) {
+function fmtAiErr(err: unknown, fallback: string): string {
+  if (err instanceof ApiError) {
+    return `${err.message} (Request ID: ${err.requestId})`;
+  }
+  return err instanceof Error ? err.message : fallback;
+}
+
+export function AiPanel({ releaseId, hazardId, token, onDraftAccepted, onActionStart }: AiPanelProps) {
   const [loading, setLoading] = useState(false);
   const [run, setRun] = useState<AiRunView | null>(null);
   const [question, setQuestion] = useState("");
@@ -23,6 +32,7 @@ export function AiPanel({ releaseId, hazardId, token, onDraftAccepted }: AiPanel
 
   const handleExplain = async (customQ?: string) => {
     if (!token) return;
+    onActionStart?.();
     setLoading(true);
     setErrorMsg(null);
     setNotice(null);
@@ -37,10 +47,10 @@ export function AiPanel({ releaseId, hazardId, token, onDraftAccepted }: AiPanel
         );
       }
     } catch (err: any) {
-      if (err.status === 503 || err.code === "UNAVAILABLE") {
-        setErrorMsg("AI assistance is disabled or not available right now. You can continue manually.");
+      if (err?.status === 503 || err?.code === "UNAVAILABLE") {
+        setErrorMsg(`AI assistance is disabled or unavailable right now.${err instanceof ApiError ? ` (Request ID: ${err.requestId})` : ""}`);
       } else {
-        setErrorMsg(err.message || "Failed to generate AI explanation.");
+        setErrorMsg(fmtAiErr(err, "Failed to generate AI explanation."));
       }
     } finally {
       setLoading(false);
@@ -49,7 +59,9 @@ export function AiPanel({ releaseId, hazardId, token, onDraftAccepted }: AiPanel
 
   const handleAccept = async () => {
     if (!token || !run) return;
+    onActionStart?.();
     setLoading(true);
+    setErrorMsg(null);
     try {
       const res = await acceptAiRun(
         run.id,
@@ -59,8 +71,8 @@ export function AiPanel({ releaseId, hazardId, token, onDraftAccepted }: AiPanel
       setNotice(`✔ Draft accepted as proposal. Registered decision reference: ${res.decisionRef}`);
       setRun(prev => prev ? { ...prev, status: "ACCEPTED" } : null);
       if (onDraftAccepted) onDraftAccepted(res);
-    } catch (err: any) {
-      setErrorMsg(err.message || "Failed to accept AI draft.");
+    } catch (err: unknown) {
+      setErrorMsg(fmtAiErr(err, "Failed to accept AI draft."));
     } finally {
       setLoading(false);
     }
@@ -68,13 +80,15 @@ export function AiPanel({ releaseId, hazardId, token, onDraftAccepted }: AiPanel
 
   const handleDiscard = async () => {
     if (!token || !run) return;
+    onActionStart?.();
     setLoading(true);
+    setErrorMsg(null);
     try {
       await discardAiRun(run.id, token);
       setNotice("AI proposal discarded. The manual workflow is unaffected.");
       setRun(prev => prev ? { ...prev, status: "DISCARDED" } : null);
-    } catch (err: any) {
-      setErrorMsg(err.message || "Failed to discard AI proposal.");
+    } catch (err: unknown) {
+      setErrorMsg(fmtAiErr(err, "Failed to discard AI proposal."));
     } finally {
       setLoading(false);
     }
