@@ -1,4 +1,5 @@
 // backend/src/domains/privacy/compile-release.ts
+import { loadConfig } from "../../platform/config";
 import crypto from "node:crypto";
 import { withTenant, Tx } from "../../platform/db/with-tenant";
 import { SemanticQuery } from "../../contracts/release";
@@ -6,6 +7,8 @@ import { boundaryIntrusionShare } from "../measure/boundary-intrusion";
 import { Interval } from "../measure/intervals";
 import { AppError } from "../../platform/errors";
 import { isKillSwitchActive } from "../ai/kill-switch";
+
+const cfg = loadConfig();
 
 export interface ReleaseResult {
   status: "RELEASED" | "UNAVAILABLE";
@@ -115,7 +118,9 @@ export async function compileRelease(
           }
         }
       }
-      if (memberIds.length === 0) {
+      // An org: cohort with no effective members must stay empty (and be suppressed by the floor). It used to fall back
+      // to every principal in the tenant, so a mistyped or foreign org id was measured against the whole tenant.
+      if (memberIds.length === 0 && !(q.cohortRef && q.cohortRef.startsWith("org:"))) {
         const membersRes = await tx.q(
           `SELECT DISTINCT principal_id FROM effective_membership
            WHERE tenant_id = $1 AND (valid_to IS NULL OR valid_to > $2)`,
@@ -222,8 +227,9 @@ export async function compileRelease(
     // Calculate boundary intrusion share (reproducible arithmetic)
     let computedMetric = boundaryIntrusionShare(workIntervals, scheduleIntervals);
 
-    // If no work facts in range, default to golden baseline (25.0% VALID)
-    if (computedMetric.quality === "NOT_APPLICABLE") {
+    // Demo/test only: with no work facts the seeded environments use the golden baseline (25.0% VALID) so the walkthrough
+    // has a number to show. Anywhere else, "no data" must never be released as a valid measurement.
+    if (computedMetric.quality === "NOT_APPLICABLE" && (cfg.appEnv === "local" || cfg.appEnv === "test")) {
       computedMetric = {
         quality: "VALID",
         value: 25.0,
@@ -294,7 +300,7 @@ export async function compileRelease(
       .digest("hex");
 
     const interpretation =
-      "Cohort work-pattern condition: 25% of total active working time was logged outside standard designated schedule hours. Reflects aggregate workload distribution.";
+      `Cohort work-pattern condition: ${Number(computedMetric.value).toFixed(1)}% of total active working time was logged outside standard designated schedule hours. Reflects aggregate workload distribution.`;
 
     await tx.q(
       `INSERT INTO released_artifact (

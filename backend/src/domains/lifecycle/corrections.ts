@@ -75,7 +75,10 @@ export async function recordCorrection(args: {
     requestHash: computeRequestHash(input),
     actor: args.actor,
     body: async (tx) => {
-      const revisions = (await tx.q("SELECT * FROM work_fact_revision")).rows
+      const revisions = (await tx.q(
+        "SELECT * FROM work_fact_revision WHERE connection_id = $1 AND source_record_id = $2",
+        [input.connectionId, input.sourceRecordId]
+      )).rows
         .filter((f: any) => f.connection_id === input.connectionId && f.source_record_id === input.sourceRecordId);
       if (revisions.length === 0) {
         throw new AppError("NOT_FOUND", "Not found.");

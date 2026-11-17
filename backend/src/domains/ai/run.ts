@@ -102,27 +102,62 @@ export async function loadUseCase(tx: Tx, key: string): Promise<UseCaseConfig> {
   return def;
 }
 
+// Normalise so trivial rewording (case, punctuation, accents, extra spaces, zero-width chars) cannot dodge the screen.
+function normaliseQuestion(question: string): string {
+  return question
+    .normalize("NFKD")
+    .replace(/[̀-ͯ​-‏⁠﻿]/g, "")
+    .toLowerCase()
+    .replace(/[^\p{L}\p{N}\s]/gu, " ")
+    .replace(/\s+/g, " ")
+    .trim();
+}
+
+const PERSON_NOUN = "(?:employee|worker|lawyer|solicitor|associate|partner|paralegal|staff|person|people|individual|member|colleague|trainee|intern|manager|user|banda|bande|log|karmchari)s?";
+const PERSON_TARGETING_VERB = "(?:rank|ranking|rate|score|grade|compare|list|name|identify|reveal|expose|show|find|pick|single out|flag|profile|track|monitor|batao|bata|dikhao)";
+const SUPERLATIVE = "(?:most|least|more|less|highest|lowest|worst|best|top|bottom|sabse|zyada|jyada|kam)";
+const PERSONAL_STATE = "(?:at risk|risk|tired|stressed|burn(?:ed|t)? ?out|overworked|burnt|lazy|unproductive|slow|sick|absent|late|hours|overtime|worked|working|thaka|thak|aalsi|bimar|kaam)";
+
+const PROHIBITED_REQUEST_PATTERNS: RegExp[] = [
+  // Original phrase list, kept as plain substrings of the normalised text
+  /who is most at risk/,
+  /which employee/,
+  /rank (workers|employees)/,
+  /reveal names/,
+  /list employees/,
+  /individual performance/,
+  /who worked the least/,
+  /who is lazy/,
+  // "who ... most/least/highest ... at risk/tired/hours"
+  new RegExp(`\\bwho\\b.{0,60}\\b${SUPERLATIVE}\\b.{0,40}\\b${PERSONAL_STATE}\\b`),
+  new RegExp(`\\bwho\\b.{0,30}\\b${PERSONAL_STATE}\\b.{0,40}\\b${SUPERLATIVE}\\b`),
+  // "which/what employee|lawyer|person ..."
+  new RegExp(`\\b(?:which|what|whose)\\s+(?:\\w+\\s+){0,2}${PERSON_NOUN}\\b`),
+  // "rank/list/name/identify ... employees"
+  new RegExp(`\\b${PERSON_TARGETING_VERB}\\b.{0,40}\\b${PERSON_NOUN}\\b`),
+  // individual performance / productivity / health style asks
+  /\b(?:individual|personal|per person|per employee|per worker)\b.{0,30}\b(?:performance|productivity|score|ranking|hours|health|sickness|absence)\b/,
+  // named person + judgement
+  /\b(?:is|was)\s+\w+\s+(?:lazy|slacking|underperforming|unproductive)\b/,
+  // Hinglish: kaun/kisne/kiska + superlative or state
+  new RegExp(`\\b(?:kaun|kon|kisne|kiska|kisko|kiski)\\b.{0,60}\\b${PERSONAL_STATE}\\b`),
+  new RegExp(`\\b(?:kaun|kon|kisne|kiska|kisko)\\b.{0,40}\\b${SUPERLATIVE}\\b`),
+  /\bnaam\b.{0,20}\b(?:batao|bata|do|list|dikhao)\b/,
+  /\b(?:batao|bata|dikhao)\b.{0,20}\bnaam\b/
+];
+
+export function isProhibitedRequest(question?: string): boolean {
+  if (!question) return false;
+  const text = normaliseQuestion(question);
+  return PROHIBITED_REQUEST_PATTERNS.some(re => re.test(text));
+}
+
 export function assertNotProhibitedRequest(question?: string): void {
-  if (!question) return;
-  const lower = question.toLowerCase();
-  const prohibitedTriggers = [
-    "who is most at risk",
-    "which employee",
-    "rank workers",
-    "rank employees",
-    "reveal names",
-    "list employees",
-    "individual performance",
-    "who worked the least",
-    "who is lazy"
-  ];
-  for (const trig of prohibitedTriggers) {
-    if (lower.includes(trig)) {
-      throw new AppError(
-        "VALIDATION",
-        "Requests to infer, rank, or evaluate individuals are strictly prohibited under the Zoiko Abate Governance Standard."
-      );
-    }
+  if (isProhibitedRequest(question)) {
+    throw new AppError(
+      "VALIDATION",
+      "Requests to infer, rank, or evaluate individuals are strictly prohibited under the Zoiko Abate Governance Standard."
+    );
   }
 }
 
@@ -146,7 +181,7 @@ export async function runAiUseCase(
   assertNotProhibitedRequest(input.question);
 
   // 4. Retrieve only authorized released evidence and approved knowledge
-  const items = await retrieveContext(actor, input.contextRefs);
+  const items = await retrieveContext(actor, input.contextRefs, tx);
 
   // 5. Call model through provider gateway abstraction
   const prompt = buildPrompt(uc, items, input.question || "");

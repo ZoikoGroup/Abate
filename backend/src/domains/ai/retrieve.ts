@@ -1,7 +1,8 @@
 // backend/src/domains/ai/retrieve.ts
 import { Actor } from "../../platform/command";
 import { ContextRef } from "../../contracts/ai";
-import { getRelease } from "../../domains/privacy";
+import { getRelease, getReleaseTx } from "../../domains/privacy";
+import type { Tx } from "../../platform/db/with-tenant";
 import { ReleaseView } from "../../contracts/release";
 
 export interface ContextItem {
@@ -33,13 +34,14 @@ function renderReleaseForModel(r: ReleaseView & { status: "RELEASED" }): string 
   ].join("\n");
 }
 
-export async function retrieveContext(actor: Actor, refs: ContextRef[]): Promise<ContextItem[]> {
+export async function retrieveContext(actor: Actor, refs: ContextRef[], tx?: Tx): Promise<ContextItem[]> {
   const items: ContextItem[] = [];
 
   for (const r of refs) {
     if (r.type === "RELEASE") {
       try {
-        const v = await getRelease(actor, r.id);
+        // Reuse the caller's transaction when there is one: a second checkout while holding the first starves the pool
+        const v = tx ? await getReleaseTx(tx, r.id) : await getRelease(actor, r.id);
         // The one read path from Phase 3: suppressed, stale, or unavailable means model NEVER sees a value
         if (v.status !== "RELEASED") {
           continue;

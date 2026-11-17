@@ -9,7 +9,7 @@ import { deriveConnectionHealth, ConnectionHealth } from "../ingest/freshness";
 import { resolveTenantCoverage } from "../lifecycle/jurisdiction";
 
 const cfg = loadConfig();
-const SIGNING_KEY = `${cfg.authSecret}:diagnostic-receipts`;
+const SIGNING_KEY = `${cfg.supportAuthSecret}:diagnostic-receipts`;
 
 export const DIAGNOSTIC_SCHEMA = "abate.diagnostic-receipt.v1";
 

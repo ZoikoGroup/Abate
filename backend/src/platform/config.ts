@@ -26,6 +26,7 @@ export interface AppConfig {
   authAudience: string;
   authSecret: string;
   actionGrantSecret: string;
+  pseudonymSecret: string;
   supportAuthSecret: string;
   fixedClock: string;
   disableDevToken: boolean;
@@ -130,6 +131,10 @@ function resolveObjectStoreMode(appEnv: AppEnv, env: NodeJS.ProcessEnv): ObjectS
 
 export function buildConfig(inputEnv: NodeJS.ProcessEnv): AppConfig {
   const { env } = resolveSecretEnv(inputEnv);
+  // NODE_ENV=production with APP_ENV unset used to silently run as "local" (dev token minting, seeded fixtures)
+  if (env.NODE_ENV === "production" && !env.APP_ENV) {
+    throw new Error("APP_ENV must be set explicitly when NODE_ENV=production.");
+  }
   const appEnv = (env.APP_ENV || "local") as AppEnv;
   const clientUrl = env.CLIENT_URL || "http://localhost:5173";
   const hardened = isHardenedEnv(appEnv);
@@ -151,6 +156,10 @@ export function buildConfig(inputEnv: NodeJS.ProcessEnv): AppConfig {
     authIssuer: env.AUTH_ISSUER || "http://localhost:5000/auth",
     authAudience: env.AUTH_AUDIENCE || "abate-api",
     authSecret: env.AUTH_SECRET || DEV_DEFAULTS.authSecret,
+    // Key material for subject pseudonyms and erasure tombstones, kept apart from the JWT secret so rotating or leaking
+    // the login key neither re-identifies pseudonyms nor breaks erasure/dedupe. Falls back to AUTH_SECRET only in
+    // local/test so seeded data keeps resolving; staging/production must set it (see validateRuntimeConfig).
+    pseudonymSecret: env.PSEUDONYM_SECRET || env.AUTH_SECRET || DEV_DEFAULTS.authSecret,
     actionGrantSecret: env.ACTION_GRANT_SECRET || DEV_DEFAULTS.actionGrantSecret,
     supportAuthSecret: env.SUPPORT_AUTH_SECRET || DEV_DEFAULTS.supportAuthSecret,
     fixedClock: env.FIXED_CLOCK || DEV_DEFAULTS.fixedClock,
@@ -198,6 +207,7 @@ export function validateRuntimeConfig(cfg: AppConfig, inputEnv: NodeJS.ProcessEn
     ["AUTH_SECRET", cfg.authSecret, DEV_DEFAULTS.authSecret],
     ["SUPPORT_AUTH_SECRET", cfg.supportAuthSecret, DEV_DEFAULTS.supportAuthSecret],
     ["ACTION_GRANT_SECRET", cfg.actionGrantSecret, DEV_DEFAULTS.actionGrantSecret],
+    ["PSEUDONYM_SECRET", cfg.pseudonymSecret, DEV_DEFAULTS.authSecret],
     ["OBJECT_STORE_SECRET_KEY", cfg.objectStoreSecretKey, DEV_DEFAULTS.objectStoreSecretKey]
   ];
   for (const [name, value, devDefault] of secrets) {

@@ -142,6 +142,7 @@ async function run() {
         AUTH_SECRET: "a".repeat(40),
         SUPPORT_AUTH_SECRET: "b".repeat(40),
         ACTION_GRANT_SECRET: "c".repeat(40),
+        PSEUDONYM_SECRET: "e".repeat(40),
         OBJECT_STORE_SECRET_KEY: "d".repeat(40),
         OBJECT_STORE_ACCESS_KEY: "AKIA_PILOT_SECRET_MANAGER",
         OBJECT_STORE_ENDPOINT: "https://s3.eu-west-2.amazonaws.com",

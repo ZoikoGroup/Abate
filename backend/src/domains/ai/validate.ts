@@ -10,21 +10,22 @@ export const APPROVED_CONTROL_CATALOG = new Set([
   "CONTROL-REST-04"
 ]);
 
-const PROHIBITED_KEYWORDS = [
-  "employee",
-  "worker name",
-  "individual score",
-  "lazy",
-  "burnout level",
-  "depressed",
-  "anxious",
-  "performance review",
-  "rank",
-  "termination",
-  "disciplinary",
-  "sick leave reason",
-  "jane doe",
-  "john doe"
+// Matched on word boundaries (so "frank" or "ranking systems" do not trip "rank"), across every free-text field.
+const PROHIBITED_PATTERNS: RegExp[] = [
+  /\bemployees?\b/,
+  /\bworker names?\b/,
+  /\bindividual scores?\b/,
+  /\blazy\b/,
+  /\bburn(?:ed|t)?[\s-]?out levels?\b/,
+  /\bdepress(?:ed|ion)\b/,
+  /\banxious\b/,
+  /\bperformance reviews?\b/,
+  /\brank(?:s|ed|ing)?\b/,
+  /\btermination\b/,
+  /\bdisciplinary\b/,
+  /\bsick leave reasons?\b/,
+  /\bjane doe\b/,
+  /\bjohn doe\b/
 ];
 
 function extractNumbers(text: string): number[] {
@@ -53,13 +54,8 @@ function numberAllowed(num: number, ctx: ContextItem[]): boolean {
 }
 
 function mentionsIndividualOrMedical(text: string): boolean {
-  const lower = text.toLowerCase();
-  for (const kw of PROHIBITED_KEYWORDS) {
-    if (lower.includes(kw)) {
-      return true;
-    }
-  }
-  return false;
+  const lower = text.normalize("NFKD").toLowerCase();
+  return PROHIBITED_PATTERNS.some(re => re.test(lower));
 }
 
 export function validateOutput(
@@ -85,16 +81,37 @@ export function validateOutput(
   const retrievedIds = new Set(ctx.map(c => c.id));
 
   // 2. Prohibited Inference Validation (Constitutional Safety Gate)
-  for (const claim of proposal.claims) {
-    if (mentionsIndividualOrMedical(claim.text) || mentionsIndividualOrMedical(proposal.uncertainty)) {
-      return {
+  // Every free-text field is screened: title and suggestedControls used to be skipped.
+  const freeText = [
+    proposal.title,
+    proposal.uncertainty,
+    ...proposal.claims.map(c => c.text),
+    ...(proposal.suggestedControls || [])
+  ];
+  if (freeText.some(mentionsIndividualOrMedical)) {
+    return {
+      ok: false,
+      report: {
         ok: false,
-        report: {
+        failureCode: "PROHIBITED_INFERENCE",
+        details: "Proposal contains prohibited inference regarding individual identity, performance, or health."
+      }
+    };
+  }
+
+  // Numbers are checked in the title and uncertainty as well, not only in claim text.
+  for (const field of [proposal.title, proposal.uncertainty]) {
+    for (const n of extractNumbers(field)) {
+      if (!numberAllowed(n, ctx)) {
+        return {
           ok: false,
-          failureCode: "PROHIBITED_INFERENCE",
-          details: "Proposal contains prohibited inference regarding individual identity, performance, or health."
-        }
-      };
+          report: {
+            ok: false,
+            failureCode: "NUMERIC_FIDELITY",
+            details: `Number ${n} in title/uncertainty does not match any released value or authorized parameter.`
+          }
+        };
+      }
     }
   }
 

@@ -168,7 +168,7 @@ async function runTests() {
       const bare: NodeJS.ProcessEnv = { APP_ENV: appEnv };
       const problems = validateRuntimeConfig(buildConfig(bare), bare).join(" | ");
       for (const name of [
-        "AUTH_SECRET", "SUPPORT_AUTH_SECRET", "ACTION_GRANT_SECRET", "OBJECT_STORE_SECRET_KEY",
+        "AUTH_SECRET", "SUPPORT_AUTH_SECRET", "ACTION_GRANT_SECRET", "PSEUDONYM_SECRET", "OBJECT_STORE_SECRET_KEY",
         "DATABASE_URL_MIGRATOR", "DATABASE_URL_APP", "DATABASE_URL_WORKER", "OBJECT_STORE_ENDPOINT",
         "OBJECT_STORE_ACCESS_KEY", "ABATE_REQUIRE_PG"
       ]) {
@@ -182,6 +182,7 @@ async function runTests() {
       AUTH_SECRET: "a".repeat(40),
       SUPPORT_AUTH_SECRET: "b".repeat(40),
       ACTION_GRANT_SECRET: "c".repeat(40),
+      PSEUDONYM_SECRET: "e".repeat(40),
       OBJECT_STORE_SECRET_KEY: "d".repeat(40),
       OBJECT_STORE_ACCESS_KEY: "AKIAEXAMPLEACCESS",
       OBJECT_STORE_ENDPOINT: "https://s3.internal.example",

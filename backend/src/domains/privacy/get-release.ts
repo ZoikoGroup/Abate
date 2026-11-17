@@ -1,5 +1,5 @@
 // backend/src/domains/privacy/get-release.ts
-import { withTenant } from "../../platform/db/with-tenant";
+import { withTenant, Tx } from "../../platform/db/with-tenant";
 import { AppError } from "../../platform/errors";
 import { Actor } from "../../platform/command";
 import { ReleaseView } from "../../contracts/release";
@@ -10,7 +10,16 @@ import { ReleaseView } from "../../contracts/release";
  * Never performs independent arithmetic or reads protected tables.
  */
 export async function getRelease(actor: Actor, releaseId: string, expectedPlane?: "A" | "B"): Promise<ReleaseView> {
-  return withTenant(actor.tenantId, async (tx) => {
+  return withTenant(actor.tenantId, (tx) => getReleaseTx(tx, releaseId, expectedPlane));
+}
+
+/**
+ * Same read path on an already-open tenant transaction. Callers that hold a transaction MUST use this:
+ * getRelease() opens a second pooled connection, and nested checkouts exhaust the pool under load
+ * (each request pins two connections while waiting for a third).
+ */
+export async function getReleaseTx(tx: Tx, releaseId: string, expectedPlane?: "A" | "B"): Promise<ReleaseView> {
+  {
     const res = await tx.q(
       `SELECT a.*, r.status AS rstatus, COALESCE(r.plane, a.plane, 'A') AS plane FROM released_artifact a
        JOIN privacy_release r ON r.id = a.release_id
@@ -63,6 +72,5 @@ export async function getRelease(actor: Actor, releaseId: string, expectedPlane?
         ? "Work-Design Outcome (Plane B) - Not evidence that a hazard has been controlled"
         : "Verified Safe for Collective Workplace Design under ZAB-ENG-001 v1.0"
     };
-  });
+  }
 }
-
