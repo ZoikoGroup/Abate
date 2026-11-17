@@ -659,6 +659,16 @@ class MemoryClient {
       return { rows: ev ? [ev] : [], rowCount: ev ? 1 : 0, command: "SELECT", oid: 0, fields: [] };
     }
 
+    // Outbox aggregate max version lookup
+    if (upper.includes("FROM OUTBOX_EVENT") && upper.includes("MAX(AGGREGATE_VERSION)")) {
+      const aggId = params[0];
+      const matching = memDb.outboxEvents.filter(
+        e => e.aggregate_id === aggId && (this.workerMode || e.tenant_id === this.tenantContext)
+      );
+      const maxVer = matching.reduce((max, e) => Math.max(max, Number(e.aggregate_version || 0)), 0);
+      return { rows: [{ max_ver: maxVer }], rowCount: 1, command: "SELECT", oid: 0, fields: [] };
+    }
+
     // Outbox count
     if (upper.includes("FROM OUTBOX_EVENT") && upper.includes("COUNT(")) {
       const matching = memDb.outboxEvents.filter(e => {
