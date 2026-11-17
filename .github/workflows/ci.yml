@@ -9,7 +9,7 @@ on:
 jobs:
   verify:
     name: PostgreSQL Parity, Constitutional Gates & Frontend Build
-    runs-on: ubuntu-latest
+    runs-on: ubuntu-24.04
 
     services:
       postgres:
@@ -152,7 +152,7 @@ jobs:
 
   e2e-a11y:
     name: Browser E2E & WCAG 2.1 AA Accessibility (Playwright + Axe)
-    runs-on: ubuntu-latest
+    runs-on: ubuntu-24.04
     env:
       APP_ENV: test
       AUTH_ISSUER: http://localhost:5000/auth
