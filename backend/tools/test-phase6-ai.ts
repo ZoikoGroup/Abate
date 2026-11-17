@@ -347,7 +347,35 @@ async function main() {
     }
   });
 
-  console.log(`\n\x1b[32m✔ Completed Phase 6 Bounded AI & Safety Test Suite: ${passed - 1}/12 tests passed.\x1b[0m\n`);
+  // Test 13: Strict budget under concurrency (advisory lock serialises reads of the remaining budget)
+  await runTest("Test 13: Concurrent AI calls cannot overshoot the monthly budget (strict lock)", async () => {
+    const ucRow = memDb.aiUseCases.get("explain_release:1");
+    assert.ok(ucRow);
+    const originalBudget = ucRow.monthly_budget_minor;
+    const refs = [{ type: "RELEASE" as const, id: "00000000-0000-4000-a003-000000000001" }];
+    try {
+      const spent = await withTenant(tenantAId, tx => getMonthlySpendMinor(tx, "explain_release"));
+      // Room for exactly one more call (estimate 10, a default run costs 3)
+      ucRow.monthly_budget_minor = spent + 12;
+
+      const results = await Promise.allSettled(
+        Array.from({ length: 4 }, () =>
+          withTenant(tenantAId, tx => runAiUseCase(tx, actorA, "explain_release", { contextRefs: refs, question: "Explain" }))
+        )
+      );
+      const ok = results.filter(r => r.status === "fulfilled").length;
+      const refused = results.filter(r => r.status === "rejected" && isCode("UNAVAILABLE")((r as PromiseRejectedResult).reason)).length;
+      assert.strictEqual(ok, 1, `exactly one concurrent call may fit the budget, got ${ok}`);
+      assert.strictEqual(refused, 3, "the rest must be refused with UNAVAILABLE");
+
+      const after = await withTenant(tenantAId, tx => getMonthlySpendMinor(tx, "explain_release"));
+      assert.ok(after <= spent + 12, `spend ${after} must not exceed budget ${spent + 12}`);
+    } finally {
+      ucRow.monthly_budget_minor = originalBudget;
+    }
+  });
+
+  console.log(`\n\x1b[32m✔ Completed Phase 6 Bounded AI & Safety Test Suite: ${passed - 1}/13 tests passed.\x1b[0m\n`);
 }
 
 main().catch(err => {

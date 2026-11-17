@@ -161,6 +161,27 @@ export function assertNotProhibitedRequest(question?: string): void {
   }
 }
 
+const BUDGET_LOCK_WAIT_MS = 10_000;
+
+/**
+ * Transaction-scoped advisory lock per (tenant, use case); released automatically at COMMIT/ROLLBACK.
+ * Waiting is bounded so queued requests cannot hold pooled connections indefinitely.
+ */
+export async function lockBudget(tx: Tx, useCaseKey: string): Promise<void> {
+  await tx.q(`SET LOCAL lock_timeout = '${BUDGET_LOCK_WAIT_MS}ms'`);
+  try {
+    await tx.q("SELECT pg_advisory_xact_lock(hashtextextended($1, 0))", [`ai-budget:${tx.tenantId}:${useCaseKey}`]);
+  } catch (err: any) {
+    if (err?.code === "55P03") { // lock_not_available
+      throw new AppError("UNAVAILABLE", "AI assistance is busy for this use case. Retry shortly.");
+    }
+    throw err;
+  } finally {
+    // Don't leak the short timeout into whatever else the caller does in this transaction
+    await tx.q("RESET lock_timeout").catch(() => { });
+  }
+}
+
 /** Spend so far this calendar month (UTC) for one use case in the current tenant, across every run status. */
 export async function getMonthlySpendMinor(tx: Tx, useCaseKey: string, now: Date = new Date()): Promise<number> {
   const monthStart = new Date(Date.UTC(now.getUTCFullYear(), now.getUTCMonth(), 1)).toISOString();
@@ -196,6 +217,9 @@ export async function runAiUseCase(
 
   // 5. Call model through provider gateway abstraction
   const prompt = buildPrompt(uc, items, input.question || "");
+  // 5b. Strict budget: serialise this tenant's runs of this use case until commit so concurrent calls cannot all read
+  // the same "remaining budget" and overshoot it. Must precede any write in this transaction.
+  await lockBudget(tx, uc.key);
   const spentMinor = await getMonthlySpendMinor(tx, uc.key);
   const raw = await callModel(uc, prompt, undefined, spentMinor);
 
