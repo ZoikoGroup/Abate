@@ -51,3 +51,12 @@ This ledger records human governance approvals required before **Stage C (Indepe
 - **Measured Release p95 / Target (`<= 1500ms`)**: `TBD`
 - **Measured PG Restore + Reconciliation RTO / Target (`<= 4h`)**: `TBD`
 - **SRE Owner / Release Owner Sign-Off**: `_______________________` | **Date**: `YYYY-MM-DD`
+
+---
+
+## 5. BE-001–BE-010 Spec Reconciliation & Named Release Authority
+- **Reference**: `docs/governance/be-spec-reconciliation.md` (`DRAFT`), `docs/architecture/ADR-001` through `ADR-005` (`DRAFT`)
+- **BE-001–010 Spec Holder Name**: `_______________________` | **Date**: `YYYY-MM-DD`
+- **Status**: `DRAFT — PENDING HUMAN REVIEW` (confirm acceptance or file redlines against `CR-01`–`CR-05`)
+- **Confirmed Named Release Authority (authorized to run `sign-dossier.ts`)**: `_______________________` | **Date Confirmed**: `YYYY-MM-DD`
+

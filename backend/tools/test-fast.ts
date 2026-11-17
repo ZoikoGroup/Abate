@@ -189,10 +189,19 @@ async function runTests() {
       DATABASE_URL_MIGRATOR: "postgres://m:x@db.internal:5432/abate",
       DATABASE_URL_APP: "postgres://a:x@db.internal:5432/abate",
       DATABASE_URL_WORKER: "postgres://w:x@db.internal:5432/abate",
-      ABATE_REQUIRE_PG: "1"
+      ABATE_REQUIRE_PG: "1",
+      CLIENT_URL: "https://abate.internal.example",
+      AUTH_ISSUER: "https://idp.internal.example/",
+      OIDC_JWKS_URI: "https://idp.internal.example/.well-known/jwks.json"
     };
     assert.deepStrictEqual(validateRuntimeConfig(buildConfig(good), good), []);
     assert.doesNotThrow(() => assertRuntimeConfig(buildConfig(good), good));
+
+    const noOidc = { ...good, OIDC_JWKS_URI: "" };
+    assert.ok(validateRuntimeConfig(buildConfig(noOidc), noOidc).some(p => p.includes("OIDC_JWKS_URI")));
+
+    const insecureClient = { ...good, CLIENT_URL: "http://abate.internal.example" };
+    assert.ok(validateRuntimeConfig(buildConfig(insecureClient), insecureClient).some(p => p.startsWith("CLIENT_URL")));
 
     const short = { ...good, AUTH_SECRET: "short" };
     assert.ok(validateRuntimeConfig(buildConfig(short), short).some(p => p.startsWith("AUTH_SECRET") && p.includes("32")));
@@ -218,22 +227,22 @@ async function runTests() {
   await it("B8 Zero impersonation: support and tenant credentials are mutually unusable", async () => {
     const cfg = loadConfig();
     const supportToken = createSupportToken({ operator: "ops.alice" });
-    assert.strictEqual(authenticateSupport(`Bearer ${supportToken}`).operator, "ops.alice");
+    assert.strictEqual((await authenticateSupport(`Bearer ${supportToken}`)).operator, "ops.alice");
 
     // Support token cannot authenticate as a tenant principal
     await assert.rejects(() => authenticate(`Bearer ${supportToken}`), (e: any) => e.code === "UNAUTHENTICATED");
 
     // Tenant token cannot reach the ops plane
     const tenantToken = createDevToken({ tenantId: GOLDEN_01.tenantA.id, subject: "auth0|user-tenant-a-risk-owner" });
-    assert.throws(() => authenticateSupport(`Bearer ${tenantToken}`), (e: any) => e.code === "UNAUTHENTICATED");
+    await assert.rejects(() => authenticateSupport(`Bearer ${tenantToken}`), (e: any) => e.code === "UNAUTHENTICATED");
 
     // A support-audience token that also names a tenant is refused outright
     const bound = jwt.sign({ sub: "ops.mallory", scope: "platform-support", tenant_id: GOLDEN_01.tenantA.id }, cfg.supportAuthSecret, { issuer: cfg.authIssuer, audience: SUPPORT_AUDIENCE });
-    assert.throws(() => authenticateSupport(`Bearer ${bound}`), (e: any) => e.code === "UNAUTHENTICATED");
+    await assert.rejects(() => authenticateSupport(`Bearer ${bound}`), (e: any) => e.code === "UNAUTHENTICATED");
 
     // The tenant signing key cannot mint support access
     const forged = jwt.sign({ sub: "ops.mallory", scope: "platform-support" }, cfg.authSecret, { issuer: cfg.authIssuer, audience: SUPPORT_AUDIENCE });
-    assert.throws(() => authenticateSupport(`Bearer ${forged}`), (e: any) => e.code === "UNAUTHENTICATED");
+    await assert.rejects(() => authenticateSupport(`Bearer ${forged}`), (e: any) => e.code === "UNAUTHENTICATED");
   });
 
   await it("B9 ObjectStore: SigV4 signing, S3 bucket provisioning, putVerified & readVerified integrity", async () => {

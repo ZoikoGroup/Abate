@@ -3,7 +3,14 @@
 // Explicitly reminds users: Hashes prove files are unchanged, NOT that claims are true.
 
 import React, { useCallback, useEffect, useState } from "react";
-import { api, PRESET_TENANTS } from "../../api/client";
+import { api, ApiError, PRESET_TENANTS } from "../../api/client";
+
+function fmtVerifierErr(err: unknown, fallback: string): string {
+  if (err instanceof ApiError) {
+    return `${err.message} (Request ID: ${err.requestId})`;
+  }
+  return err instanceof Error ? err.message : fallback;
+}
 
 interface AuditVerifierTabProps {
   currentTenant: typeof PRESET_TENANTS[0];
@@ -257,23 +264,28 @@ export function AuditVerifierTab({ currentTenant, token }: AuditVerifierTabProps
   const [selectedLeafIdx, setSelectedLeafIdx] = useState<number>(0);
   const [packages, setPackages] = useState<any[]>([]);
   const [loadingLive, setLoadingLive] = useState<boolean>(false);
+  const [actionNotice, setActionNotice] = useState<string | null>(null);
 
-  const runVerification = useCallback(async (raw: string) => {
+  const runVerification = useCallback(async (raw: string, customNotice?: string) => {
     setParseError(null);
+    setActionNotice(null);
     try {
       const res = await verifyBundleInBrowser(raw);
       setReport(res);
       setSelectedLeafIdx(0);
-    } catch (err: any) {
+      if (customNotice) {
+        setActionNotice(customNotice);
+      }
+    } catch (err: unknown) {
       setReport(null);
-      setParseError(err?.message || "Invalid evidence JSON");
+      setParseError(fmtVerifierErr(err, "Invalid evidence JSON"));
     }
   }, []);
 
   const loadSampleBundle = useCallback(async () => {
     const formatted = await createSampleBundleJson(currentTenant.id);
     setBundleJson(formatted);
-    await runVerification(formatted);
+    await runVerification(formatted, "Loaded client-side sample bundle and verified WebCrypto digests.");
   }, [currentTenant.id, runVerification]);
 
   useEffect(() => {
@@ -285,10 +297,11 @@ export function AuditVerifierTab({ currentTenant, token }: AuditVerifierTabProps
         setBundleJson(formatted);
         setReport(res);
         setParseError(null);
+        setActionNotice(null);
         setSelectedLeafIdx(0);
       })
-      .catch((err: any) => {
-        if (!cancelled) setParseError(err?.message || "Failed to load sample bundle");
+      .catch((err: unknown) => {
+        if (!cancelled) setParseError(fmtVerifierErr(err, "Failed to load sample bundle"));
       });
     return () => {
       cancelled = true;
@@ -301,8 +314,8 @@ export function AuditVerifierTab({ currentTenant, token }: AuditVerifierTabProps
     try {
       const list = await api<any[]>("/api/v2/evidence-packages", { token });
       setPackages(Array.isArray(list) ? list : []);
-    } catch (err: any) {
-      setParseError(err?.message || "Failed to list evidence packages");
+    } catch (err: unknown) {
+      setParseError(fmtVerifierErr(err, "Failed to list evidence packages"));
     } finally {
       setLoadingLive(false);
     }
@@ -311,6 +324,8 @@ export function AuditVerifierTab({ currentTenant, token }: AuditVerifierTabProps
   const handleIssueLivePackage = async () => {
     if (!token) return;
     setLoadingLive(true);
+    setParseError(null);
+    setActionNotice(null);
     try {
       const pkg = await api<any>("/api/v2/evidence-packages", {
         method: "POST",
@@ -319,10 +334,13 @@ export function AuditVerifierTab({ currentTenant, token }: AuditVerifierTabProps
       });
       const formatted = JSON.stringify(pkg, null, 2);
       setBundleJson(formatted);
-      await runVerification(formatted);
+      await runVerification(
+        formatted,
+        `Issued & verified live backend evidence package${pkg?.manifest?.packageId ? ` (${pkg.manifest.packageId})` : ""}.`
+      );
       await handleLoadServerPackages();
-    } catch (err: any) {
-      setParseError(err?.message || "Failed to issue live evidence package");
+    } catch (err: unknown) {
+      setParseError(fmtVerifierErr(err, "Failed to issue live evidence package"));
     } finally {
       setLoadingLive(false);
     }
@@ -415,6 +433,12 @@ export function AuditVerifierTab({ currentTenant, token }: AuditVerifierTabProps
           </p>
         )}
 
+        {actionNotice && (
+          <div className="feedback-alert alert-success" role="status" style={{ marginBottom: "0.75rem" }}>
+            <p>{actionNotice}</p>
+          </div>
+        )}
+
         {parseError && (
           <div className="feedback-alert alert-error" role="alert">
             <div className="feedback-title">Verification Error</div>
@@ -469,13 +493,20 @@ export function AuditVerifierTab({ currentTenant, token }: AuditVerifierTabProps
                     {report.itemResults.map((item, idx) => (
                       <tr
                         key={`${item.type}-${item.id}-${idx}`}
-                        onClick={() => setSelectedLeafIdx(idx)}
                         style={{
-                          cursor: "pointer",
                           background: selectedLeafIdx === idx ? "rgba(49, 46, 129, 0.08)" : undefined
                         }}
                       >
-                        <td className="monospace text-sm">{idx}</td>
+                        <td className="monospace text-sm">
+                          <button
+                            type="button"
+                            className="btn-link"
+                            onClick={() => setSelectedLeafIdx(idx)}
+                            aria-label={`Inspect Merkle proof for leaf ${idx}: ${item.type}`}
+                          >
+                            #{idx}
+                          </button>
+                        </td>
                         <td className="text-sm">
                           <strong>{item.type}</strong> v{item.version}
                           <div className="monospace" style={{ fontSize: "0.75rem", opacity: 0.75 }}>

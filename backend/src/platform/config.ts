@@ -1,4 +1,6 @@
 // backend/src/platform/config.ts
+import fs from "node:fs";
+import path from "node:path";
 import dotenv from "dotenv";
 
 dotenv.config();
@@ -27,6 +29,19 @@ export interface AppConfig {
   pseudonymSecret: string;
   supportAuthSecret: string;
   fixedClock: string;
+  disableDevToken: boolean;
+  oidcJwksUri: string;
+  oidcJwksJson: string;
+  oidcPublicKeyPem: string;
+  oidcAuthorizationEndpoint: string;
+  oidcTokenEndpoint: string;
+  oidcClientId: string;
+  oidcTenantClaim: string;
+  oidcRoleClaim: string;
+  structuredLogs: boolean;
+  metricsAuthToken: string;
+  alertWebhookUrl: string;
+  cookieSecure: boolean;
 }
 
 // Development-only fallbacks. These exact values are refused outside local and test.
@@ -51,6 +66,60 @@ export function isHardenedEnv(appEnv: string): boolean {
   return appEnv === "staging" || appEnv === "production";
 }
 
+export function isDevTokenEnabled(cfg: Pick<AppConfig, "appEnv" | "disableDevToken">): boolean {
+  return (cfg.appEnv === "local" || cfg.appEnv === "test") && !cfg.disableDevToken;
+}
+
+interface ResolvedSecretEnv {
+  env: NodeJS.ProcessEnv;
+  errors: string[];
+}
+
+function resolveSecretEnv(inputEnv: NodeJS.ProcessEnv): ResolvedSecretEnv {
+  const effective: NodeJS.ProcessEnv = { ...inputEnv };
+  const errors: string[] = [];
+
+  if (inputEnv.ABATE_SECRETS_FILE) {
+    try {
+      const raw = fs.readFileSync(inputEnv.ABATE_SECRETS_FILE, "utf-8");
+      const parsed = JSON.parse(raw);
+      if (!parsed || typeof parsed !== "object" || Array.isArray(parsed)) {
+        errors.push("ABATE_SECRETS_FILE must contain a JSON object");
+      } else {
+        for (const [key, val] of Object.entries(parsed)) {
+          if (/^[A-Z][A-Z0-9_]*$/.test(key) && val !== null && val !== undefined && !effective[key]) {
+            effective[key] = typeof val === "string" ? val : JSON.stringify(val);
+          }
+        }
+      }
+    } catch {
+      errors.push("ABATE_SECRETS_FILE could not be read or parsed as JSON");
+    }
+  }
+
+  if (inputEnv.ABATE_SECRETS_DIR) {
+    try {
+      const entries = fs.readdirSync(inputEnv.ABATE_SECRETS_DIR, { withFileTypes: true });
+      for (const entry of entries) {
+        if (!entry.isFile() || !/^[A-Z][A-Z0-9_]*$/.test(entry.name)) continue;
+        if (effective[entry.name]) continue;
+        const val = fs.readFileSync(path.join(inputEnv.ABATE_SECRETS_DIR, entry.name), "utf-8").trim();
+        if (val) {
+          effective[entry.name] = val;
+        }
+      }
+    } catch {
+      errors.push("ABATE_SECRETS_DIR could not be read");
+    }
+  }
+
+  return { env: effective, errors };
+}
+
+function normalizePem(raw: string | undefined): string {
+  return raw ? raw.replace(/\\n/g, "\n").trim() : "";
+}
+
 function resolveObjectStoreMode(appEnv: AppEnv, env: NodeJS.ProcessEnv): ObjectStoreMode {
   const raw = (env.OBJECT_STORE_MODE || "").toLowerCase();
   if (raw === "memory" || raw === "s3") {
@@ -60,18 +129,21 @@ function resolveObjectStoreMode(appEnv: AppEnv, env: NodeJS.ProcessEnv): ObjectS
   return isHardenedEnv(appEnv) ? "s3" : "memory";
 }
 
-export function buildConfig(env: NodeJS.ProcessEnv): AppConfig {
+export function buildConfig(inputEnv: NodeJS.ProcessEnv): AppConfig {
+  const { env } = resolveSecretEnv(inputEnv);
   // NODE_ENV=production with APP_ENV unset used to silently run as "local" (dev token minting, seeded fixtures)
   if (env.NODE_ENV === "production" && !env.APP_ENV) {
     throw new Error("APP_ENV must be set explicitly when NODE_ENV=production.");
   }
   const appEnv = (env.APP_ENV || "local") as AppEnv;
+  const clientUrl = env.CLIENT_URL || "http://localhost:5173";
+  const hardened = isHardenedEnv(appEnv);
 
   return {
     port: parseInt(env.PORT || "5000", 10),
     nodeEnv: env.NODE_ENV || "development",
     appEnv,
-    clientUrl: env.CLIENT_URL || "http://localhost:5173",
+    clientUrl,
     databaseUrlMigrator: env.DATABASE_URL_MIGRATOR || DEV_DEFAULTS.databaseUrlMigrator,
     databaseUrlApp: env.DATABASE_URL_APP || DEV_DEFAULTS.databaseUrlApp,
     databaseUrlWorker: env.DATABASE_URL_WORKER || DEV_DEFAULTS.databaseUrlWorker,
@@ -90,7 +162,26 @@ export function buildConfig(env: NodeJS.ProcessEnv): AppConfig {
     pseudonymSecret: env.PSEUDONYM_SECRET || env.AUTH_SECRET || DEV_DEFAULTS.authSecret,
     actionGrantSecret: env.ACTION_GRANT_SECRET || DEV_DEFAULTS.actionGrantSecret,
     supportAuthSecret: env.SUPPORT_AUTH_SECRET || DEV_DEFAULTS.supportAuthSecret,
-    fixedClock: env.FIXED_CLOCK || DEV_DEFAULTS.fixedClock
+    fixedClock: env.FIXED_CLOCK || DEV_DEFAULTS.fixedClock,
+    disableDevToken:
+      env.ABATE_DISABLE_DEV_TOKEN === "1" ||
+      env.ABATE_DISABLE_DEV_TOKEN === "true" ||
+      hardened,
+    oidcJwksUri: env.OIDC_JWKS_URI || "",
+    oidcJwksJson: env.OIDC_JWKS_JSON || "",
+    oidcPublicKeyPem: normalizePem(env.OIDC_PUBLIC_KEY_PEM),
+    oidcAuthorizationEndpoint: env.OIDC_AUTHORIZATION_ENDPOINT || "",
+    oidcTokenEndpoint: env.OIDC_TOKEN_ENDPOINT || "",
+    oidcClientId: env.OIDC_CLIENT_ID || "",
+    oidcTenantClaim: env.OIDC_TENANT_CLAIM || "tenant_id",
+    oidcRoleClaim: env.OIDC_ROLE_CLAIM || "role",
+    structuredLogs:
+      env.ABATE_STRUCTURED_LOGS === "1" ||
+      env.ABATE_STRUCTURED_LOGS === "true" ||
+      hardened,
+    metricsAuthToken: env.METRICS_AUTH_TOKEN || "",
+    alertWebhookUrl: env.ALERT_WEBHOOK_URL || "",
+    cookieSecure: clientUrl.startsWith("https://") || appEnv === "production"
   };
 }
 
@@ -99,8 +190,9 @@ export function buildConfig(env: NodeJS.ProcessEnv): AppConfig {
  * Returns the full list of problems (empty when valid); assertRuntimeConfig throws on any.
  * Never echoes secret values, only the variable names that are wrong.
  */
-export function validateRuntimeConfig(cfg: AppConfig, env: NodeJS.ProcessEnv = process.env): string[] {
-  const problems: string[] = [];
+export function validateRuntimeConfig(cfg: AppConfig, inputEnv: NodeJS.ProcessEnv = process.env): string[] {
+  const { env, errors: secretErrors } = resolveSecretEnv(inputEnv);
+  const problems: string[] = [...secretErrors];
 
   if (!KNOWN_ENVS.includes(cfg.appEnv)) {
     problems.push(`APP_ENV must be one of ${KNOWN_ENVS.join(", ")}`);
@@ -172,6 +264,20 @@ export function validateRuntimeConfig(cfg: AppConfig, env: NodeJS.ProcessEnv = p
     problems.push("FIXED_CLOCK must not be set; a frozen clock is a time-travel hazard");
   }
 
+  // Pilot OIDC & TLS hygiene: outside local/test, dev tokens are off so asymmetric OIDC keys are mandatory
+  if (!cfg.oidcJwksUri && !cfg.oidcJwksJson && !cfg.oidcPublicKeyPem) {
+    problems.push("OIDC_JWKS_URI, OIDC_JWKS_JSON, or OIDC_PUBLIC_KEY_PEM must be configured outside local/test");
+  }
+
+  if (cfg.appEnv === "production") {
+    if (!cfg.clientUrl.startsWith("https://")) {
+      problems.push("CLIENT_URL must use https:// in production");
+    }
+    if (/^https?:\/\/(localhost|127\.0\.0\.1)(:|\/|$)/i.test(cfg.authIssuer)) {
+      problems.push("AUTH_ISSUER must not use localhost in production");
+    }
+  }
+
   return problems;
 }
 
@@ -182,10 +288,50 @@ export function assertRuntimeConfig(cfg: AppConfig, env: NodeJS.ProcessEnv = pro
   }
 }
 
+let cachedConfig: { key: string; cfg: AppConfig } | null = null;
+let cachedSecretEnv: { key: string; resolved: ResolvedSecretEnv } | null = null;
+
+export function resetConfigCache(): void {
+  cachedConfig = null;
+  cachedSecretEnv = null;
+}
+
 export function loadConfig(): AppConfig {
-  const cfg = buildConfig(process.env);
+  const key = [
+    process.env.APP_ENV || "",
+    process.env.ABATE_DISABLE_DEV_TOKEN || "",
+    process.env.ABATE_SECRETS_FILE || "",
+    process.env.ABATE_SECRETS_DIR || "",
+    process.env.OIDC_JWKS_URI || "",
+    process.env.OIDC_JWKS_JSON || "",
+    process.env.OIDC_PUBLIC_KEY_PEM || "",
+    process.env.OIDC_AUTHORIZATION_ENDPOINT || "",
+    process.env.OIDC_TOKEN_ENDPOINT || "",
+    process.env.OIDC_CLIENT_ID || "",
+    process.env.AUTH_ISSUER || "",
+    process.env.AUTH_AUDIENCE || "",
+    process.env.CLIENT_URL || "",
+    process.env.ABATE_STRUCTURED_LOGS || "",
+    process.env.METRICS_AUTH_TOKEN || ""
+  ].join("|");
+
+  if (cachedConfig && cachedConfig.key === key) {
+    return cachedConfig.cfg;
+  }
+
+  const secretKey = `${process.env.ABATE_SECRETS_FILE || ""}|${process.env.ABATE_SECRETS_DIR || ""}`;
+  let effectiveInput = process.env;
+  if (process.env.ABATE_SECRETS_FILE || process.env.ABATE_SECRETS_DIR) {
+    if (!cachedSecretEnv || cachedSecretEnv.key !== secretKey) {
+      cachedSecretEnv = { key: secretKey, resolved: resolveSecretEnv(process.env) };
+    }
+    effectiveInput = { ...cachedSecretEnv.resolved.env, ...process.env };
+  }
+
+  const cfg = buildConfig(effectiveInput);
   // Fail closed at every entry point, not only at server boot
-  assertRuntimeConfig(cfg, process.env);
+  assertRuntimeConfig(cfg, effectiveInput);
+  cachedConfig = { key, cfg };
   return cfg;
 }
 

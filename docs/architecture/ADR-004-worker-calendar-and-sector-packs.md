@@ -1,6 +1,6 @@
 # ADR-004: Worker Daemon, CalendarCadence Isolation & Legal Sector Pack
 
-- **Status**: Accepted (Legal Review Open on Jurisdiction Content)
+- **Status**: **DRAFT — Pending Human Review** (agent-authored from codebase inspection; awaiting BE spec holder & Legal Reviewer acceptance)
 - **Date**: 2026-11-16
 - **Scope**: Worker Daemon (`backend/src/worker/daemon.ts`), Connectors (`CalendarCadence`), Legal Pack (`backend/src/domains/sector-legal/`)
 

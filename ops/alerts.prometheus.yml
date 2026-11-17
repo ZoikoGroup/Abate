@@ -1,0 +1,85 @@
+# ops/alerts.prometheus.yml
+# Prometheus alerting rules aligned to ops/slo-manifest.v1.yaml and GET /api/v2/ops/alerts
+groups:
+  - name: abate-pilot-slo-and-dependencies
+    interval: 30s
+    rules:
+      - alert: AbateAvailabilitySloBreach
+        expr: abate_http_availability_ratio < 0.999
+        for: 2m
+        labels:
+          severity: critical
+          service: abate-api
+        annotations:
+          summary: "Abate API 5xx availability ratio breached 99.9% SLO"
+          description: "Inspect GET /api/v2/ops/errors and structured error fingerprints."
+
+      - alert: AbateReleasedAnalyticsLatencySloBreach
+        expr: abate_http_request_duration_ms_p95{route_class="RELEASED_ANALYTICS"} > 1500
+        for: 5m
+        labels:
+          severity: critical
+          service: abate-api
+        annotations:
+          summary: "Abate privacy release p95 exceeded 1500ms SLO target"
+          description: "Inspect Postgres query plans and GET /api/v2/ops/slo."
+
+      - alert: AbateWriteLatencySloBreach
+        expr: abate_http_request_duration_ms_p95{route_class="WRITE"} > 800
+        for: 5m
+        labels:
+          severity: warning
+          service: abate-api
+        annotations:
+          summary: "Abate write route p95 exceeded 800ms SLO target"
+          description: "Inspect ingestion batch size, pool wait time, and GET /api/v2/ops/slo."
+
+      - alert: AbateReadLatencySloBreach
+        expr: abate_http_request_duration_ms_p95{route_class="READ"} > 500
+        for: 5m
+        labels:
+          severity: warning
+          service: abate-api
+        annotations:
+          summary: "Abate read route p95 exceeded 500ms SLO target"
+          description: "Inspect read pool health and GET /api/v2/ops/slo."
+
+      - alert: AbatePrivacyEngineErrorsDetected
+        expr: increase(abate_privacy_engine_errors_total[5m]) > 0
+        for: 1m
+        labels:
+          severity: critical
+          service: abate-privacy
+        annotations:
+          summary: "Privacy release compiler unexpected execution error (NOT normal k-anonymity suppression)"
+          description: "Ordinary floor<10 / overlap / residual suppressions increment abate_privacy_suppressed_total and never page."
+
+      - alert: AbateWorkerDeadLettersPresent
+        expr: increase(abate_worker_dead_letters_total[5m]) > 0
+        for: 1m
+        labels:
+          severity: critical
+          service: abate-worker
+        annotations:
+          summary: "Abate outbox worker moved events to dead_letter_event"
+          description: "Inspect GET /api/v2/ops/jobs and resolve failing downstream handlers before replay."
+
+      - alert: AbateWorkerQueueLagHigh
+        expr: abate_worker_queue_lag_ms > 60000
+        for: 5m
+        labels:
+          severity: warning
+          service: abate-worker
+        annotations:
+          summary: "Abate worker outbox lag exceeded 60s"
+          description: "Verify worker daemon liveness and Postgres connection pool health."
+
+      - alert: AbateDependencyDown
+        expr: abate_dependencies_up == 0
+        for: 1m
+        labels:
+          severity: critical
+          service: abate-api
+        annotations:
+          summary: "Required Abate dependency ({{ $labels.component }}) is unreachable"
+          description: "Check GET /api/health, Postgres connectivity, and S3 object store reachability."

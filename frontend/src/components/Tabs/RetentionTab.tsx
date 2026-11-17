@@ -1,6 +1,7 @@
 // frontend/src/components/Tabs/RetentionTab.tsx
 import { useState, useEffect, useCallback } from "react";
 import {
+  ApiError,
   PRESET_TENANTS,
   fetchRetentionState,
   fetchPackVersions,
@@ -17,6 +18,13 @@ import {
   type Connection,
   type RetentionRunStatus
 } from "../../api/client";
+
+function formatRetentionError(err: unknown): string {
+  if (err instanceof ApiError) {
+    return `${err.message} (Request ID: ${err.requestId})`;
+  }
+  return err instanceof Error ? err.message : "Operation failed.";
+}
 
 interface RetentionTabProps {
   currentTenant: typeof PRESET_TENANTS[0];
@@ -57,8 +65,8 @@ export function RetentionTab({ currentTenant, token }: RetentionTabProps) {
       setState(s);
       setVersions(v.versions);
       setConnections(c);
-    } catch (err: any) {
-      setFeedback({ kind: "error", title: "Could not load retention state", message: err.message });
+    } catch (err: unknown) {
+      setFeedback({ kind: "error", title: "Could not load retention state", message: formatRetentionError(err) });
     }
   }, [token]);
 
@@ -74,9 +82,9 @@ export function RetentionTab({ currentTenant, token }: RetentionTabProps) {
         setVersions(v.versions);
         setConnections(c);
       })
-      .catch((err: any) => {
+      .catch((err: unknown) => {
         if (!cancelled) {
-          setFeedback({ kind: "error", title: "Could not load retention state", message: err.message });
+          setFeedback({ kind: "error", title: "Could not load retention state", message: formatRetentionError(err) });
         }
       });
     return () => {
@@ -92,8 +100,9 @@ export function RetentionTab({ currentTenant, token }: RetentionTabProps) {
       const message = await fn();
       setFeedback({ kind: "success", title, message });
       await load();
-    } catch (err: any) {
-      setFeedback({ kind: "error", title: `Refused [${err.code ?? "ERROR"}]`, message: err.message });
+    } catch (err: unknown) {
+      const code = err instanceof ApiError ? err.code : "ERROR";
+      setFeedback({ kind: "error", title: `Refused [${code}]`, message: formatRetentionError(err) });
     } finally {
       setBusy(false);
     }
@@ -139,7 +148,9 @@ export function RetentionTab({ currentTenant, token }: RetentionTabProps) {
 
   const handleSeedExpired = () => act("Sample facts ingested", async () => {
     const conn = connections.find(c => c.state === "ACTIVE");
-    if (!conn) throw new Error("No ACTIVE connection to ingest through.");
+    if (!conn) {
+      throw new Error("No ACTIVE source connection available. Resume or register an ACTIVE connection in Ingestion & Work Ledger first.");
+    }
     const at = (daysAgo: number, hour: number) => {
       const d = new Date(Date.now() - daysAgo * DAY_MS);
       d.setUTCHours(hour, 0, 0, 0);
@@ -172,7 +183,10 @@ export function RetentionTab({ currentTenant, token }: RetentionTabProps) {
   return (
     <div className="tab-pane">
       {feedback && (
-        <div className={`feedback-alert ${feedback.kind === "success" ? "alert-success" : "alert-error"}`} role="status">
+        <div
+          className={`feedback-alert ${feedback.kind === "success" ? "alert-success" : "alert-error"}`}
+          role={feedback.kind === "error" ? "alert" : "status"}
+        >
           <div className="feedback-title">{feedback.title}</div>
           <p>{feedback.message}</p>
         </div>
@@ -368,9 +382,15 @@ export function RetentionTab({ currentTenant, token }: RetentionTabProps) {
         </div>
 
         <div className="button-group">
-          <button type="button" className="btn btn-secondary" disabled={busy} onClick={handleSeedExpired}>Ingest sample expired facts</button>
-          <button type="button" className="btn btn-secondary" disabled={busy} onClick={handlePreview}>Preview (dry run)</button>
-          <button type="button" className="btn btn-primary" disabled={busy} onClick={handleRun}>Run retention now</button>
+          <button type="button" className="btn btn-secondary" disabled={busy} onClick={handleSeedExpired}>
+            {busy ? "Processing..." : "Ingest sample expired facts"}
+          </button>
+          <button type="button" className="btn btn-secondary" disabled={busy} onClick={handlePreview}>
+            {busy ? "Computing..." : "Preview (dry run)"}
+          </button>
+          <button type="button" className="btn btn-primary" disabled={busy} onClick={handleRun}>
+            {busy ? "Running..." : "Run retention now"}
+          </button>
         </div>
 
         {preview && (

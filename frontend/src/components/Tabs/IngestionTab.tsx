@@ -12,6 +12,7 @@ import {
   type Connection,
   type IngestReceipt,
   type WorkFact,
+  type ZoikoTimeBatchPayload,
   PRESET_TENANTS,
   ApiError
 } from "../../api/client";
@@ -22,6 +23,13 @@ interface IngestionTabProps {
   onRefresh: () => void;
 }
 
+function withReqId(err: unknown, fallback: string): string {
+  if (err instanceof ApiError) {
+    return `${err.message} (Request ID: ${err.requestId})`;
+  }
+  return err instanceof Error ? err.message : fallback;
+}
+
 export function IngestionTab({ currentTenant, token, onRefresh }: IngestionTabProps) {
   const [contracts, setContracts] = useState<SourceContract[]>([]);
   const [selectedContractId, setSelectedContractId] = useState<string>("");
@@ -29,6 +37,7 @@ export function IngestionTab({ currentTenant, token, onRefresh }: IngestionTabPr
   const [connections, setConnections] = useState<Connection[]>([]);
   const [receipts, setReceipts] = useState<IngestReceipt[]>([]);
   const [workFacts, setWorkFacts] = useState<WorkFact[]>([]);
+  const [lastSentBatch, setLastSentBatch] = useState<ZoikoTimeBatchPayload | null>(null);
   const [loading, setLoading] = useState(false);
   const [actionLoading, setActionLoading] = useState<string | null>(null);
 
@@ -46,7 +55,7 @@ export function IngestionTab({ currentTenant, token, onRefresh }: IngestionTabPr
     setLoading(true);
     try {
       const [ctrs, conns, recs, facts] = await Promise.all([
-        fetchSourceContracts(token).catch(() => [] as SourceContract[]),
+        fetchSourceContracts(token),
         fetchConnections(token),
         fetchReceipts(token),
         fetchWorkFacts(token)
@@ -58,8 +67,12 @@ export function IngestionTab({ currentTenant, token, onRefresh }: IngestionTabPr
       setConnections(conns);
       setReceipts(recs);
       setWorkFacts(facts);
-    } catch (err: any) {
-      console.error("Failed to load ingestion data:", err);
+    } catch (err: unknown) {
+      setFeedback({
+        type: "error",
+        title: "Failed to Load Ingestion Data",
+        message: withReqId(err, "Could not fetch source contracts, connections, or receipts.")
+      });
     } finally {
       setLoading(false);
     }
@@ -69,13 +82,14 @@ export function IngestionTab({ currentTenant, token, onRefresh }: IngestionTabPr
     if (!token) return;
     let cancelled = false;
     void Promise.all([
-      fetchSourceContracts(token).catch(() => [] as SourceContract[]),
+      fetchSourceContracts(token),
       fetchConnections(token),
       fetchReceipts(token),
       fetchWorkFacts(token)
     ])
       .then(([ctrs, conns, recs, facts]) => {
         if (cancelled) return;
+        setLastSentBatch(null);
         setContracts(ctrs);
         if (ctrs.length > 0) {
           setSelectedContractId(ctrs[0].id);
@@ -84,8 +98,13 @@ export function IngestionTab({ currentTenant, token, onRefresh }: IngestionTabPr
         setReceipts(recs);
         setWorkFacts(facts);
       })
-      .catch((err) => {
-        console.error("Failed to load ingestion data:", err);
+      .catch((err: unknown) => {
+        if (cancelled) return;
+        setFeedback({
+          type: "error",
+          title: "Failed to Load Ingestion Data",
+          message: withReqId(err, "Could not load initial ingestion state.")
+        });
       });
     return () => {
       cancelled = true;
@@ -118,11 +137,11 @@ export function IngestionTab({ currentTenant, token, onRefresh }: IngestionTabPr
       });
       await loadData();
       onRefresh();
-    } catch (err: any) {
+    } catch (err: unknown) {
       setFeedback({
         type: "error",
         title: "Connection Registration Failed",
-        message: err.message || "Failed to register connection."
+        message: withReqId(err, "Failed to register connection.")
       });
     } finally {
       setActionLoading(null);
@@ -143,11 +162,11 @@ export function IngestionTab({ currentTenant, token, onRefresh }: IngestionTabPr
       });
       await loadData();
       onRefresh();
-    } catch (err: any) {
+    } catch (err: unknown) {
       setFeedback({
         type: "error",
         title: "Connection State Change Failed",
-        message: err.message || "Failed to update connection state."
+        message: withReqId(err, "Failed to update connection state.")
       });
     } finally {
       setActionLoading(null);
@@ -157,56 +176,66 @@ export function IngestionTab({ currentTenant, token, onRefresh }: IngestionTabPr
   // Test 1: Send Standard Clean Batch
   const handleSendStandardBatch = async () => {
     if (!token || connections.length === 0) return;
-    const activeConn = connections.find(c => c.state === "ACTIVE") || connections[0];
-    const batchId = `batch-${Date.now().toString(36)}`;
+    const activeConn = connections.find(c => c.state === "ACTIVE");
+    if (!activeConn) {
+      setFeedback({
+        type: "error",
+        title: "No Active Connection Available",
+        message: "Resume or register an ACTIVE source connection before ingesting a batch."
+      });
+      return;
+    }
+
+    const batchId = `batch-${Date.now().toString(36)}-${crypto.randomUUID().slice(0, 6)}`;
     const now = new Date();
     const interval1Start = new Date(now.getTime() - 2 * 3600000).toISOString();
     const interval1End = new Date(now.getTime() - 1 * 3600000).toISOString();
+
+    const batchPayload: ZoikoTimeBatchPayload = {
+      connectionId: activeConn.id,
+      batchId,
+      items: [
+        {
+          recordId: `rec-${crypto.randomUUID().slice(0, 8)}`,
+          revision: 1,
+          subjectRef: "emp-senior-analyst-049",
+          startUtc: interval1Start,
+          endUtc: interval1End,
+          workTz: "Europe/London",
+          kind: "WORK"
+        },
+        {
+          recordId: `rec-${crypto.randomUUID().slice(0, 8)}`,
+          revision: 1,
+          subjectRef: "emp-lead-counsel-102",
+          startUtc: interval1Start,
+          endUtc: interval1End,
+          workTz: "Europe/London",
+          kind: "WORK"
+        }
+      ]
+    };
 
     setActionLoading("batch-clean");
     setFeedback(null);
 
     try {
-      const receipt = await submitZoikoBatch(
-        {
-          connectionId: activeConn.id,
-          batchId,
-          items: [
-            {
-              recordId: `rec-${crypto.randomUUID().slice(0, 8)}`,
-              revision: 1,
-              subjectRef: "emp-senior-analyst-049",
-              startUtc: interval1Start,
-              endUtc: interval1End,
-              workTz: "Europe/London",
-              kind: "WORK"
-            },
-            {
-              recordId: `rec-${crypto.randomUUID().slice(0, 8)}`,
-              revision: 1,
-              subjectRef: "emp-lead-counsel-102",
-              startUtc: interval1Start,
-              endUtc: interval1End,
-              workTz: "Europe/London",
-              kind: "WORK"
-            }
-          ]
-        },
-        token
-      );
+      const receipt = await submitZoikoBatch(batchPayload, token);
+      setLastSentBatch(batchPayload);
+      const resolvedBatchId = (receipt as any).batch_id ?? (receipt as any).batchId ?? batchId;
 
       setFeedback({
         type: "success",
         title: "Standard Batch Ingested Successfully",
-        message: `Batch "${receipt.batch_id}" accepted ${receipt.accepted} records. Watermark advanced. Pseudonym hashes derived without leaking plaintext subject IDs.`
+        message: `Batch "${resolvedBatchId}" accepted ${receipt.accepted} records. Watermark advanced. Pseudonym hashes derived without leaking plaintext subject IDs.`
       });
       await loadData();
       onRefresh();
-    } catch (err: any) {
+    } catch (err: unknown) {
       setFeedback({
         type: "error",
         title: "Standard Batch Ingestion Failed",
-        message: err.message || "Ingestion error."
+        message: withReqId(err, "Ingestion error.")
       });
     } finally {
       setActionLoading(null);
@@ -215,52 +244,67 @@ export function IngestionTab({ currentTenant, token, onRefresh }: IngestionTabPr
 
   // Test 2: Send Duplicate Batch (Idempotency test)
   const handleSendDuplicateBatch = async () => {
-    if (!token || receipts.length === 0 || connections.length === 0) {
+    if (!token || connections.length === 0) {
       setFeedback({
         type: "warning",
-        title: "No Prior Batch Found",
-        message: "Please send a standard batch first before testing duplicate delivery idempotency."
+        title: "No Source Connection Available",
+        message: "Register a source connection first before testing duplicate delivery idempotency."
       });
       return;
     }
 
-    const lastReceipt = receipts[0];
-    const activeConn = connections.find(c => c.id === lastReceipt.connection_id) || connections[0];
+    const activeConn = connections.find(c => c.state === "ACTIVE");
+    if (!activeConn && !lastSentBatch) {
+      setFeedback({
+        type: "error",
+        title: "No Active Connection Available",
+        message: "Resume or register an ACTIVE source connection before running a duplicate replay."
+      });
+      return;
+    }
+
     setActionLoading("batch-duplicate");
     setFeedback(null);
 
     try {
-      const receipt = await submitZoikoBatch(
-        {
-          connectionId: activeConn.id,
-          batchId: lastReceipt.batch_id, // Replaying the exact same batch ID
+      let targetBatch = lastSentBatch;
+      if (!targetBatch || !connections.some(c => c.id === targetBatch?.connectionId && c.state === "ACTIVE")) {
+        const now = new Date();
+        const freshBatch: ZoikoTimeBatchPayload = {
+          connectionId: (activeConn || connections[0]).id,
+          batchId: `batch-replay-${Date.now().toString(36)}-${crypto.randomUUID().slice(0, 6)}`,
           items: [
             {
-              recordId: "rec-replay-static-01",
+              recordId: `rec-${crypto.randomUUID().slice(0, 8)}`,
               revision: 1,
               subjectRef: "emp-senior-analyst-049",
-              startUtc: "2026-10-28T08:00:00.000Z",
-              endUtc: "2026-10-28T09:00:00.000Z",
+              startUtc: new Date(now.getTime() - 2 * 3600000).toISOString(),
+              endUtc: new Date(now.getTime() - 1 * 3600000).toISOString(),
               workTz: "Europe/London",
               kind: "WORK"
             }
           ]
-        },
-        token
-      );
+        };
+        await submitZoikoBatch(freshBatch, token);
+        setLastSentBatch(freshBatch);
+        targetBatch = freshBatch;
+      }
+
+      const receipt = await submitZoikoBatch(targetBatch, token);
+      const resolvedBatchId = (receipt as any).batch_id ?? (receipt as any).batchId ?? targetBatch.batchId;
 
       setFeedback({
         type: "success",
         title: "Duplicate Batch Handled Idempotently",
-        message: `Replayed batch "${receipt.batch_id}". Accepted: ${receipt.accepted} new facts. Existing receipt returned without corrupting work fact counts.`
+        message: `Replayed exact batch "${resolvedBatchId}". Accepted on replay: ${receipt.accepted ?? 0} new facts (idempotent deduplication preserved ledger integrity).`
       });
       await loadData();
       onRefresh();
-    } catch (err: any) {
+    } catch (err: unknown) {
       setFeedback({
         type: "error",
         title: "Duplicate Batch Test Failed",
-        message: err.message
+        message: withReqId(err, "Failed to verify duplicate batch replay.")
       });
     } finally {
       setActionLoading(null);
@@ -312,18 +356,18 @@ export function IngestionTab({ currentTenant, token, onRefresh }: IngestionTabPr
         title: "Vulnerability Detected: Decoy Was Not Rejected!",
         message: "The server accepted forbidden fields. This should never happen under Phase 2 strict schema contracts."
       });
-    } catch (err: any) {
+    } catch (err: unknown) {
       if (err instanceof ApiError && (err.code === "VALIDATION" || err.status === 400)) {
         setFeedback({
           type: "success",
           title: "Physical Minimization Confirmed (Decoy Dropped)",
-          message: "The connector contract rejected unallowlisted surveillance fields (screenshotUrl, sickReason, windowTitle) before persistence. 0 bytes written to database or logs."
+          message: `The connector contract rejected unallowlisted surveillance fields before persistence (Request ID: ${err.requestId}). 0 bytes written to database or logs.`
         });
       } else {
         setFeedback({
-          type: "warning",
-          title: "Decoy Blocked with Error",
-          message: err.message || "Request blocked."
+          type: "error",
+          title: "Decoy Blocked with Unexpected Error",
+          message: withReqId(err, "Request blocked.")
         });
       }
     } finally {
@@ -334,7 +378,16 @@ export function IngestionTab({ currentTenant, token, onRefresh }: IngestionTabPr
   // Test 4: Send Revision 2 Correction
   const handleSendRevisionCorrection = async () => {
     if (!token || connections.length === 0) return;
-    const activeConn = connections.find(c => c.state === "ACTIVE") || connections[0];
+    const activeConn = connections.find(c => c.state === "ACTIVE");
+    if (!activeConn) {
+      setFeedback({
+        type: "error",
+        title: "No Active Connection Available",
+        message: "Resume or register an ACTIVE source connection before appending Revision 2."
+      });
+      return;
+    }
+
     const targetRecordId = workFacts[0]?.source_record_id || `rec-fixed-target-${Date.now().toString(36)}`;
     const batchId = `batch-rev2-${Date.now().toString(36)}`;
 
@@ -361,18 +414,19 @@ export function IngestionTab({ currentTenant, token, onRefresh }: IngestionTabPr
         token
       );
 
+      const resolvedBatchId = (receipt as any).batch_id ?? (receipt as any).batchId ?? batchId;
       setFeedback({
         type: "success",
         title: "Revision 2 Appended to Ledger",
-        message: `Record "${targetRecordId}" appended at revision 2 in Batch "${receipt.batch_id}". Revision 1 remains intact in the ledger for complete historical auditability.`
+        message: `Record "${targetRecordId}" appended at revision 2 in Batch "${resolvedBatchId}". Revision 1 remains intact in the ledger for complete historical auditability.`
       });
       await loadData();
       onRefresh();
-    } catch (err: any) {
+    } catch (err: unknown) {
       setFeedback({
         type: "error",
         title: "Revision 2 Correction Failed",
-        message: err.message || "Failed to append revision."
+        message: withReqId(err, "Failed to append revision.")
       });
     } finally {
       setActionLoading(null);
@@ -456,7 +510,7 @@ export function IngestionTab({ currentTenant, token, onRefresh }: IngestionTabPr
               className="btn btn-secondary"
               style={{ width: "100%" }}
               onClick={handleSendDuplicateBatch}
-              disabled={loading || actionLoading !== null || receipts.length === 0}
+              disabled={loading || actionLoading !== null || connections.length === 0}
             >
               {actionLoading === "batch-duplicate" ? "Testing..." : "Send Duplicate Replay"}
             </button>

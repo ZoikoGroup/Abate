@@ -1,7 +1,9 @@
-# BE-001 to BE-010 Implementation Reconciliation & Source-Conflict Register
+# [DRAFT — Pending Human Review] BE-001 to BE-010 Implementation Reconciliation & Source-Conflict Register
 
-**Generated**: 2026-11-16  
-**Scope**: Reconciles the implemented backend (`backend/src/`) against BE-001 through BE-010 specifications and OpenAPI 3.1 contract (`backend/src/contracts/openapi.ts`).
+- **Status**: **DRAFT — Pending Human Review** (agent-compiled from repository source code; requires human verification against authoritative BE-001–BE-010 documents)
+- **Generated**: 2026-11-16
+- **Source Access Disclosure**: Standalone `BE-001` through `BE-010` specification documents and the Gap Closure document were **not present** in this repository. This reconciliation was derived strictly from inspecting: `adr/` (`ADR-000`, `ADR-003`–`ADR-007`, `decisions-register.md`, `source-conflicts.md`), `backend/src/**` (`contracts/`, `domains/`, `platform/`, `index.ts`), `backend/db/migrations/**` (`0001`–`0082`), and `docs/**`.
+- **Scope**: Reconciles the implemented backend (`backend/src/`) against inline BE-001 through BE-010 references and OpenAPI 3.1 contract (`backend/src/contracts/openapi.ts`).
 
 ---
 

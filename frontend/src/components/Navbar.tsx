@@ -10,6 +10,9 @@ interface NavbarProps {
   onRefresh: () => void;
   loading: boolean;
   onOpenDemo?: () => void;
+  devTokenEnabled?: boolean;
+  authenticatedSubject?: string | null;
+  onSignOut?: () => void;
 }
 
 export function Navbar({
@@ -20,7 +23,10 @@ export function Navbar({
   health,
   onRefresh,
   loading,
-  onOpenDemo
+  onOpenDemo,
+  devTokenEnabled = true,
+  authenticatedSubject = null,
+  onSignOut
 }: NavbarProps) {
   const currentTenant = PRESET_TENANTS.find(t => t.id === currentTenantId) || PRESET_TENANTS[0];
 
@@ -41,7 +47,7 @@ export function Navbar({
         </div>
 
         <div className="header-status">
-          {onOpenDemo && (
+          {devTokenEnabled && onOpenDemo && (
             <button
               type="button"
               className="btn btn-primary btn-sm demo-launch-btn"
@@ -50,6 +56,16 @@ export function Navbar({
               style={{ backgroundColor: "#A83828", color: "#FFFFFF", fontWeight: "bold" }}
             >
               ✨ Live Demo Console
+            </button>
+          )}
+          {!devTokenEnabled && authenticatedSubject && onSignOut && (
+            <button
+              type="button"
+              className="btn btn-secondary btn-sm"
+              onClick={onSignOut}
+              aria-label="Sign out of OIDC session"
+            >
+              Sign Out
             </button>
           )}
           <div className={`health-indicator ${health ? "online" : "offline"}`}>
@@ -69,41 +85,60 @@ export function Navbar({
       </div>
 
       <div className="header-context-bar">
-        <div className="context-item">
-          <label htmlFor="tenant-select" className="context-label">Active Tenant Scope:</label>
-          <select
-            id="tenant-select"
-            className="select-control"
-            value={currentTenantId}
-            onChange={(e) => onSelectTenant(e.target.value)}
-          >
-            {PRESET_TENANTS.map(t => (
-              <option key={t.id} value={t.id}>
-                {t.name} [{t.region}]
-              </option>
-            ))}
-          </select>
-        </div>
+        {devTokenEnabled ? (
+          <>
+            <div className="context-item">
+              <label htmlFor="tenant-select" className="context-label">Active Tenant Scope:</label>
+              <select
+                id="tenant-select"
+                className="select-control"
+                value={currentTenantId}
+                onChange={(e) => onSelectTenant(e.target.value)}
+              >
+                {PRESET_TENANTS.map(t => (
+                  <option key={t.id} value={t.id}>
+                    {t.name} [{t.region}]
+                  </option>
+                ))}
+              </select>
+            </div>
 
-        <div className="context-item">
-          <label htmlFor="role-select" className="context-label">Effective Domain Role:</label>
-          <select
-            id="role-select"
-            className="select-control"
-            value={currentRole}
-            onChange={(e) => onSelectRole(e.target.value)}
-          >
-            <option value="RISK_OWNER">Risk Owner (S05/S07)</option>
-            <option value="CONTROL_OWNER">Control Owner</option>
-            <option value="REVIEWER">Reviewer</option>
-            <option value="EMPLOYER_ADMIN">Employer Admin</option>
-          </select>
-        </div>
+            <div className="context-item">
+              <label htmlFor="role-select" className="context-label">Effective Domain Role:</label>
+              <select
+                id="role-select"
+                className="select-control"
+                value={currentRole}
+                onChange={(e) => onSelectRole(e.target.value)}
+              >
+                <option value="RISK_OWNER">Risk Owner (S05/S07)</option>
+                <option value="CONTROL_OWNER">Control Owner</option>
+                <option value="REVIEWER">Reviewer</option>
+                <option value="EMPLOYER_ADMIN">Employer Admin</option>
+              </select>
+            </div>
 
-        <div className="context-item context-info">
-          <span className="context-label">Principal Identity:</span>
-          <span className="monospace-badge">{currentTenant.subject}</span>
-        </div>
+            <div className="context-item context-info">
+              <span className="context-label">Principal Identity:</span>
+              <span className="monospace-badge">{currentTenant.subject}</span>
+            </div>
+          </>
+        ) : (
+          <>
+            <div className="context-item context-info">
+              <span className="context-label">Active Tenant Scope:</span>
+              <span className="monospace-badge">{currentTenantId || "Unauthenticated"}</span>
+            </div>
+            <div className="context-item context-info">
+              <span className="context-label">Effective Domain Role:</span>
+              <span className="monospace-badge">{currentRole || "None"}</span>
+            </div>
+            <div className="context-item context-info">
+              <span className="context-label">OIDC Principal:</span>
+              <span className="monospace-badge">{authenticatedSubject || "Not signed in"}</span>
+            </div>
+          </>
+        )}
       </div>
     </header>
   );

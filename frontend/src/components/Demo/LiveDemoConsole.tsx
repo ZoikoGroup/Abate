@@ -13,6 +13,7 @@ interface StepConfig {
   badge: string;
   whatShowing: string;
   whatYouSay: string;
+  whyUsed: string;
   buttonLabel: string;
 }
 
@@ -23,6 +24,7 @@ const STEPS: StepConfig[] = [
     badge: "GET /api/health",
     whatShowing: "The backend is live, compiled with TypeScript, and advertises all registered domains.",
     whatYouSay: "“This is the running backend, not a mock.”",
+    whyUsed: "Abate is workplace psychosocial-risk infrastructure ('Change the work. Not the worker.') that measures cohort work conditions without individual worker surveillance. Checking /api/health and /api/info proves all backend boundaries and storage health are live.",
     buttonLabel: "Check backend"
   },
   {
@@ -31,6 +33,7 @@ const STEPS: StepConfig[] = [
     badge: "GET /api/v2/contracts/openapi.json",
     whatShowing: "One authoritative OpenAPI 3.1 specification serves as the single source of truth.",
     whatYouSay: "“The frontend is generated from this contract.”",
+    whyUsed: "Because strict Zod .strict() schemas generate one OpenAPI contract, any disallowed or surveillance field is rejected before storage rather than stripped silently.",
     buttonLabel: "Show contract"
   },
   {
@@ -39,6 +42,7 @@ const STEPS: StepConfig[] = [
     badge: "POST /api/v2/auth/token",
     whatShowing: "Identity cryptographically dictates tenant context, not user-modifiable request parameters.",
     whatYouSay: "“The tenant comes from the token.”",
+    whyUsed: "Tenants are isolated legal firms (Apex Legal Partners vs. Beacon Chambers). Binding tenant_id inside verified token claims stops callers from spoofing another firm's ID in URLs or JSON payloads.",
     buttonLabel: "Sign in as Tenant A"
   },
   {
@@ -47,14 +51,16 @@ const STEPS: StepConfig[] = [
     badge: "POST /api/v2/organizations",
     whatShowing: "Idempotency key, organization, audit event, and transactional outbox write atomically together.",
     whatYouSay: "“One click, one key.”",
+    whyUsed: "Every state change uses runCommand() inside one database transaction so business state, idempotency locks, immutable audit trails, and outbox events commit together or roll back cleanly.",
     buttonLabel: "Create organization"
   },
   {
     id: 5,
     title: "Resend Same Request",
     badge: "POST /api/v2/organizations (Replay)",
-    whatShowing: "Replaying the exact same idempotency key and body returns cached result with 0 duplicate rows.",
+    whatShowing: "Replaying the exact same idempotency key and body returns the saved result with 0 duplicate rows.",
     whatYouSay: "“Flaky network, still one record.”",
+    whyUsed: "Law firms and distributed connectors experience retries and double-clicks; claiming (tenant_id, operation, key) at the database level guarantees retries never duplicate organizations, facts, or hazard actions.",
     buttonLabel: "Resend same request"
   },
   {
@@ -63,6 +69,7 @@ const STEPS: StepConfig[] = [
     badge: "POST /api/v2/organizations (409)",
     whatShowing: "Mutating request body while reusing the same idempotency key is safely rejected with HTTP 409 Conflict.",
     whatYouSay: "“The idempotency key binds the payload hash; tampering is blocked.”",
+    whyUsed: "Comparing sha256(canonicalJson(body)) prevents a stale or reused idempotency key from silently applying altered parameters.",
     buttonLabel: "Send changed body (expect 409)"
   },
   {
@@ -71,46 +78,52 @@ const STEPS: StepConfig[] = [
     badge: "POST /api/v2/organizations (400)",
     whatShowing: "Missing the mandatory Idempotency-Key header on state-changing operations is rejected with HTTP 400 Bad Request.",
     whatYouSay: "“The gateway mandates an idempotency key on all mutations.”",
+    whyUsed: "Fail-closed validation at the API gateway ensures no client or integration can bypass retry safety on mutating requests.",
     buttonLabel: "Omit key (expect 400)"
   },
   {
     id: 8,
     title: "Switch to Tenant B",
     badge: "GET /api/v2/organizations (RLS)",
-    whatShowing: "Tenant B's session cannot see, read, or query any of Tenant A's organizations.",
+    whatShowing: "Tenant B (Beacon Chambers) cannot see, read, or query any of Tenant A's (Apex Legal Partners) organizations.",
     whatYouSay: "“Isolation is enforced in the database.”",
+    whyUsed: "Even if application code had a query bug, PostgreSQL Forced Row-Level Security (set_config('app.tenant_id', ..., true)) enforces firm-to-firm isolation inside storage under a non-owner runtime role.",
     buttonLabel: "Switch to Tenant B"
   },
   {
     id: 9,
     title: "Test Evidence",
     badge: "test-report.json",
-    whatShowing: "All 57 constitutional boundary and isolation tests pass under restricted database roles.",
+    whatShowing: "All constitutional boundary and isolation tests pass under restricted runtime roles.",
     whatYouSay: "“Not just UI: the tests prove it.”",
+    whyUsed: "Adversarial labs attack cross-tenant reads, pooled connections, forbidden decoy fields, n=9 privacy suppression, and Plane B->Plane A writes automatically before any release.",
     buttonLabel: "Load test evidence"
   },
   {
     id: 10,
     title: "Platform Release Dossier",
     badge: "GET /api/v2/release/dossier",
-    whatShowing: "Full synthetic verification stack: 8 test suites, 110 automated cases, zero P0 suite failures, ready for stakeholder review.",
-    whatYouSay: "“All phases 0 through 8 and sector packs are live, tested, and ready for review.”",
+    whatShowing: "Full synthetic verification stack across all backend suites, operational drills, and constitutional gates, ready for governance review.",
+    whatYouSay: "“All phases 0 through 8 and the UK legal sector pack are live, tested, and ready for review.”",
+    whyUsed: "Instead of informal sign-offs, Abate compiles an independently hashed Release Evidence Dossier linking executed tests, kill-switch drills, and restore verification while remaining READY FOR REVIEW until a human authority signs.",
     buttonLabel: "Inspect release dossier"
   },
   {
     id: 11,
     title: "Create Secondary Division",
     badge: "POST /api/v2/organizations (Extra)",
-    whatShowing: "Creates a secondary practice unit with a verified fresh idempotency key through the atomic runCommand pipeline.",
+    whatShowing: "Creates a secondary practice division with a fresh idempotency key through the atomic runCommand pipeline.",
     whatYouSay: "“Each distinct business unit receives its own atomic transaction and fresh key.”",
+    whyUsed: "Proves idempotency only blocks repeated retries of the same intent while letting distinct cohorts/divisions be modeled separately for cohort-level (n >= 10) risk analysis.",
     buttonLabel: "Create secondary division"
   },
   {
     id: 12,
     title: "Verify Organization Record",
     badge: "GET /api/v2/organizations/:id (Extra)",
-    whatShowing: "Direct resource lookup confirms authoritative persistence, tenant binding, and complete audit metadata.",
+    whatShowing: "Direct resource lookup confirms authoritative persistence, tenant binding, and complete audit correlation.",
     whatYouSay: "“Authoritative data is instantly available to verified tenant roles.”",
+    whyUsed: "Confirms single-record RLS enforcement and X-Request-Id traceability across the entire read/write cycle.",
     buttonLabel: "Verify organization record"
   }
 ];
@@ -137,20 +150,24 @@ export const LiveDemoConsole: React.FC<LiveDemoConsoleProps> = ({ onClose }) => 
   // Dynamic state for demo steps
   const [tenantAToken, setTenantAToken] = useState<string | null>(null);
   const [tenantBToken, setTenantBToken] = useState<string | null>(null);
-  const [activeOrgName, setActiveOrgName] = useState<string>(() => "Acme Legal Solutions " + Math.random().toString(36).substring(2, 6).toUpperCase());
+  const [activeOrgName, setActiveOrgName] = useState<string>(() => "Apex Litigation Practice " + Math.random().toString(36).substring(2, 6).toUpperCase());
   const [activeIdempotencyKey, setActiveIdempotencyKey] = useState<string>(() => crypto.randomUUID());
+  const [secondaryIdempotencyKey, setSecondaryIdempotencyKey] = useState<string>(() => `idem-sec-${crypto.randomUUID().slice(0, 8)}`);
   const [createdOrgRecord, setCreatedOrgRecord] = useState<any>(null);
   const [tenantAOrgs, setTenantAOrgs] = useState<any[]>([]);
   const [tenantBOrgs, setTenantBOrgs] = useState<any[]>([]);
   const [contractPaths, setContractPaths] = useState<Array<{ method: string; path: string; summary?: string }>>([]);
   const [testReportData, setTestReportData] = useState<any>(null);
+  const [dossierData, setDossierData] = useState<any>(null);
 
   // Synchronous refs to prevent React state closure/lag issues
   const tenantATokenRef = useRef<string | null>(null);
   const tenantBTokenRef = useRef<string | null>(null);
   const activeOrgNameRef = useRef<string>(activeOrgName);
   const activeIdempotencyKeyRef = useRef<string>(activeIdempotencyKey);
+  const secondaryIdempotencyKeyRef = useRef<string>(secondaryIdempotencyKey);
   const createdOrgRecordRef = useRef<any>(null);
+  const executeStepRef = useRef<(stepId: number) => Promise<boolean>>(async () => false);
 
   // Synchronize refs when state updates
   useEffect(() => {
@@ -160,6 +177,10 @@ export const LiveDemoConsole: React.FC<LiveDemoConsoleProps> = ({ onClose }) => 
   useEffect(() => {
     activeIdempotencyKeyRef.current = activeIdempotencyKey;
   }, [activeIdempotencyKey]);
+
+  useEffect(() => {
+    secondaryIdempotencyKeyRef.current = secondaryIdempotencyKey;
+  }, [secondaryIdempotencyKey]);
 
   useEffect(() => {
     createdOrgRecordRef.current = createdOrgRecord;
@@ -216,12 +237,16 @@ export const LiveDemoConsole: React.FC<LiveDemoConsoleProps> = ({ onClose }) => 
     createdOrgRecordRef.current = null;
     setTenantAOrgs([]);
     setTenantBOrgs([]);
-    const freshOrg = "Acme Legal Solutions " + Math.random().toString(36).substring(2, 6).toUpperCase();
+    setDossierData(null);
+    const freshOrg = "Apex Litigation Practice " + Math.random().toString(36).substring(2, 6).toUpperCase();
     const freshKey = crypto.randomUUID();
+    const freshSecKey = `idem-sec-${crypto.randomUUID().slice(0, 8)}`;
     setActiveOrgName(freshOrg);
     activeOrgNameRef.current = freshOrg;
     setActiveIdempotencyKey(freshKey);
     activeIdempotencyKeyRef.current = freshKey;
+    setSecondaryIdempotencyKey(freshSecKey);
+    secondaryIdempotencyKeyRef.current = freshSecKey;
   }, []);
 
   // Step 1: Check Backend
@@ -445,6 +470,21 @@ export const LiveDemoConsole: React.FC<LiveDemoConsoleProps> = ({ onClose }) => 
     setIsRunning(true);
     try {
       const token = await ensureTenantToken("A");
+
+      // Ensure baseline idempotency record exists even if Step 6 is clicked standalone
+      if (!createdOrgRecordRef.current) {
+        const prepInspect = await demoApi("/api/v2/organizations", {
+          method: "POST",
+          token,
+          idempotencyKey: activeIdempotencyKeyRef.current,
+          body: { name: activeOrgNameRef.current }
+        });
+        if ((prepInspect.status === 200 || prepInspect.status === 201) && prepInspect.body?.id) {
+          createdOrgRecordRef.current = prepInspect.body;
+          setCreatedOrgRecord(prepInspect.body);
+        }
+      }
+
       const inspect = await demoApi("/api/v2/organizations", {
         method: "POST",
         token,
@@ -456,12 +496,13 @@ export const LiveDemoConsole: React.FC<LiveDemoConsoleProps> = ({ onClose }) => 
 
       // Expected HTTP 409 Conflict: proves idempotency key binds payload hash
       const isPass = inspect.status === 409;
+      const reqId = inspect.body?.requestId ? ` (Request ID: ${inspect.body.requestId})` : "";
       const proof: StepProof = {
         status: isPass ? ("PASS" as const) : ("FAIL" as const),
         reason: isPass
-          ? `Expected HTTP 409 Conflict returned: Server safely rejected modified payload under existing idempotency key.`
-          : `Expected 409 Conflict, but received HTTP ${inspect.status}`,
-        metric: "409 Conflict (Verified)"
+          ? `The backend refused this on purpose. Expected 409 Conflict returned: server rejected modified payload under existing idempotency key.${reqId}`
+          : `Expected 409 Conflict, but received HTTP ${inspect.status}${reqId}`,
+        metric: isPass ? "Expected: 409" : `Unexpected: ${inspect.status}`
       };
 
       setStepProofs(prev => ({ ...prev, 6: proof }));
@@ -487,12 +528,13 @@ export const LiveDemoConsole: React.FC<LiveDemoConsoleProps> = ({ onClose }) => 
 
       // Expected HTTP 400 Bad Request: proves Idempotency-Key is strictly enforced
       const isPass = inspect.status === 400;
+      const reqId = inspect.body?.requestId ? ` (Request ID: ${inspect.body.requestId})` : "";
       const proof: StepProof = {
         status: isPass ? ("PASS" as const) : ("FAIL" as const),
         reason: isPass
-          ? `Expected HTTP 400 Bad Request returned: Server strictly mandates Idempotency-Key header on all state-changing commands.`
-          : `Expected 400 Bad Request, but received HTTP ${inspect.status}`,
-        metric: "400 Bad Request (Verified)"
+          ? `The backend refused this on purpose. Expected 400 Bad Request returned: server mandates Idempotency-Key on state-changing commands.${reqId}`
+          : `Expected 400 Bad Request, but received HTTP ${inspect.status}${reqId}`,
+        metric: isPass ? "Expected: 400" : `Unexpected: ${inspect.status}`
       };
 
       setStepProofs(prev => ({ ...prev, 7: proof }));
@@ -553,17 +595,23 @@ export const LiveDemoConsole: React.FC<LiveDemoConsoleProps> = ({ onClose }) => 
       setStepInspections(prev => ({ ...prev, 9: inspect }));
       setTestReportData(inspect.body);
 
+      const total = Number(inspect.body?.total ?? 0);
+      const passed = Number(inspect.body?.passed ?? 0);
+      const failed = Number(inspect.body?.failed ?? -1);
       const isPass =
         inspect.status === 200 &&
-        inspect.body?.total >= 50 &&
-        inspect.body?.failed === 0;
+        total > 0 &&
+        passed === total &&
+        failed === 0;
 
       const proof = {
         status: isPass ? ("PASS" as const) : ("FAIL" as const),
         reason: isPass
-          ? `Auditor verification passed: All ${inspect.body?.total || 57} boundary and isolation tests passed with 0 failures.`
-          : `Test evidence unavailable. Run 'npm run test-boundaries' in backend to generate report.`,
-        metric: `${inspect.body?.passed || 0}/${inspect.body?.total || 57} Passed`
+          ? `Auditor verification passed: All ${total} boundary and isolation tests passed with 0 failures.`
+          : total > 0
+            ? `Test verification failed: ${passed}/${total} passed, ${failed} failed (HTTP ${inspect.status}).`
+            : `Test evidence unavailable (HTTP ${inspect.status}). Run 'npm --prefix backend run test-boundaries' to generate test-report.json.`,
+        metric: total > 0 ? `${passed}/${total} Passed` : "Unavailable"
       };
 
       setStepProofs(prev => ({ ...prev, 9: proof }));
@@ -580,28 +628,33 @@ export const LiveDemoConsole: React.FC<LiveDemoConsoleProps> = ({ onClose }) => 
     try {
       const inspect = await demoApi("/api/v2/release/dossier");
       setStepInspections(prev => ({ ...prev, 10: inspect }));
+      setDossierData(inspect.body);
 
-      const isPass = inspect.status === 200 && (
-        inspect.body?.status === "READY FOR REVIEW" ||
-        inspect.body?.status === "RATIFIED" ||
-        inspect.body?.decision?.outcome === "READY FOR REVIEW"
-      );
-      const totalSuites = inspect.body?.testSuites?.length || 8;
-      const dossierStatus = inspect.body?.status || "READY FOR REVIEW";
+      const dossierStatus = inspect.body?.decision?.outcome || inspect.body?.status;
+      const totalSuites = Array.isArray(inspect.body?.testSuites) ? inspect.body.testSuites.length : 0;
+      const totalChecks = inspect.body?.totalChecksPassed;
+      const p0Open = Number(inspect.body?.openFindingsBySeverity?.P0 ?? 0);
+      const isPass =
+        inspect.status === 200 &&
+        totalSuites > 0 &&
+        p0Open === 0 &&
+        (dossierStatus === "READY FOR REVIEW" || dossierStatus === "RATIFIED" || dossierStatus === "APPROVED");
+
+      const reqId = inspect.body?.requestId ? ` (Request ID: ${inspect.body.requestId})` : "";
       const proof: StepProof = {
         status: isPass ? ("PASS" as const) : ("FAIL" as const),
         reason: isPass
-          ? `Release Evidence Dossier: ${totalSuites} synthetic test suites passed, P0 gate clear. Status: ${dossierStatus}.`
-          : `Dossier unavailable: GET /api/v2/release/dossier returned HTTP ${inspect.status}.`,
-        metric: isPass ? `Status: ${inspect.body?.decision?.outcome || dossierStatus}` : "Dossier unavailable"
+          ? `Release Evidence Dossier: ${totalSuites} suites${totalChecks ? ` (${totalChecks} checks)` : ""} passed, P0 gate clear. Status: ${dossierStatus}.`
+          : `Dossier verification failed: HTTP ${inspect.status}, status "${dossierStatus || "UNKNOWN"}", suites=${totalSuites}, openP0=${p0Open}${reqId}.`,
+        metric: isPass ? `Status: ${dossierStatus}` : `Status: ${dossierStatus || "Unavailable"}`
       };
       setStepProofs(prev => ({ ...prev, 10: proof }));
       setCompletedSteps(prev => ({ ...prev, 10: isPass }));
       return isPass;
-    } catch (err: any) {
+    } catch {
       const proof: StepProof = {
         status: "FAIL",
-        reason: `Dossier unavailable: ${err?.message || "Network request failed"}.`,
+        reason: "Dossier unavailable: request failed.",
         metric: "Dossier unavailable"
       };
       setStepProofs(prev => ({ ...prev, 10: proof }));
@@ -617,7 +670,7 @@ export const LiveDemoConsole: React.FC<LiveDemoConsoleProps> = ({ onClose }) => 
     setIsRunning(true);
     try {
       const token = await ensureTenantToken("A");
-      const freshKey = `idem-sec-${crypto.randomUUID().slice(0, 8)}`;
+      const freshKey = secondaryIdempotencyKeyRef.current;
       const payload = { name: "Dispute Resolution & Advisory Division" };
 
       const inspect = await demoApi("/api/v2/organizations", {
@@ -707,6 +760,10 @@ export const LiveDemoConsole: React.FC<LiveDemoConsoleProps> = ({ onClose }) => 
     }
   };
 
+  useEffect(() => {
+    executeStepRef.current = executeStep;
+  });
+
   // Automated "Run All Steps"
   const handleRunAllSteps = async () => {
     setAutoPlaying(true);
@@ -738,7 +795,7 @@ export const LiveDemoConsole: React.FC<LiveDemoConsoleProps> = ({ onClose }) => 
       } else if (e.key === "p" || e.key === "P") {
         if (currentStep > 1) setCurrentStep(c => c - 1);
       } else if (e.key === "r" || e.key === "R") {
-        executeStep(currentStep);
+        void executeStepRef.current(currentStep);
       }
     };
 
@@ -762,7 +819,7 @@ export const LiveDemoConsole: React.FC<LiveDemoConsoleProps> = ({ onClose }) => 
           </div>
           <div className="demo-title-block">
             <h1 className="demo-header-title">Live Demo Console</h1>
-            <span className="phase-indicator">Phase 0 &amp; 1 Constitutional Verification</span>
+            <span className="phase-indicator">Phases 0&ndash;8 &amp; Legal Pack Live Verification</span>
           </div>
           {(tenantAToken || tenantBToken) && (
             <div className="demo-auth-pills" aria-label="Tenant Token State">
@@ -821,6 +878,18 @@ export const LiveDemoConsole: React.FC<LiveDemoConsoleProps> = ({ onClose }) => 
         </div>
       </header>
 
+      <details className="abate-intro-details">
+        <summary>What is Zoiko Abate &amp; Why Are We Using It? (Click to expand Plain-English Guide)</summary>
+        <div className="abate-intro-body">
+          <p>
+            <strong>What Abate Is:</strong> Workplace psychosocial-risk and work-design infrastructure (&ldquo;Change the work. Not the worker.&rdquo;) built across Phases 0&ndash;8.
+          </p>
+          <p>
+            <strong>Why We Use It:</strong> Law firms and employers need to reduce burnout and workload risk without turning into individual worker surveillance (&ldquo;bossware&rdquo;). Abate enforces firm-to-firm PostgreSQL RLS isolation (Phase 1), allowlisted ingestion without keystrokes/screenshots (Phase 2), privacy-safe cohort releases where n &ge; 10 with zero individual scores (Phase 3), version-bound control approvals and verification (Phase 4), legal holds and tamper-evident evidence packages (Phase 5), proposal-only AI with 5 kill switches (Phase 6), separated performance outcomes (Phase 7), and verifiable SLO/restore evidence dossiers (Phase 8).
+          </p>
+        </div>
+      </details>
+
       {/* Main Body: Stepper + Active Workspace */}
       <div className="demo-workspace-layout">
         {/* Left Stepper */}
@@ -850,6 +919,11 @@ export const LiveDemoConsole: React.FC<LiveDemoConsoleProps> = ({ onClose }) => 
                     <div className="step-btn-info">
                       <span className="step-btn-title">{s.title}</span>
                       <span className="step-btn-badge">{s.badge}</span>
+                      {(s.id === 6 || s.id === 7) && (
+                        <span className="expected-refusal-badge">
+                          Expected: {s.id === 6 ? 409 : 400}
+                        </span>
+                      )}
                     </div>
                     {proof && (
                       <span className={`mini-proof-tag ${proof.status.toLowerCase()}`}>
@@ -877,6 +951,11 @@ export const LiveDemoConsole: React.FC<LiveDemoConsoleProps> = ({ onClose }) => 
               <span className="script-speaker">WHAT YOU SAY:</span>
               <p className="script-quote">{activeStepConfig.whatYouSay}</p>
             </div>
+
+            <div className="why-used-box">
+              <span className="why-used-label">WHY WE USE THIS (THE REASON):</span>
+              <p className="why-used-text">{activeStepConfig.whyUsed}</p>
+            </div>
           </section>
 
           {/* Interactive Step Configuration & Action Row */}
@@ -892,7 +971,7 @@ export const LiveDemoConsole: React.FC<LiveDemoConsoleProps> = ({ onClose }) => 
                       onClick={() => runStep3("A")}
                       disabled={isRunning}
                     >
-                      Sign in Tenant A (Alice)
+                      Sign in Tenant A (Apex Legal Partners)
                     </button>
                     <button
                       type="button"
@@ -900,7 +979,7 @@ export const LiveDemoConsole: React.FC<LiveDemoConsoleProps> = ({ onClose }) => 
                       onClick={() => runStep3("B")}
                       disabled={isRunning}
                     >
-                      Sign in Tenant B (Bob)
+                      Sign in Tenant B (Beacon Chambers)
                     </button>
                   </div>
                 )}
@@ -935,6 +1014,64 @@ export const LiveDemoConsole: React.FC<LiveDemoConsoleProps> = ({ onClose }) => 
 
                 {currentStep === 6 && (
                   <div className="step-form-grid">
+                    <div className="expected-refusal-banner">
+                      <span className="expected-refusal-badge">Expected: 409</span>
+                      <span className="expected-refusal-note">The backend refused this on purpose.</span>
+                    </div>
+                    <div className="form-item">
+                      <label htmlFor="tampered-org-input">Mutated Body Name (Triggers 409):</label>
+                      <input
+                        id="tampered-org-input"
+                        type="text"
+                        value="Tampered Organization Name"
+                        readOnly
+                        className="demo-input readonly"
+                      />
+                    </div>
+                    <div className="form-item">
+                      <label htmlFor="reused-idem-input">Reused Idempotency-Key (From Step 4):</label>
+                      <input
+                        id="reused-idem-input"
+                        type="text"
+                        value={activeIdempotencyKey}
+                        readOnly
+                        className="demo-input readonly monospace"
+                      />
+                    </div>
+                  </div>
+                )}
+
+                {currentStep === 7 && (
+                  <div className="step-form-grid">
+                    <div className="expected-refusal-banner">
+                      <span className="expected-refusal-badge">Expected: 400</span>
+                      <span className="expected-refusal-note">The backend refused this on purpose.</span>
+                    </div>
+                    <div className="form-item">
+                      <label htmlFor="keyless-org-input">Payload Name:</label>
+                      <input
+                        id="keyless-org-input"
+                        type="text"
+                        value="Keyless Organization"
+                        readOnly
+                        className="demo-input readonly"
+                      />
+                    </div>
+                    <div className="form-item">
+                      <label htmlFor="omitted-key-input">Idempotency-Key Header:</label>
+                      <input
+                        id="omitted-key-input"
+                        type="text"
+                        value="OMITTED (expects 400 Bad Request)"
+                        readOnly
+                        className="demo-input readonly monospace"
+                      />
+                    </div>
+                  </div>
+                )}
+
+                {currentStep === 11 && (
+                  <div className="step-form-grid">
                     <div className="form-item">
                       <label htmlFor="org-sec-input">Secondary Division Name:</label>
                       <input
@@ -950,7 +1087,7 @@ export const LiveDemoConsole: React.FC<LiveDemoConsoleProps> = ({ onClose }) => 
                       <input
                         id="idem-fresh-input"
                         type="text"
-                        value={`idem-sec-${activeIdempotencyKey.slice(5)}`}
+                        value={secondaryIdempotencyKey}
                         readOnly
                         className="demo-input readonly monospace"
                       />
@@ -958,7 +1095,7 @@ export const LiveDemoConsole: React.FC<LiveDemoConsoleProps> = ({ onClose }) => 
                   </div>
                 )}
 
-                {currentStep === 7 && (
+                {currentStep === 12 && (
                   <div className="step-form-grid">
                     <div className="form-item">
                       <label htmlFor="lookup-org-id">Target Organization ID:</label>
@@ -975,7 +1112,7 @@ export const LiveDemoConsole: React.FC<LiveDemoConsoleProps> = ({ onClose }) => 
                       <input
                         id="lookup-tenant"
                         type="text"
-                        value="Acme Corp (Tenant A)"
+                        value="Apex Legal Partners (Tenant A)"
                         readOnly
                         className="demo-input readonly"
                       />
@@ -1011,6 +1148,7 @@ export const LiveDemoConsole: React.FC<LiveDemoConsoleProps> = ({ onClose }) => 
                   status={isRunning ? "RUNNING" : activeProof.status}
                   reason={activeProof.reason}
                   metric={activeProof.metric}
+                  expectedRefusalCode={currentStep === 6 ? 409 : currentStep === 7 ? 400 : undefined}
                 />
 
                 {currentStep < STEPS.length && (
@@ -1070,7 +1208,7 @@ export const LiveDemoConsole: React.FC<LiveDemoConsoleProps> = ({ onClose }) => 
               <div className="comparison-grid">
                 <div className="tenant-view-box tenant-a">
                   <div className="tenant-box-header">
-                    <strong>Tenant A (Acme Corp)</strong>
+                    <strong>Apex Legal Partners (Tenant A)</strong>
                     <span className="badge-count">{tenantAOrgs.length} Records</span>
                   </div>
                   <ul className="tenant-record-list">
@@ -1085,7 +1223,7 @@ export const LiveDemoConsole: React.FC<LiveDemoConsoleProps> = ({ onClose }) => 
 
                 <div className="tenant-view-box tenant-b">
                   <div className="tenant-box-header">
-                    <strong>Tenant B (Beta Corp)</strong>
+                    <strong>Beacon Chambers (Tenant B)</strong>
                     <span className="badge-count">{tenantBOrgs.length} Records</span>
                   </div>
                   {tenantBOrgs.length === 0 ? (
@@ -1138,7 +1276,9 @@ export const LiveDemoConsole: React.FC<LiveDemoConsoleProps> = ({ onClose }) => 
                         <td className="t-id">{t.id}</td>
                         <td className="t-name">{t.name}</td>
                         <td className="t-status">
-                          <span className="test-pass-badge">✔ PASSED</span>
+                          <span className={t.passed === false || t.status === "FAIL" ? "proof-result-tag fail" : "test-pass-badge"}>
+                            {t.passed === false || t.status === "FAIL" ? "✖ FAILED" : "✔ PASSED"}
+                          </span>
                         </td>
                         <td className="t-duration">{t.durationMs} ms</td>
                       </tr>
@@ -1247,7 +1387,12 @@ export const LiveDemoConsole: React.FC<LiveDemoConsoleProps> = ({ onClose }) => 
                 health: stepInspections[1]?.body,
                 tenantId: PRESET_TENANTS[0].id,
                 subject: PRESET_TENANTS[0].subject,
-                role: "RISK_OWNER"
+                role: "RISK_OWNER",
+                testReport: testReportData,
+                dossier: dossierData,
+                activeOrgName,
+                activeKey: activeIdempotencyKey,
+                secondaryKey: secondaryIdempotencyKey
               }}
             />
           </section>
@@ -1263,6 +1408,7 @@ export const LiveDemoConsole: React.FC<LiveDemoConsoleProps> = ({ onClose }) => 
             <RequestInspector
               inspection={activeInspection}
               title={`Step ${currentStep} Wire Inspection`}
+              expectedRefusalCode={currentStep === 6 ? 409 : currentStep === 7 ? 400 : undefined}
             />
           </section>
         </main>
@@ -1285,7 +1431,7 @@ export const LiveDemoConsole: React.FC<LiveDemoConsoleProps> = ({ onClose }) => 
             </div>
             <div className="modal-body">
               <p className="modal-lead">
-                Every step executed against the live backend process at <code>http://localhost:5000</code>.
+                Every step executed against the backend API routed from <code>{typeof window !== "undefined" ? window.location.origin : "same-origin"}</code>.
                 Below is the consolidated audit matrix:
               </p>
 
@@ -1304,14 +1450,26 @@ export const LiveDemoConsole: React.FC<LiveDemoConsoleProps> = ({ onClose }) => 
                   {STEPS.map((s) => {
                     const proof = stepProofs[s.id];
                     const insp = stepInspections[s.id];
+                    const expectedRefusal = s.id === 6 ? 409 : s.id === 7 ? 400 : undefined;
+                    const isExpectedRefusal = expectedRefusal !== undefined && insp?.status === expectedRefusal;
                     return (
                       <tr key={s.id}>
                         <td>{s.id}</td>
-                        <td><strong>{s.title}</strong></td>
+                        <td>
+                          <strong>{s.title}</strong>
+                          {expectedRefusal && (
+                            <div style={{ marginTop: "4px", display: "flex", alignItems: "center", gap: "6px", flexWrap: "wrap" }}>
+                              <span className="expected-refusal-badge">Expected: {expectedRefusal}</span>
+                              <small className="expected-refusal-note">The backend refused this on purpose.</small>
+                            </div>
+                          )}
+                        </td>
                         <td><code>{s.badge}</code></td>
                         <td>
                           {insp ? (
-                            <span className="http-status-pill">{insp.status} {insp.statusText}</span>
+                            <span className={`http-status-pill ${isExpectedRefusal ? "status-expected-refusal" : ""}`}>
+                              {insp.status} {insp.statusText}
+                            </span>
                           ) : (
                             <span className="unrun-pill">Pending</span>
                           )}

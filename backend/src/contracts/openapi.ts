@@ -920,6 +920,700 @@ export const openApiSpec = {
           "403": { description: "Forbidden" }
         }
       }
+    },
+    "/auth/oidc/config": {
+      get: {
+        tags: ["Authentication & Tenancy"],
+        summary: "Discover OIDC login configuration and dev-token availability",
+        security: [],
+        responses: {
+          "200": { description: "OIDC configuration payload ({ enabled, devTokenEnabled, ... })" }
+        }
+      }
+    },
+    "/auth/oidc/exchange": {
+      post: {
+        tags: ["Authentication & Tenancy"],
+        summary: "Exchange OIDC authorization code + PKCE verifier or ID token for session cookies",
+        security: [],
+        requestBody: {
+          required: true,
+          content: {
+            "application/json": {
+              schema: {
+                type: "object",
+                properties: {
+                  code: { type: "string" },
+                  codeVerifier: { type: "string" },
+                  redirectUri: { type: "string" },
+                  idToken: { type: "string" }
+                }
+              }
+            }
+          }
+        },
+        responses: {
+          "200": { description: "Authenticated principal and session cookie set" },
+          "400": { description: "Validation error" },
+          "401": { description: "OIDC token verification failed" }
+        }
+      }
+    },
+    "/auth/support-token": {
+      post: {
+        tags: ["Operations & Support"],
+        summary: "Issue scoped support operator token (non-tenant, zero tenant data access)",
+        security: [],
+        requestBody: {
+          required: true,
+          content: {
+            "application/json": {
+              schema: {
+                type: "object",
+                required: ["operator"],
+                properties: {
+                  operator: { type: "string" }
+                }
+              }
+            }
+          }
+        },
+        responses: {
+          "200": { description: "Issued support token and operator identity" },
+          "403": { description: "Disabled outside local/test" }
+        }
+      }
+    },
+    "/connectors/zoikotime/batches": {
+      post: {
+        tags: ["Ingestion & Ledger (Phase 2)"],
+        summary: "Ingest ZoikoTime work interval batch (strict allowlist; physical minimization)",
+        parameters: [
+          { name: "Idempotency-Key", in: "header", required: false, schema: { type: "string" } }
+        ],
+        responses: {
+          "200": { description: "IngestReceipt JSON ({ id, batch_id, accepted, duplicate, rejected, conflicted })" },
+          "400": { description: "Schema validation error (unallowlisted surveillance fields rejected)" },
+          "409": { description: "Batch payload conflict or inactive connection" }
+        }
+      }
+    },
+    "/connections/{id}": {
+      get: {
+        tags: ["Ingestion & Ledger (Phase 2)"],
+        summary: "Fetch single source connection and cadence health",
+        parameters: [
+          { name: "id", in: "path", required: true, schema: { type: "string", format: "uuid" } }
+        ],
+        responses: {
+          "200": { description: "Connection detail view" },
+          "404": { description: "Connection not found" }
+        }
+      }
+    },
+    "/receipts": {
+      get: {
+        tags: ["Ingestion & Ledger (Phase 2)"],
+        summary: "List traceable ingestion receipts (counts only, zero quarantined rows)",
+        responses: {
+          "200": { description: "Array of IngestReceipt objects" }
+        }
+      }
+    },
+    "/work-facts": {
+      get: {
+        tags: ["Ingestion & Ledger (Phase 2)"],
+        summary: "List append-only pseudonymized work-state facts for tenant",
+        responses: {
+          "200": { description: "Array of WorkFact objects" }
+        }
+      }
+    },
+    "/releases/query": {
+      post: {
+        tags: ["Privacy Compiler & Analytics (Phase 3)"],
+        summary: "Compile deterministic privacy-safe cohort metric release (floor n>=10, window>=28d, diff>=5)",
+        requestBody: {
+          required: true,
+          content: {
+            "application/json": {
+              schema: {
+                type: "object",
+                required: ["metricId", "cohortRef", "periodStart", "periodEnd"],
+                properties: {
+                  metricId: { type: "string" },
+                  metricVersion: { type: "integer" },
+                  cohortRef: { type: "string" },
+                  periodStart: { type: "string", format: "date-time" },
+                  periodEnd: { type: "string", format: "date-time" },
+                  releaseClass: { type: "string", enum: ["CLASS_A", "CLASS_B"] },
+                  memberRefs: { type: "array", items: { type: "string" } }
+                }
+              }
+            }
+          }
+        },
+        responses: {
+          "200": { description: "ReleaseView (RELEASED with aggregate value or uniform UNAVAILABLE when suppressed)" }
+        }
+      }
+    },
+    "/releases/{id}/export.csv": {
+      get: {
+        tags: ["Privacy Compiler & Analytics (Phase 3)"],
+        summary: "Export suppressed aggregate release as CSV (fails closed if not RELEASED)",
+        parameters: [
+          { name: "id", in: "path", required: true, schema: { type: "string", format: "uuid" } }
+        ],
+        responses: {
+          "200": { description: "text/csv release export" },
+          "404": { description: "Release not found or not exportable" }
+        }
+      }
+    },
+    "/metrics/{id}/recalculate": {
+      post: {
+        tags: ["Privacy Compiler & Analytics (Phase 3)"],
+        summary: "Recalculate metric version and mark existing releases STALE / SUPERSEDED",
+        parameters: [
+          { name: "id", in: "path", required: true, schema: { type: "string" } }
+        ],
+        responses: {
+          "200": { description: "Recalculation summary ({ count })" }
+        }
+      }
+    },
+    "/hazards/{id}/causes/{causeId}/review": {
+      post: {
+        tags: ["Hazards & Controls (Phase 4)"],
+        summary: "Accept or reject proposed organizational cause under a hazard",
+        parameters: [
+          { name: "id", in: "path", required: true, schema: { type: "string", format: "uuid" } },
+          { name: "causeId", in: "path", required: true, schema: { type: "string", format: "uuid" } }
+        ],
+        requestBody: {
+          required: true,
+          content: {
+            "application/json": {
+              schema: {
+                type: "object",
+                required: ["status"],
+                properties: {
+                  status: { type: "string", enum: ["REVIEWED_ACCEPTED", "REVIEWED_REJECTED"] },
+                  note: { type: "string" }
+                }
+              }
+            }
+          }
+        },
+        responses: {
+          "200": { description: "Updated cause record" },
+          "404": { description: "Cause not found" }
+        }
+      }
+    },
+    "/controls/{id}": {
+      get: {
+        tags: ["Hazards & Controls (Phase 4)"],
+        summary: "Get ControlDetailView by ID",
+        parameters: [
+          { name: "id", in: "path", required: true, schema: { type: "string", format: "uuid" } }
+        ],
+        responses: {
+          "200": { description: "ControlDetailView object" },
+          "404": { description: "Control not found" }
+        }
+      },
+      patch: {
+        tags: ["Hazards & Controls (Phase 4)"],
+        summary: "Material edit to control scope/objective/plan (increments version & invalidates prior approval)",
+        parameters: [
+          { name: "id", in: "path", required: true, schema: { type: "string", format: "uuid" } },
+          { name: "If-Match", in: "header", required: true, schema: { type: "string" } }
+        ],
+        responses: {
+          "200": { description: "Updated ControlDetailView" },
+          "409": { description: "Version mismatch conflict" }
+        }
+      }
+    },
+    "/controls/{id}/implementation": {
+      post: {
+        tags: ["Hazards & Controls (Phase 4)"],
+        summary: "Commit implementation receipt (requires APPROVED state and matching material hash)",
+        parameters: [
+          { name: "id", in: "path", required: true, schema: { type: "string", format: "uuid" } }
+        ],
+        requestBody: {
+          required: true,
+          content: {
+            "application/json": {
+              schema: {
+                type: "object",
+                required: ["kind", "completedOn", "evidenceRefs"],
+                properties: {
+                  kind: { type: "string", enum: ["MANUAL", "INTEGRATED"] },
+                  completedOn: { type: "string" },
+                  evidenceRefs: { type: "array", items: { type: "string" } }
+                }
+              }
+            }
+          }
+        },
+        responses: {
+          "201": { description: "Updated ControlDetailView in IMPLEMENTED state" },
+          "400": { description: "Schema validation error" },
+          "409": { description: "Conflict - control is not APPROVED" }
+        }
+      }
+    },
+    "/controls/{id}/verification/pin": {
+      post: {
+        tags: ["Hazards & Controls (Phase 4)"],
+        summary: "Pin pre-analysis verification plan before observing post-implementation data",
+        parameters: [
+          { name: "id", in: "path", required: true, schema: { type: "string", format: "uuid" } }
+        ],
+        responses: {
+          "200": { description: "Updated ControlDetailView in VERIFYING state" },
+          "409": { description: "Conflict - control must be IMPLEMENTED" }
+        }
+      }
+    },
+    "/controls/{id}/verification/conclude": {
+      post: {
+        tags: ["Hazards & Controls (Phase 4)"],
+        summary: "Human reviewer concludes control verification evaluation",
+        parameters: [
+          { name: "id", in: "path", required: true, schema: { type: "string", format: "uuid" } }
+        ],
+        responses: {
+          "200": { description: "Updated ControlDetailView in CLOSED state" }
+        }
+      }
+    },
+    "/hazards/{id}/disposition": {
+      post: {
+        tags: ["Hazards & Controls (Phase 4)"],
+        summary: "Commit formal hazard disposition decision",
+        parameters: [
+          { name: "id", in: "path", required: true, schema: { type: "string", format: "uuid" } }
+        ],
+        responses: {
+          "200": { description: "Updated Hazard record" }
+        }
+      }
+    },
+    "/jurisdiction/coverage": {
+      get: {
+        tags: ["Retention & Legal Holds (Phase 5)"],
+        summary: "Resolve tenant's active jurisdiction pack coverage over [effective_from, effective_to)",
+        responses: {
+          "200": { description: "JurisdictionCoverage object" }
+        }
+      }
+    },
+    "/jurisdiction/pack-versions": {
+      get: {
+        tags: ["Retention & Legal Holds (Phase 5)"],
+        summary: "List read-only jurisdiction pack versions",
+        responses: {
+          "200": { description: "{ versions: JurisdictionPack[] }" }
+        }
+      }
+    },
+    "/retention": {
+      get: {
+        tags: ["Retention & Legal Holds (Phase 5)"],
+        summary: "Get tenant retention classes, active legal holds, runs, and tombstone verification counts",
+        responses: {
+          "200": { description: "RetentionState payload" }
+        }
+      }
+    },
+    "/retention/preview": {
+      get: {
+        tags: ["Retention & Legal Holds (Phase 5)"],
+        summary: "Dry-run retention preview calculating eligible, purgeable, and held facts",
+        responses: {
+          "200": { description: "RetentionPreview payload" }
+        }
+      }
+    },
+    "/retention/classes": {
+      post: {
+        tags: ["Retention & Legal Holds (Phase 5)"],
+        summary: "Configure tenant retention schedule constrained by active jurisdiction pack floor/ceiling",
+        parameters: [
+          { name: "Idempotency-Key", in: "header", required: true, schema: { type: "string" } }
+        ],
+        responses: {
+          "200": { description: "Created retention class record" },
+          "201": { description: "Created retention class record" },
+          "400": { description: "Validation or jurisdiction pack bound refusal" }
+        }
+      }
+    },
+    "/legal-holds": {
+      post: {
+        tags: ["Retention & Legal Holds (Phase 5)"],
+        summary: "Place legal preservation hold over tenant or connection scope",
+        parameters: [
+          { name: "Idempotency-Key", in: "header", required: true, schema: { type: "string" } }
+        ],
+        responses: {
+          "201": { description: "Created legal hold record" }
+        }
+      }
+    },
+    "/lifecycle/holds": {
+      post: {
+        tags: ["Retention & Legal Holds (Phase 5)"],
+        summary: "Alias for /legal-holds",
+        responses: {
+          "201": { description: "Created legal hold record" }
+        }
+      }
+    },
+    "/legal-holds/{id}/release": {
+      post: {
+        tags: ["Retention & Legal Holds (Phase 5)"],
+        summary: "Release an active legal hold with audit reason",
+        parameters: [
+          { name: "id", in: "path", required: true, schema: { type: "string", format: "uuid" } },
+          { name: "Idempotency-Key", in: "header", required: true, schema: { type: "string" } }
+        ],
+        responses: {
+          "200": { description: "Released legal hold record" }
+        }
+      }
+    },
+    "/lifecycle/holds/{id}/release": {
+      post: {
+        tags: ["Retention & Legal Holds (Phase 5)"],
+        summary: "Alias for /legal-holds/{id}/release",
+        parameters: [
+          { name: "id", in: "path", required: true, schema: { type: "string", format: "uuid" } }
+        ],
+        responses: {
+          "200": { description: "Released legal hold record" }
+        }
+      }
+    },
+    "/ops/slo": {
+      get: {
+        tags: ["Operations & Support"],
+        summary: "Compute live SLO latency/availability report from request ring buffer (support token required)",
+        responses: {
+          "200": { description: "SloReport payload" },
+          "403": { description: "Tenant tokens forbidden on support routes" }
+        }
+      }
+    },
+    "/ops/requests/{requestId}": {
+      get: {
+        tags: ["Operations & Support"],
+        summary: "Look up sanitized route template, status, and latency by requestId",
+        parameters: [
+          { name: "requestId", in: "path", required: true, schema: { type: "string" } }
+        ],
+        responses: {
+          "200": { description: "OpsRequestRecord" },
+          "404": { description: "Request not found" }
+        }
+      }
+    },
+    "/ops/errors": {
+      get: {
+        tags: ["Operations & Support"],
+        summary: "List fingerprinted safe internal errors without stack traces or tenant PII",
+        responses: {
+          "200": { description: "Array of SafeErrorLogEntry" }
+        }
+      }
+    },
+    "/ops/diagnostic-receipts/verify": {
+      post: {
+        tags: ["Operations & Support"],
+        summary: "Verify HMAC/signature integrity of tenant-provided diagnostic receipt",
+        responses: {
+          "200": { description: "Verification result ({ valid, receiptId, tenantId, generatedAt })" }
+        }
+      }
+    },
+    "/ops/alerts": {
+      get: {
+        tags: ["Operations & Support"],
+        summary: "List operational threshold alerts",
+        responses: {
+          "200": { description: "Active alerts list" }
+        }
+      }
+    },
+    "/ops/release-readiness": {
+      get: {
+        tags: ["Operations & Support"],
+        summary: "Summarize release readiness checks and P0 blockers",
+        responses: {
+          "200": { description: "Release readiness summary" }
+        }
+      }
+    },
+    "/ops/connectors": {
+      get: {
+        tags: ["Operations & Support"],
+        summary: "Inspect connector lag and health across service",
+        responses: {
+          "200": { description: "Connector health summary" }
+        }
+      }
+    },
+    "/support/diagnostic-receipts": {
+      post: {
+        tags: ["Operations & Support"],
+        summary: "Tenant self-issues signed diagnostic state snapshot for zero-impersonation support",
+        parameters: [
+          { name: "Idempotency-Key", in: "header", required: true, schema: { type: "string" } }
+        ],
+        responses: {
+          "201": { description: "Signed DiagnosticReceipt payload" }
+        }
+      }
+    },
+    "/entitlements": {
+      get: {
+        tags: ["Retention & Legal Holds (Phase 5)"],
+        summary: "Retrieve tenant feature entitlements",
+        responses: {
+          "200": { description: "Entitlements configuration" }
+        }
+      }
+    },
+    "/policy/resolution": {
+      get: {
+        tags: ["Retention & Legal Holds (Phase 5)"],
+        summary: "Resolve effective policy envelope for tenant",
+        responses: {
+          "200": { description: "Resolved policy payload" }
+        }
+      }
+    },
+    "/evidence-packages": {
+      get: {
+        tags: ["Audit & Evidence"],
+        summary: "List cryptographic evidence packages for tenant",
+        responses: {
+          "200": { description: "Array of EvidencePackage manifests" }
+        }
+      },
+      post: {
+        tags: ["Audit & Evidence"],
+        summary: "Issue and persist signed Merkle evidence bundle for tenant",
+        responses: {
+          "201": { description: "Issued EvidencePackage bundle with Merkle root and manifestHash" }
+        }
+      }
+    },
+    "/evidence-packages/{id}": {
+      get: {
+        tags: ["Audit & Evidence"],
+        summary: "Retrieve stored EvidencePackage by ID",
+        parameters: [
+          { name: "id", in: "path", required: true, schema: { type: "string" } }
+        ],
+        responses: {
+          "200": { description: "EvidencePackage JSON" },
+          "404": { description: "Package not found" }
+        }
+      }
+    },
+    "/evidence-packages/{id}/verify": {
+      get: {
+        tags: ["Audit & Evidence"],
+        summary: "Server-side verification of stored EvidencePackage",
+        parameters: [
+          { name: "id", in: "path", required: true, schema: { type: "string" } }
+        ],
+        responses: {
+          "200": { description: "Verification result" }
+        }
+      }
+    },
+    "/corrections/ingest": {
+      post: {
+        tags: ["Retention & Legal Holds (Phase 5)"],
+        summary: "Record immutable correction against ledger data",
+        responses: {
+          "201": { description: "Correction recorded" }
+        }
+      }
+    },
+    "/corrections/{id}/acknowledge": {
+      post: {
+        tags: ["Retention & Legal Holds (Phase 5)"],
+        summary: "Acknowledge a recorded ledger correction",
+        parameters: [
+          { name: "id", in: "path", required: true, schema: { type: "string" } }
+        ],
+        responses: {
+          "200": { description: "Correction acknowledged" }
+        }
+      }
+    },
+    "/lifecycle/rights-requests": {
+      post: {
+        tags: ["Retention & Legal Holds (Phase 5)"],
+        summary: "Submit GDPR / data-subject erasure or access rights request",
+        responses: {
+          "201": { description: "Rights request logged" }
+        }
+      }
+    },
+    "/ai/explain-release": {
+      post: {
+        tags: ["Bounded AI & Actions (Phase 6)"],
+        summary: "Generate grounded explanation draft for a released privacy artifact",
+        responses: {
+          "200": { description: "AiRunView with validatorReport" },
+          "400": { description: "Individual-inference or unsafe question refused" },
+          "503": { description: "Disabled by kill-switch" }
+        }
+      }
+    },
+    "/ai/draft-cause": {
+      post: {
+        tags: ["Bounded AI & Actions (Phase 6)"],
+        summary: "Draft candidate organizational cause proposal (requires human accept)",
+        responses: {
+          "200": { description: "AiRunView draft" }
+        }
+      }
+    },
+    "/ai/draft-control": {
+      post: {
+        tags: ["Bounded AI & Actions (Phase 6)"],
+        summary: "Draft candidate control intervention proposal (requires human accept)",
+        responses: {
+          "200": { description: "AiRunView draft" }
+        }
+      }
+    },
+    "/ai/runs": {
+      get: {
+        tags: ["Bounded AI & Actions (Phase 6)"],
+        summary: "List AI run audit records for tenant",
+        responses: {
+          "200": { description: "Array of AiRunView" }
+        }
+      }
+    },
+    "/ai/runs/{id}/accept": {
+      post: {
+        tags: ["Bounded AI & Actions (Phase 6)"],
+        summary: "Human reviewer accepts AI draft as a non-binding workflow proposal",
+        parameters: [
+          { name: "id", in: "path", required: true, schema: { type: "string", format: "uuid" } }
+        ],
+        responses: {
+          "200": { description: "Accepted proposal with registered decisionRef" }
+        }
+      }
+    },
+    "/ai/runs/{id}/discard": {
+      post: {
+        tags: ["Bounded AI & Actions (Phase 6)"],
+        summary: "Human reviewer discards AI draft proposal",
+        parameters: [
+          { name: "id", in: "path", required: true, schema: { type: "string", format: "uuid" } }
+        ],
+        responses: {
+          "200": { description: "Proposal marked DISCARDED" }
+        }
+      }
+    },
+    "/ai/kill-switches": {
+      get: {
+        tags: ["Bounded AI & Actions (Phase 6)"],
+        summary: "Inspect current AI and tool kill-switch status",
+        responses: {
+          "200": { description: "Array of KillSwitchRecord" }
+        }
+      }
+    },
+    "/release/dossier": {
+      get: {
+        tags: ["Operations & Support"],
+        summary: "Retrieve synthesized Platform Release Evidence Dossier JSON",
+        security: [],
+        responses: {
+          "200": { description: "Release dossier JSON (status, testSuites, openFindingsBySeverity, signOff)" }
+        }
+      }
+    },
+    "/release-dossier": {
+      get: {
+        tags: ["Operations & Support"],
+        summary: "Alias for /release/dossier",
+        security: [],
+        responses: {
+          "200": { description: "Release dossier JSON" }
+        }
+      }
+    },
+    "/outcomes/definitions/{id}": {
+      get: {
+        tags: ["Work-Design & Outcomes (Plane B)"],
+        summary: "Get Plane B outcome definition by ID",
+        parameters: [
+          { name: "id", in: "path", required: true, schema: { type: "string" } }
+        ],
+        responses: {
+          "200": { description: "OutcomeDefinitionView" },
+          "404": { description: "Not found" }
+        }
+      }
+    },
+    "/outcomes/evaluations/{id}": {
+      get: {
+        tags: ["Work-Design & Outcomes (Plane B)"],
+        summary: "Get single Plane B outcome evaluation by ID",
+        parameters: [
+          { name: "id", in: "path", required: true, schema: { type: "string", format: "uuid" } }
+        ],
+        responses: {
+          "200": { description: "OutcomeEvaluationView" },
+          "404": { description: "Not found" }
+        }
+      }
+    },
+    "/sector/legal/matters": {
+      get: {
+        tags: ["UK Legal Sector Pack (SRA 2023)"],
+        summary: "List UK Legal Practice matters and active court/closing demand windows",
+        responses: {
+          "200": { description: "Array of LegalMatterView" }
+        }
+      }
+    },
+    "/sector/legal/matters/map": {
+      post: {
+        tags: ["UK Legal Sector Pack (SRA 2023)"],
+        summary: "Translate legal matter metadata into domain-neutral WORK_ITEM (rejects privileged/billing/ranking fields)",
+        responses: {
+          "200": { description: "Neutral workItem representation" },
+          "400": { description: "Validation error - prohibited legal privilege, billing rate, or lawyer ranking rejected" }
+        }
+      }
+    },
+    "/sector/legal/fatigue-check": {
+      post: {
+        tags: ["UK Legal Sector Pack (SRA 2023)"],
+        summary: "Evaluate consecutive late-night sessions and SRA 2023 supervisory partner consultation trigger",
+        responses: {
+          "200": { description: "LegalFatigueAssessmentView" },
+          "404": { description: "Matter not found" }
+        }
+      }
     }
   }
 };

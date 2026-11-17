@@ -4,6 +4,7 @@
 
 import { useState, useEffect, useCallback } from "react";
 import {
+  ApiError,
   fetchLegalMatters,
   checkLegalFatigue,
   mapLegalMatter,
@@ -11,6 +12,13 @@ import {
   type LegalMatterView,
   type LegalFatigueAssessmentView
 } from "../../api/client";
+
+function fmtLegalErr(err: unknown): string {
+  if (err instanceof ApiError) {
+    return `${err.message} (Request ID: ${err.requestId})`;
+  }
+  return err instanceof Error ? err.message : "Request failed.";
+}
 
 interface LegalPracticeTabProps {
   currentTenant: typeof PRESET_TENANTS[0];
@@ -57,7 +65,7 @@ export function LegalPracticeTab({ currentTenant, token }: LegalPracticeTabProps
         setSelectedMatter(items[0]);
       }
     } catch (err: any) {
-      setErrorMsg(`Failed to load legal matters: ${err.message}`);
+      setErrorMsg(`Failed to load legal matters: ${fmtLegalErr(err)}`);
     } finally {
       setLoading(false);
     }
@@ -76,7 +84,7 @@ export function LegalPracticeTab({ currentTenant, token }: LegalPracticeTabProps
       })
       .catch((err: any) => {
         if (!cancelled) {
-          setErrorMsg(`Failed to load legal matters: ${err.message}`);
+          setErrorMsg(`Failed to load legal matters: ${fmtLegalErr(err)}`);
         }
       });
     return () => {
@@ -97,17 +105,19 @@ export function LegalPracticeTab({ currentTenant, token }: LegalPracticeTabProps
       const assessment = await checkLegalFatigue(matter.matterId, token);
       setFatigueAssessment(assessment);
     } catch (err: any) {
-      setErrorMsg(`Fatigue analysis failed: ${err.message}`);
+      setErrorMsg(`Fatigue analysis failed: ${fmtLegalErr(err)}`);
     } finally {
       setAnalyzingFatigue(false);
     }
   };
 
-  // Sign Supervisory Partner Consultation Gate
+  // Sign Supervisory Partner Consultation Gate (Simulation preview - client-side state only)
   const handleSignConsultation = () => {
     setConsultationSigned(true);
-    setSuccessMsg(`Mandatory Supervisory Partner consultation signed by ${consultationPartner}. Action: ${mitigationAction}. SRA 2023 audit record generated.`);
-    setTimeout(() => setSuccessMsg(null), 5000);
+    setErrorMsg(null);
+    setSuccessMsg(
+      `Simulation: Client-side Supervisory Partner consultation preview signed by ${consultationPartner} (Action: ${mitigationAction}). Backend consultation persistence is not enabled in this preview.`
+    );
   };
 
   // Test Neutral Work-Item Translation
@@ -115,6 +125,8 @@ export function LegalPracticeTab({ currentTenant, token }: LegalPracticeTabProps
     if (!selectedMatter || !token) return;
     setMappingLoading(true);
     setErrorMsg(null);
+    setSuccessMsg(null);
+    const expectsRefusal = injectPrivilege || injectBillingRate || injectRanking;
     try {
       const payload: any = { ...selectedMatter };
       if (injectPrivilege) payload.privilegedAdvice = "Confidential trial strategy notes regarding litigation risk.";
@@ -123,12 +135,23 @@ export function LegalPracticeTab({ currentTenant, token }: LegalPracticeTabProps
 
       const res = await mapLegalMatter(payload, token);
       setMappingResult(res);
-      setBoundaryRejectionResult(null);
-      setSuccessMsg("Matter successfully validated and mapped to domain-neutral WORK_ITEM representation.");
-      setTimeout(() => setSuccessMsg(null), 4000);
-    } catch (err: any) {
-      setBoundaryRejectionResult(`HTTP ${err.status || 400} ${err.code || "VALIDATION"}: ${err.message}`);
+      if (expectsRefusal) {
+        setBoundaryRejectionResult(null);
+        setErrorMsg("Constitutional warning: injected decoy fields were not rejected by the boundary validator.");
+      } else {
+        setBoundaryRejectionResult(null);
+        setSuccessMsg("Matter successfully validated and mapped to domain-neutral WORK_ITEM representation.");
+      }
+    } catch (err: unknown) {
       setMappingResult(null);
+      if (expectsRefusal && err instanceof ApiError && (err.status === 400 || err.code === "VALIDATION")) {
+        setBoundaryRejectionResult(
+          `Expected HTTP ${err.status} ${err.code}: ${fmtLegalErr(err)}`
+        );
+      } else {
+        setBoundaryRejectionResult(null);
+        setErrorMsg(`Boundary mapping failed: ${fmtLegalErr(err)}`);
+      }
     } finally {
       setMappingLoading(false);
     }
@@ -225,10 +248,8 @@ export function LegalPracticeTab({ currentTenant, token }: LegalPracticeTabProps
                         border: isSelected ? "2px solid var(--abate-aubergine, #2B1B38)" : "1px solid var(--abate-border, #E2E8F0)",
                         borderRadius: "8px",
                         backgroundColor: isSelected ? "#F8F5FA" : "#FFFFFF",
-                        cursor: "pointer",
                         transition: "all 0.2s ease"
                       }}
-                      onClick={() => handleAnalyzeFatigue(m)}
                     >
                       <div style={{ display: "flex", justifyContent: "space-between", alignItems: "flex-start", marginBottom: "0.5rem" }}>
                         <div>
@@ -255,10 +276,7 @@ export function LegalPracticeTab({ currentTenant, token }: LegalPracticeTabProps
                         <button
                           type="button"
                           className="btn btn-primary btn-sm"
-                          onClick={(e) => {
-                            e.stopPropagation();
-                            handleAnalyzeFatigue(m);
-                          }}
+                          onClick={() => handleAnalyzeFatigue(m)}
                           style={{ padding: "0.25rem 0.6rem", fontSize: "0.8rem" }}
                         >
                           ⚡ SRA Fatigue Check
@@ -330,9 +348,12 @@ export function LegalPracticeTab({ currentTenant, token }: LegalPracticeTabProps
 
                   {fatigueAssessment.hasFatigueSurge && (
                     <div style={{ borderTop: "1px solid #E2E8F0", paddingTop: "1rem", marginTop: "1rem" }}>
-                      <h4 style={{ margin: "0 0 0.5rem 0", fontSize: "0.95rem" }}>Mandatory Supervisory Partner Consultation Gate</h4>
+                      <div style={{ display: "flex", alignItems: "center", justifyContent: "space-between", gap: "0.5rem", margin: "0 0 0.5rem 0" }}>
+                        <h4 style={{ margin: 0, fontSize: "0.95rem" }}>Mandatory Supervisory Partner Consultation Gate</h4>
+                        <span className="badge badge-secondary">Simulation</span>
+                      </div>
                       <p style={{ fontSize: "0.82rem", color: "#4A5568" }}>
-                        Under SRA 2023 guidance, closing or modifying this high-fatigue matter requires formal sign-off from the supervisory partner.
+                        Simulation preview: demonstrates formal sign-off workflow from the supervisory partner under SRA 2023 guidance (client-side state only).
                       </p>
 
                       <div style={{ display: "flex", flexDirection: "column", gap: "0.5rem", marginBottom: "0.75rem" }}>
@@ -365,7 +386,7 @@ export function LegalPracticeTab({ currentTenant, token }: LegalPracticeTabProps
                         disabled={consultationSigned}
                         onClick={handleSignConsultation}
                       >
-                        {consultationSigned ? "✔ Supervisory Partner Gate Signed & Ratified" : "✍ Sign Supervisory Consultation Gate"}
+                        {consultationSigned ? "✔ Simulation Consultation Preview Signed" : "✍ Sign Supervisory Consultation Gate (Simulation)"}
                       </button>
                     </div>
                   )}

@@ -9,7 +9,7 @@ on:
 jobs:
   verify:
     name: PostgreSQL Parity, Constitutional Gates & Frontend Build
-    runs-on: ubuntu-latest
+    runs-on: ubuntu-24.04
 
     services:
       postgres:
@@ -65,16 +65,22 @@ jobs:
           DATABASE_URL_WORKER: postgres://abate_worker:worker_pw@localhost:5432/abate
         run: npm --prefix backend run verify-pg -- --require-live
 
-      - name: Seed live Postgres fixtures and verify RLS connection parity
+      - name: Seed live Postgres fixtures, load benchmark, and restore drill
         env:
+          CI: "true"
           ABATE_REQUIRE_PG: "1"
           DATABASE_URL_MIGRATOR: postgres://abate_migrator:migrator_pw@localhost:5432/abate
           DATABASE_URL_APP: postgres://abate_app:app_pw@localhost:5432/abate
           DATABASE_URL_WORKER: postgres://abate_worker:worker_pw@localhost:5432/abate
         run: |
+          if ! command -v pg_dump >/dev/null 2>&1 || ! pg_dump --version | grep -q ' 16\.'; then
+            sudo apt-get update
+            sudo apt-get install -y postgresql-client-16
+          fi
           npm --prefix backend run seed-demo -- --pg
           npm --prefix backend run verify-pg-smoke
           npm --prefix backend run test-load -- --http --tcp
+          npm --prefix backend run measure-restore
 
       - name: Typecheck and compile backend
         run: npm --prefix backend run build
@@ -87,6 +93,7 @@ jobs:
           DATABASE_URL_WORKER: postgres://disabled:disabled@127.0.0.1:1/abate
         run: |
           npm --prefix backend run test-fast
+          npm --prefix backend run test-pilot
           npm --prefix backend run test-boundaries
           npm --prefix backend run test-ingest
           npm --prefix backend run test-privacy
@@ -139,12 +146,13 @@ jobs:
             evidence/sim-30d-report.json
             evidence/kill-switch-drill-report.json
             evidence/restore-rehearsal-report.json
+            evidence/pg-restore-measurement.json
             evidence/slo-benchmark-report.json
             frontend/public/release-dossier.json
 
   e2e-a11y:
     name: Browser E2E & WCAG 2.1 AA Accessibility (Playwright + Axe)
-    runs-on: ubuntu-latest
+    runs-on: ubuntu-24.04
     env:
       APP_ENV: test
       AUTH_ISSUER: http://localhost:5000/auth
@@ -165,7 +173,10 @@ jobs:
         run: |
           npm --prefix backend ci
           npm --prefix frontend ci
-          npm --prefix tests install
+          npm --prefix tests ci
+
+      - name: Typecheck Playwright test suite
+        run: npm --prefix tests run typecheck
 
       - name: Install Playwright Chromium
         run: npm --prefix tests exec -- playwright install chromium --with-deps

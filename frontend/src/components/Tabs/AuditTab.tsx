@@ -1,13 +1,36 @@
 // frontend/src/components/Tabs/AuditTab.tsx
-import { type AuditEvent, PRESET_TENANTS } from "../../api/client";
+import { useState } from "react";
+import { ApiError, type AuditEvent, PRESET_TENANTS } from "../../api/client";
 
 interface AuditTabProps {
   currentTenant: typeof PRESET_TENANTS[0];
   auditEvents: AuditEvent[];
-  onRefresh: () => void;
+  onRefresh: () => void | Promise<void>;
 }
 
 export function AuditTab({ currentTenant, auditEvents, onRefresh }: AuditTabProps) {
+  const [refreshing, setRefreshing] = useState(false);
+  const [statusMsg, setStatusMsg] = useState<string | null>(null);
+  const [errorMsg, setErrorMsg] = useState<string | null>(null);
+
+  const handleRefreshClick = async () => {
+    setRefreshing(true);
+    setErrorMsg(null);
+    setStatusMsg(null);
+    try {
+      await Promise.resolve(onRefresh());
+      setStatusMsg(`Refreshed ${currentTenant.name} audit log (${auditEvents.length} events loaded).`);
+    } catch (err: unknown) {
+      if (err instanceof ApiError) {
+        setErrorMsg(`${err.message} (Request ID: ${err.requestId})`);
+      } else {
+        setErrorMsg(err instanceof Error ? err.message : "Failed to refresh audit log.");
+      }
+    } finally {
+      setRefreshing(false);
+    }
+  };
+
   return (
     <div className="tab-pane">
       <div className="card">
@@ -29,14 +52,28 @@ export function AuditTab({ currentTenant, auditEvents, onRefresh }: AuditTabProp
 
         <div className="table-header-bar">
           <h4>Tenant Audit Records ({auditEvents.length} Events)</h4>
-          <button 
-            type="button" 
+          <button
+            type="button"
             className="btn btn-secondary btn-sm"
-            onClick={onRefresh}
+            onClick={handleRefreshClick}
+            disabled={refreshing}
           >
-            ↻ Refresh Log
+            {refreshing ? "Refreshing..." : "↻ Refresh Log"}
           </button>
         </div>
+
+        {errorMsg && (
+          <div className="feedback-alert alert-error" role="alert" style={{ marginBottom: "0.75rem" }}>
+            <div className="feedback-title">Refresh Failed</div>
+            <p>{errorMsg}</p>
+          </div>
+        )}
+
+        {statusMsg && (
+          <div className="feedback-alert alert-success" role="status" style={{ marginBottom: "0.75rem" }}>
+            <p>{statusMsg}</p>
+          </div>
+        )}
 
         {auditEvents.length === 0 ? (
           <p className="empty-text">No audit events recorded yet for {currentTenant.name}. Create an organization or run a command to produce audit receipts.</p>

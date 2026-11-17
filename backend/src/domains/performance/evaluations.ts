@@ -15,6 +15,9 @@ const PROHIBITED_CLAIM_PATTERNS = [
   /proved the intervention worked/i,
   /controlled the hazard/i,
   /hazard is controlled/i,
+  /mitigates\s+[\w\s]*hazard/i,
+  /reduces\s+employee\s+stress/i,
+  /employee\s+resilience/i,
   /safe to close/i,
   /eliminates risk/i,
   /individual productivity/i

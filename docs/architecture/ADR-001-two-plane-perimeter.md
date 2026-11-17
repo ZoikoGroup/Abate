@@ -1,6 +1,6 @@
 # ADR-001: Two-Plane Separation & Physical Non-Surveillance Perimeter
 
-- **Status**: Accepted (Synthetic Sandbox Verified; Legal/Pilot Review Open)
+- **Status**: **DRAFT — Pending Human Review** (agent-authored from codebase inspection; awaiting BE spec holder acceptance)
 - **Date**: 2026-11-16
 - **Scope**: Phases 0, 2, 7 (`backend/src/contracts/`, `backend/src/domains/ingest/`, `backend/src/domains/performance/`)
 

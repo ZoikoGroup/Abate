@@ -9,6 +9,7 @@ const BASE_URL = process.env.PLAYWRIGHT_TEST_BASE_URL || "http://127.0.0.1:5173"
 
 const TAB_AUDIT_NAMES = [
   "Organizations & Idempotency",
+  "Ingestion & Work Ledger (Phase 2)",
   "Cohort Analytics & Privacy (Phase 3)",
   "Hazards & Controls (Phase 4)",
   "Retention & Legal Hold (Phase 5)",
@@ -16,6 +17,9 @@ const TAB_AUDIT_NAMES = [
   "Outcomes & AI Change (Phase 7)",
   "Legal Sector Pack (SRA 2023)",
   "Operations & Support (B8)",
+  "Tenant Isolation & Attack Lab",
+  "Transactional Outbox",
+  "Append-Only Audit Trail",
   "Audit Verifier & Merkle",
   "Constitutional Invariants"
 ];

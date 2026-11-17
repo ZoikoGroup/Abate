@@ -1,6 +1,7 @@
 // frontend/src/components/Tabs/BoundedAiTab.tsx
 import { useState, useEffect } from "react";
 import {
+  ApiError,
   type AiRunView,
   type KillSwitchRecord,
   type ActionAttemptView,
@@ -16,6 +17,13 @@ import {
   SEEDED_APPROVAL_ID
 } from "../../api/client";
 import { AiPanel } from "../AiPanel";
+
+function fmtBoundedAiErr(err: unknown): string {
+  if (err instanceof ApiError) {
+    return `${err.message} (Request ID: ${err.requestId})`;
+  }
+  return err instanceof Error ? err.message : "Operation failed.";
+}
 
 interface BoundedAiTabProps {
   currentTenant: typeof PRESET_TENANTS[0];
@@ -42,13 +50,17 @@ export function BoundedAiTab({ currentTenant, token }: BoundedAiTabProps) {
     try {
       setLoading(true);
       const [rList, ksList] = await Promise.all([
-        fetchAiRuns(token).catch(() => []),
-        fetchKillSwitches(token).catch(() => [])
+        fetchAiRuns(token),
+        fetchKillSwitches(token)
       ]);
       setRuns(rList);
       setKillSwitches(ksList);
-    } catch (err: any) {
-      console.warn("Could not load AI data:", err);
+    } catch (err: unknown) {
+      setFeedback({
+        type: "error",
+        title: "✖ FAILED TO LOAD AI GOVERNANCE DATA",
+        details: fmtBoundedAiErr(err)
+      });
     } finally {
       setLoading(false);
     }
@@ -58,13 +70,22 @@ export function BoundedAiTab({ currentTenant, token }: BoundedAiTabProps) {
     if (!token) return;
     let cancelled = false;
     void Promise.all([
-      fetchAiRuns(token).catch(() => []),
-      fetchKillSwitches(token).catch(() => [])
-    ]).then(([rList, ksList]) => {
-      if (cancelled) return;
-      setRuns(rList);
-      setKillSwitches(ksList);
-    });
+      fetchAiRuns(token),
+      fetchKillSwitches(token)
+    ])
+      .then(([rList, ksList]) => {
+        if (cancelled) return;
+        setRuns(rList);
+        setKillSwitches(ksList);
+      })
+      .catch((err: unknown) => {
+        if (cancelled) return;
+        setFeedback({
+          type: "error",
+          title: "✖ FAILED TO LOAD AI GOVERNANCE DATA",
+          details: fmtBoundedAiErr(err)
+        });
+      });
     return () => {
       cancelled = true;
     };
@@ -75,6 +96,7 @@ export function BoundedAiTab({ currentTenant, token }: BoundedAiTabProps) {
     if (!token) return;
     try {
       setLoading(true);
+      setFeedback(null);
       // Kill switches are global: they are changed by a support operator, never with a tenant token
       const support = supportToken ?? (await requestSupportToken("ops.ai-console")).token;
       setSupportToken(support);
@@ -85,11 +107,11 @@ export function BoundedAiTab({ currentTenant, token }: BoundedAiTabProps) {
         details: `Scope '${scope}' is now ${!currentActive ? "DISABLED" : "ENABLED"}. Takes effect immediately across all requests.`
       });
       await loadData();
-    } catch (err: any) {
+    } catch (err: unknown) {
       setFeedback({
         type: "error",
         title: "✖ OPERATION FAILED",
-        details: err.message
+        details: fmtBoundedAiErr(err)
       });
     } finally {
       setLoading(false);
@@ -113,7 +135,13 @@ export function BoundedAiTab({ currentTenant, token }: BoundedAiTabProps) {
           setFeedback({
             type: "success",
             title: "✔ LAB 1 PASSED: INJECTION NEUTRALIZED",
-            details: `Validator caught prompt injection attempt (${res.validatorReport?.failureCode}). Zero employee names leaked; output suppressed.`
+            details: `Validator caught prompt injection attempt (${res.validatorReport?.failureCode || "POLICY"}). Zero employee names leaked; output suppressed.`
+          });
+        } else {
+          setFeedback({
+            type: "error",
+            title: "✖ LAB 1 FAILED",
+            details: `Expected REJECTED_BY_VALIDATOR, got ${res.status}.`
           });
         }
       } else if (testId === "FABRICATED_CITATION") {
@@ -122,7 +150,13 @@ export function BoundedAiTab({ currentTenant, token }: BoundedAiTabProps) {
           setFeedback({
             type: "success",
             title: "✔ LAB 2 PASSED: CITATION FABRICATION BLOCKED",
-            details: "Mock citation to unretrieved release ID rejected with code CITATION. Hallucinated sources cannot display."
+            details: `Mock citation to unretrieved release ID rejected (${res.validatorReport?.failureCode || "CITATION"}). Hallucinated sources cannot display.`
+          });
+        } else {
+          setFeedback({
+            type: "error",
+            title: "✖ LAB 2 FAILED",
+            details: `Expected REJECTED_BY_VALIDATOR, got ${res.status}.`
           });
         }
       } else if (testId === "NUMERIC_TAMPER") {
@@ -131,7 +165,13 @@ export function BoundedAiTab({ currentTenant, token }: BoundedAiTabProps) {
           setFeedback({
             type: "success",
             title: "✔ LAB 3 PASSED: NUMERIC FIDELITY ENFORCED",
-            details: "Claim returned 31.0% when release was 23.4%. Validator rejected altered numbers with code NUMERIC_FIDELITY."
+            details: `Claim mismatch rejected (${res.validatorReport?.failureCode || "NUMERIC_FIDELITY"}). Altered numbers cannot display.`
+          });
+        } else {
+          setFeedback({
+            type: "error",
+            title: "✖ LAB 3 FAILED",
+            details: `Expected REJECTED_BY_VALIDATOR, got ${res.status}.`
           });
         }
       } else if (testId === "INDIVIDUAL_INFERENCE") {
@@ -142,12 +182,20 @@ export function BoundedAiTab({ currentTenant, token }: BoundedAiTabProps) {
             title: "✖ LAB 4 FAILED",
             details: "Request was not refused."
           });
-        } catch (err: any) {
-          setFeedback({
-            type: "success",
-            title: "✔ LAB 4 PASSED: INDIVIDUAL INFERENCE REFUSED",
-            details: `Gateway rejected query before calling any model: ${err.message}`
-          });
+        } catch (err: unknown) {
+          if (err instanceof ApiError && (err.status === 400 || err.status === 403 || err.code === "VALIDATION" || err.code === "FORBIDDEN")) {
+            setFeedback({
+              type: "success",
+              title: "✔ LAB 4 PASSED: INDIVIDUAL INFERENCE REFUSED",
+              details: `The backend refused this on purpose before calling any model: ${fmtBoundedAiErr(err)}`
+            });
+          } else {
+            setFeedback({
+              type: "error",
+              title: "✖ LAB 4 FAILED",
+              details: fmtBoundedAiErr(err)
+            });
+          }
         }
       } else if (testId === "MUTATED_ACTION") {
         // Step 1: propose action
@@ -174,12 +222,20 @@ export function BoundedAiTab({ currentTenant, token }: BoundedAiTabProps) {
             title: "✖ LAB 5 FAILED",
             details: "Mutated parameters were not rejected."
           });
-        } catch (err: any) {
-          setFeedback({
-            type: "success",
-            title: "✔ LAB 5 PASSED: PARAMETER MUTATION BLOCKED",
-            details: `Signed grant parameter-hash mismatch caught: ${err.message}`
-          });
+        } catch (err: unknown) {
+          if (err instanceof ApiError && (err.status === 403 || err.status === 409 || err.status === 400)) {
+            setFeedback({
+              type: "success",
+              title: "✔ LAB 5 PASSED: PARAMETER MUTATION BLOCKED",
+              details: `The backend refused this on purpose — signed grant parameter-hash mismatch caught: ${fmtBoundedAiErr(err)}`
+            });
+          } else {
+            setFeedback({
+              type: "error",
+              title: "✖ LAB 5 FAILED",
+              details: fmtBoundedAiErr(err)
+            });
+          }
         }
       } else if (testId === "TIMEOUT_RECONCILIATION") {
         const prop = await proposeAction({
@@ -203,14 +259,20 @@ export function BoundedAiTab({ currentTenant, token }: BoundedAiTabProps) {
             title: "✔ LAB 6 PASSED: AMBIGUOUS TIMEOUT HANDLED",
             details: "Provider timeout recorded as UNKNOWN_OUTCOME. Automatic blind retries prevented; held for state reconciliation."
           });
+        } else {
+          setFeedback({
+            type: "error",
+            title: "✖ LAB 6 FAILED",
+            details: `Expected state UNKNOWN_OUTCOME, got ${res.state}.`
+          });
         }
       }
       await loadData();
-    } catch (err: any) {
+    } catch (err: unknown) {
       setFeedback({
         type: "error",
         title: "✖ TEST EXECUTION ERROR",
-        details: err.message
+        details: fmtBoundedAiErr(err)
       });
     } finally {
       setLoading(false);
@@ -332,6 +394,7 @@ export function BoundedAiTab({ currentTenant, token }: BoundedAiTabProps) {
         <AiPanel
           releaseId={BASELINE_RELEASE_ID}
           token={token}
+          onActionStart={() => setFeedback(null)}
           onDraftAccepted={(res) => {
             setFeedback({
               type: "success",
@@ -355,7 +418,7 @@ export function BoundedAiTab({ currentTenant, token }: BoundedAiTabProps) {
             <div><strong>Attempt ID:</strong> <code className="monospace">{actionAttempt.id}</code></div>
             <div><strong>Tool / Target:</strong> {actionAttempt.tool} / {actionAttempt.target}</div>
             <div><strong>Fencing Token:</strong> {actionAttempt.fencingToken}</div>
-            <div><strong>Signed Grant:</strong> <code className="monospace" style={{ wordBreak: "break-all" }}>{grantToken}</code></div>
+            <div><strong>Signed Grant:</strong> <code className="monospace">{grantToken ? `${grantToken.slice(0, 14)}...[redacted]` : "—"}</code></div>
           </div>
         </div>
       )}
