@@ -1,1 +1,51 @@
-{"commit":"eb5e7d064ceca1f0e1dd3a215c6bf83635f156a7","components":{"backendDependencies":{"cors":"^2.8.5","dotenv":"^16.4.7","express":"^4.21.2","jsonwebtoken":"^9.0.2","pg":"^8.13.1","zod":"^3.24.1"},"backendDevDependencies":{"@types/cors":"^2.8.17","@types/express":"^5.0.0","@types/jsonwebtoken":"^9.0.7","@types/node":"^22.13.1","@types/pg":"^8.11.11","tsx":"^4.19.2","typescript":"^5.7.3"},"frontendDependencies":{"react":"^19.3.1","react-dom":"^19.3.1"},"frontendDevDependencies":{"@types/node":"^24.19.2","@types/react":"^19.3.0","@types/react-dom":"^19.3.0","@vitejs/plugin-react":"^6.1.2","oxlint":"^1.89.0","typescript":"~7.0.2","vite":"^8.3.5"}},"generatedAt":"2026-11-12T11:35:17.886Z","schemaVersion":"abate.sbom.v1"}
+{
+  "schemaVersion": "abate.sbom.v1",
+  "generatedAt": "2026-11-18T07:37:58.364Z",
+  "commit": "6710cb676a5fcb3b2d2f16b63c0bacdf51c04c7d",
+  "lockfileSha256": {
+    "backend": "abbba712f14bc6637d2e01d17cc3a428d9a6111de7ff9c3a1edd7ee1b6e00a0c",
+    "frontend": "9957dce16a8cc7fa3d1718814e26503ca00bc6dd90e4467b395227cd9f8a09db",
+    "tests": "773a43e9147fbc29b80831be631fca9e1078b44a6b0d14013748d454c50aaaf1"
+  },
+  "components": {
+    "backendDependencies": {
+      "compression": "^1.8.1",
+      "cors": "^2.8.5",
+      "dotenv": "^16.4.7",
+      "express": "^4.21.2",
+      "jsonwebtoken": "^9.0.2",
+      "pg": "^8.13.1",
+      "zod": "^3.24.1"
+    },
+    "backendDevDependencies": {
+      "@types/compression": "^1.8.1",
+      "@types/cors": "^2.8.17",
+      "@types/express": "^5.0.0",
+      "@types/jsonwebtoken": "^9.0.7",
+      "@types/node": "^22.13.1",
+      "@types/pg": "^8.11.11",
+      "tsx": "^4.19.2",
+      "typescript": "^5.7.3"
+    },
+    "frontendDependencies": {
+      "react": "^19.3.1",
+      "react-dom": "^19.3.1"
+    },
+    "frontendDevDependencies": {
+      "@types/node": "^24.19.2",
+      "@types/react": "^19.3.0",
+      "@types/react-dom": "^19.3.0",
+      "@vitejs/plugin-react": "^6.1.2",
+      "oxlint": "^1.89.0",
+      "typescript": "~7.0.2",
+      "vite": "^8.3.5"
+    },
+    "testsDevDependencies": {
+      "@axe-core/playwright": "4.10.2",
+      "@playwright/test": "1.52.0",
+      "@types/node": "22.10.1",
+      "playwright-core": "1.52.0",
+      "typescript": "5.7.3"
+    }
+  }
+}

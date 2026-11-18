@@ -1,6 +1,7 @@
 // backend/src/worker/outbox-publisher.ts
 import crypto from "node:crypto";
 import { withWorker } from "../platform/db/with-tenant";
+import { AppError } from "../platform/errors";
 import { EventEnvelopeType } from "../contracts/common";
 
 export type EventHandler = (envelope: EventEnvelopeType) => Promise<void>;
@@ -222,4 +223,66 @@ export async function drainOnce(opts: DrainOptions = {}): Promise<{ drained: num
     drained: claimed.length,
     published: publishedCount
   };
+}
+
+const UUID_RE = /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i;
+
+/**
+ * Human-approved replay of a dead-lettered outbox event (Completion Plan Section 6).
+ * Preserves dead_letter_event row with operator attribution and resets the underlying outbox row to PENDING.
+ */
+export async function replayDeadLetterEvent(
+  id: string,
+  actorSubject: string,
+  reason: string
+): Promise<{
+  deadLetterId: string;
+  outboxId: string;
+  replayedBy: string;
+  reason: string;
+  state: "PENDING";
+}> {
+  if (!UUID_RE.test(id)) {
+    throw new AppError("NOT_FOUND", "Dead-letter event not found.");
+  }
+  const trimmedReason = String(reason || "").trim();
+  if (trimmedReason.length < 5 || trimmedReason.length > 500) {
+    throw new AppError("VALIDATION", "Human approval reason must be between 5 and 500 characters.");
+  }
+
+  return withWorker(async (tx) => {
+    const found = await tx.q(
+      `SELECT id, outbox_id, replayed_at FROM dead_letter_event WHERE id = $1 OR outbox_id = $1`,
+      [id]
+    );
+    if (!found.rows.length) {
+      throw new AppError("NOT_FOUND", "Dead-letter event not found.");
+    }
+    const row = found.rows[0];
+    if (row.replayed_at) {
+      throw new AppError("CONFLICT", "Dead-letter event has already been replayed.");
+    }
+
+    await tx.q(
+      `UPDATE outbox_event
+       SET state = 'PENDING', attempts = 0, next_retry_at = now(), last_error = NULL
+       WHERE id = $1 AND state = 'DEAD_LETTER'`,
+      [row.outbox_id]
+    );
+
+    await tx.q(
+      `UPDATE dead_letter_event
+       SET replayed_at = now(), replayed_by = $1, replay_reason = $2
+       WHERE id = $3`,
+      [actorSubject, trimmedReason, row.id]
+    );
+
+    return {
+      deadLetterId: row.id,
+      outboxId: row.outbox_id,
+      replayedBy: actorSubject,
+      reason: trimmedReason,
+      state: "PENDING"
+    };
+  });
 }

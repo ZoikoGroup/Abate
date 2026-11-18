@@ -22,7 +22,7 @@ export const ProofBadge: React.FC<ProofBadgeProps> = ({
         {expectedRefusalCode ? (
           <span className="proof-reason">
             <span className="expected-refusal-badge">Expected: {expectedRefusalCode}</span>{" "}
-            The backend refused this on purpose when executed.
+            The backend refuses this on purpose when executed.
           </span>
         ) : (
           <span className="proof-reason">Press run to execute against live backend</span>

@@ -7,12 +7,28 @@ import { AuthenticatedIdentity, authorize } from "../tenant/auth";
 import { Actor, computeRequestHash, runCommand } from "../../platform/command";
 import { CreateConnectionInput } from "../../contracts/ingest";
 
+export type ConnectionState = "ACTIVE" | "PAUSED" | "SUSPENDED" | "RESUMED" | "DISCONNECTED" | "REVOKED";
+
+export const CONNECTION_STATE_LABELS: Record<ConnectionState, string> = {
+  ACTIVE: "Active",
+  PAUSED: "Paused",
+  SUSPENDED: "Suspended",
+  RESUMED: "Resumed",
+  DISCONNECTED: "Disconnected",
+  REVOKED: "Disconnected"
+};
+
+export function isTerminalConnectionState(state: string): boolean {
+  return state === "DISCONNECTED" || state === "REVOKED";
+}
+
 export interface EnrichedConnection {
   id: string;
   tenant_id: string;
   source: string;
   contract_id: string;
-  state: "ACTIVE" | "PAUSED" | "REVOKED";
+  state: ConnectionState;
+  stateLabel: string;
   last_success_at: string | null;
   expected_cadence_seconds: number;
   health: ConnectionHealth;
@@ -28,8 +44,10 @@ export interface SourceContractSummary {
 }
 
 function enrichConnectionRow(row: any, now: Date): EnrichedConnection {
+  const state = (row.state || "ACTIVE") as ConnectionState;
   return {
     ...row,
+    stateLabel: CONNECTION_STATE_LABELS[state] ?? state,
     health: deriveConnectionHealth(
       {
         lastSuccessAt: row.last_success_at,
@@ -158,7 +176,7 @@ export async function setConnectionState(args: {
   who: AuthenticatedIdentity;
   actor: Actor;
   connectionId: string;
-  newState: "ACTIVE" | "PAUSED" | "REVOKED";
+  newState: ConnectionState | "RESUME_AUTO";
   idempotencyKey?: string;
 }): Promise<{ status: number; body: EnrichedConnection }> {
   authorize(args.actor, "connection.admin");
@@ -185,16 +203,21 @@ export async function setConnectionState(args: {
       }
 
       const existing = existingRes.rows[0];
-      if (existing.state === "REVOKED") {
+      if (isTerminalConnectionState(existing.state)) {
         throw new AppError(
           "CONFLICT",
-          "REVOKED connection is terminal and cannot transition to another state."
+          `${existing.state} connection is terminal and cannot transition to another state.`
         );
       }
 
+      const targetState: ConnectionState =
+        args.newState === "RESUME_AUTO"
+          ? (existing.state === "SUSPENDED" ? "RESUMED" : "ACTIVE")
+          : args.newState;
+
       const updateRes = await tx.q(
         `UPDATE connection SET state = $1 WHERE id = $2 RETURNING *`,
-        [args.newState, args.connectionId]
+        [targetState, args.connectionId]
       );
 
       if (updateRes.rowCount === 0) {
@@ -218,7 +241,7 @@ export async function setConnectionState(args: {
           resourceId: args.connectionId,
           resourceVersion: nextVersion,
           result: "SUCCESS",
-          evidenceRefs: [`connection/${args.connectionId}`, `state/${args.newState}`]
+          evidenceRefs: [`connection/${args.connectionId}`, `state/${targetState}`]
         },
         events: [
           {
@@ -231,7 +254,7 @@ export async function setConnectionState(args: {
             refs: [
               `connection/${args.connectionId}`,
               `from/${existing.state}`,
-              `to/${args.newState}`
+              `to/${targetState}`
             ]
           }
         ]

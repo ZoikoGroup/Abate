@@ -1,7 +1,7 @@
 {
   "schema": "abate.restore-rehearsal.v1",
   "success": true,
-  "executedAt": "2026-11-17T06:27:28.641Z",
+  "executedAt": "2026-11-18T10:57:52.876Z",
   "rtoMs": 1,
   "rpoMinutes": 0,
   "reconciledDeletions": 10,

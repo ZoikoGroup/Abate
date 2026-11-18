@@ -43,18 +43,28 @@ async function runMigrations() {
         continue;
       }
 
-      console.log(`  Applying [PG Migrator Role]: ${file}`);
-      await client.query("BEGIN");
-      try {
+      const noTransaction = /^--\s*migrate:no-transaction\b/m.test(sql) || /\bCREATE\s+INDEX\s+CONCURRENTLY\b/i.test(sql);
+      if (noTransaction) {
+        console.log(`  Applying [PG Migrator Role, no-transaction]: ${file}`);
         await client.query(sql);
         await client.query(
           "INSERT INTO schema_migrations (version, checksum) VALUES ($1, $2)",
           [file, checksum]
         );
-        await client.query("COMMIT");
-      } catch (error) {
-        await client.query("ROLLBACK");
-        throw error;
+      } else {
+        console.log(`  Applying [PG Migrator Role]: ${file}`);
+        await client.query("BEGIN");
+        try {
+          await client.query(sql);
+          await client.query(
+            "INSERT INTO schema_migrations (version, checksum) VALUES ($1, $2)",
+            [file, checksum]
+          );
+          await client.query("COMMIT");
+        } catch (error) {
+          await client.query("ROLLBACK");
+          throw error;
+        }
       }
     }
     console.log("\x1b[32m[SUCCESS] All SQL migrations applied to PostgreSQL.\x1b[0m");

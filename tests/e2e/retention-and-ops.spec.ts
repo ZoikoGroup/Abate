@@ -17,7 +17,7 @@ test.describe("Phase 5 Legal Holds & Phase 8 Support Operations E2E", () => {
     await expect(page.getByText("COVERED", { exact: true })).toBeVisible();
 
     const matterId = `MATTER-E2E-${Date.now().toString().slice(-5)}`;
-    await page.getByLabel(/Matter reference/i).fill(matterId);
+    await page.getByLabel(/Work item \/ Hold reference|Matter reference/i).fill(matterId);
     await page.getByLabel(/^Reason$/i).fill("Regulatory preservation notice during E2E test");
     await page.getByRole("button", { name: /Place legal hold/i }).click();
     await expect(page.getByText(/Legal hold placed/i)).toBeVisible({ timeout: 10_000 });

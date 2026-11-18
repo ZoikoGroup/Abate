@@ -1,6 +1,7 @@
 // frontend/src/components/Tabs/OrganizationsTab.tsx
 import { useState } from "react";
 import { api, ApiError, type Organization, PRESET_TENANTS } from "../../api/client";
+import { StateView } from "../StateView";
 
 interface OrganizationsTabProps {
   currentTenant: typeof PRESET_TENANTS[0];
@@ -79,16 +80,19 @@ export function OrganizationsTab({
         if (err.code === "CONFLICT") {
           setFeedback({
             type: "conflict",
-            message: `409 CONFLICT: Idempotency Key collision with modified payload.`,
-            details: `The server detected request hash mutation for key "${keyToUse}". Last-write-wins is strictly forbidden. Request ID: ${err.requestId}`
+            message: `409 CONFLICT: Idempotency Key collision with modified payload. Reload and try again with a fresh key.`,
+            details: `No automatic retry is attempted on 409. Key: "${keyToUse}".${err.fields.length ? ` Fields: ${err.fields.join(", ")}.` : ""} Request ID: ${err.requestId}`
           });
         } else if (err.code === "VALIDATION") {
+          const fieldList = err.fields.length > 0
+            ? err.fields.join(", ")
+            : injectProhibitedField ? "keystroke_tracker_payload" : "invalid payload";
           setFeedback({
             type: injectProhibitedField ? "success" : "error",
             message: injectProhibitedField
               ? `✔ CONSTITUTIONAL BOUNDARY DEFENDED (HTTP 400 VALIDATION)`
-              : `400 VALIDATION ERROR: Schema rejected invalid/prohibited fields!`,
-            details: `Schema strictly rejected unknown/prohibited fields (${injectProhibitedField ? "keystroke_tracker" : "invalid payload"}). Surveillance and keystroke tracking cannot enter persistence, staging, or logs. Request ID: ${err.requestId}`
+              : `400 VALIDATION ERROR: Schema rejected invalid or missing field(s).`,
+            details: `Rejected field(s): ${fieldList}. Submitted values are never echoed or persisted. Request ID: ${err.requestId}`
           });
         } else {
           setFeedback({
@@ -245,9 +249,13 @@ export function OrganizationsTab({
           Only organizations belonging to <code>{currentTenant.name}</code> are listed below, guaranteed by PostgreSQL Row-Level Security.
         </p>
 
-        {organizations.length === 0 ? (
-          <p className="empty-text">No organization units registered yet for this tenant.</p>
-        ) : (
+        <StateView
+          state={
+            organizations.length === 0
+              ? { kind: "empty", reason: "No organization units registered yet for this tenant." }
+              : { kind: "ok" }
+          }
+        >
           <div className="table-responsive">
             <table className="data-table">
               <thead>
@@ -270,7 +278,7 @@ export function OrganizationsTab({
               </tbody>
             </table>
           </div>
-        )}
+        </StateView>
       </div>
     </div>
   );

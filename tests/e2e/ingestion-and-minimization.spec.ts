@@ -31,12 +31,14 @@ test.describe("Phase 2 Ingestion & Connection Lifecycle E2E", () => {
     await page.getByRole("button", { name: /Register Connection/i }).click();
     await expect(page.getByText(/Source Connection Registered/i)).toBeVisible({ timeout: 10_000 });
 
-    // 4. Pause then resume the newly added connection
-    const pauseBtn = page.getByRole("button", { name: "Pause", exact: true }).first();
+    // 4. Pause then resume an active (enabled) connection
+    const pauseBtn = page.locator("button:enabled", { hasText: /^Pause$/ }).first();
+    await expect(pauseBtn).toBeEnabled({ timeout: 10_000 });
     await pauseBtn.click();
     await expect(page.getByText(/Connection PAUSED/i)).toBeVisible({ timeout: 10_000 });
 
-    const resumeBtn = page.getByRole("button", { name: "Resume", exact: true }).first();
+    const resumeBtn = page.locator("button:enabled", { hasText: /^Resume$/ }).first();
+    await expect(resumeBtn).toBeEnabled({ timeout: 10_000 });
     await resumeBtn.click();
     await expect(page.getByText(/Connection RESUMED/i)).toBeVisible({ timeout: 10_000 });
   });

@@ -11,6 +11,7 @@ import { runRecoveryRehearsal } from "./reconcile-after-restore";
 import { runKillSwitchDrill } from "./drill-kill-switches";
 import { run30DayHttpSimulation } from "./simulate-30d-http";
 import { runVerifierSelfTest } from "./verify-evidence";
+import { runIndependentChallenge } from "./run-independent-challenge";
 
 interface SuiteExecutionResult {
   name: string;
@@ -34,6 +35,7 @@ const SUITES: Array<{ name: string; script: string; toolPath: string; phase: str
   { name: "Phase 6 Bounded AI & Actions Suite", script: "test-ai", toolPath: "tools/test-phase6-ai.ts", phase: "Phase 6 (BE-008)" },
   { name: "Phase 7 Two-Plane & AI Change Suite", script: "test-planes", toolPath: "tools/test-phase7-planes.ts", phase: "Phase 7 (B7)" },
   { name: "Worker Outbox Crash & Lease Suite", script: "test-worker", toolPath: "tools/test-worker-crash-lab.ts", phase: "Async Reliability" },
+  { name: "Stage B Pilot Readiness Gate", script: "test-pilot", toolPath: "tools/test-pilot-readiness.ts", phase: "Stage B Item 6 (OIDC/Secrets/Monitoring)" },
   { name: "Postgres Parity & Fail-Closed Guard", script: "verify-pg", toolPath: "tools/verify-pg-clean.ts", phase: "Infrastructure & Least-Privilege DB" },
   { name: "Daily Endpoint & Contract Drift Check", script: "check:endpoints", toolPath: "tools/endpoint-check.ts", phase: "API Catalog Compliance" }
 ];
@@ -151,13 +153,28 @@ export async function assembleDossier() {
   const killSwitchReport = await runKillSwitchDrill({ quiet: true, writeReport: true });
   console.log(`  ✔ 5-Kill-Switch Live Drill: ${killSwitchReport.passedSwitches}/${killSwitchReport.totalSwitches} PASS`);
 
+  const challengeStart = Date.now();
+  const challengeReport = await runIndependentChallenge({ quiet: true, writeArtifacts: true });
+  testSuites.push({
+    name: "Stage B Independent Challenge Harness",
+    script: "challenge",
+    phase: "Stage B Item 4 (5 Adversarial Vectors)",
+    testsPassed: challengeReport.summary.passed,
+    status: challengeReport.summary.p0Open === 0 && challengeReport.summary.failed === 0 ? "PASS" : "FAIL",
+    exitCode: challengeReport.summary.p0Open === 0 && challengeReport.summary.failed === 0 ? 0 : 1,
+    durationMs: Date.now() - challengeStart,
+    lastRun: challengeReport.generatedAt
+  });
+  console.log(`  ✔ Independent Challenge Harness: ${challengeReport.summary.passed}/${challengeReport.summary.totalVectors} PASS (P0=${challengeReport.summary.p0Open})`);
+
   // 3. Aggregate Security / Quality Gates & Honest Defect Counters
   const failingSuites = testSuites.filter((s) => s.status !== "PASS");
   const allGatesGreen =
     failingSuites.length === 0 &&
     restoreRes.success &&
     killSwitchReport.allPassed &&
-    simReport.summary.passed;
+    simReport.summary.passed &&
+    challengeReport.summary.p0Open === 0;
 
   let imageDigests: Record<string, string> | null = null;
   if (process.env.ABATE_IMAGE_DIGESTS) {
@@ -229,6 +246,13 @@ export async function assembleDossier() {
       verifierCli: "backend/tools/verify-evidence.ts",
       browserVerifierTab: "AuditVerifierTab.tsx",
       epistemicNotice: "Cryptographic hashes and Merkle proofs prove files are unchanged since export, NOT that the underlying claims are true."
+    },
+    independentChallenge: {
+      harnessCli: "backend/tools/run-independent-challenge.ts",
+      status: challengeReport.status,
+      p0Open: challengeReport.summary.p0Open,
+      vectorsPassed: challengeReport.summary.passed,
+      totalVectors: challengeReport.summary.totalVectors
     }
   };
 

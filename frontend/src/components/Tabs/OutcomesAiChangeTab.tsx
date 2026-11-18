@@ -21,6 +21,7 @@ import {
 } from "../../api/client";
 import { PlaneBadge } from "../PlaneBadge";
 import { PermittedClaims } from "../PermittedClaims";
+import { StateView } from "../StateView";
 
 function fmtOutcomeErr(err: unknown): string {
   if (err instanceof ApiError) {
@@ -64,10 +65,10 @@ export function OutcomesAiChangeTab({ currentTenant, token }: OutcomesAiChangeTa
 
   // New Profile Form
   const [profileTitle, setProfileTitle] = useState("Litigation Research & Synthesis Agent");
-  const [affectedRoles, setAffectedRoles] = useState("Associate, Paralegal");
+  const [affectedRoles, setAffectedRoles] = useState("Senior Analyst, Coordinator");
   const [affectedTasks, setAffectedTasks] = useState("Precedent synthesis, citation cross-checking");
   const [automationMode, setAutomationMode] = useState<"ASSIST" | "AUTOMATE_WITH_REVIEW" | "AUTONOMOUS_BOUNDED">("ASSIST");
-  const [decisionRights, setDecisionRights] = useState("Supervising Partner retains sole filing authority");
+  const [decisionRights, setDecisionRights] = useState("Accountable Reviewer retains sole approval authority");
 
   // Lab & Feedback
   const [loading, setLoading] = useState(false);
@@ -504,7 +505,7 @@ export function OutcomesAiChangeTab({ currentTenant, token }: OutcomesAiChangeTa
           <div style={{ flex: 1, minWidth: "280px" }}>
             <div style={{ display: "flex", alignItems: "center", gap: "0.5rem", marginBottom: "0.4rem" }}>
               <PlaneBadge plane="A" />
-              <strong style={{ fontSize: "0.875rem", color: "#1E293B" }}>Assurance & Legal Duty Plane</strong>
+              <strong style={{ fontSize: "0.875rem", color: "#1E293B" }}>Assurance &amp; Duty-of-Care Plane</strong>
             </div>
             <p style={{ fontSize: "0.8rem", color: "#64748B", lineHeight: 1.45, margin: 0 }}>
               Statutory psychosocial risk duties, authoritative hazards, organizational causes, version-bound controls,
@@ -699,11 +700,15 @@ export function OutcomesAiChangeTab({ currentTenant, token }: OutcomesAiChangeTa
               <h5 style={{ fontSize: "0.85rem", color: "var(--graphite)", marginTop: "1rem", marginBottom: "0.5rem" }}>
                 Recorded Evaluations ({evaluations.length})
               </h5>
-              {evaluations.length === 0 ? (
-                <div style={{ fontSize: "0.8rem", color: "#94A3B8", fontStyle: "italic" }}>
-                  No Plane B evaluations recorded yet.
-                </div>
-              ) : (
+              <StateView
+                state={
+                  loading && evaluations.length === 0
+                    ? { kind: "loading" }
+                    : evaluations.length === 0
+                      ? { kind: "empty", reason: "No Plane B evaluations recorded yet." }
+                      : { kind: "ok" }
+                }
+              >
                 <div style={{ display: "flex", flexDirection: "column", gap: "0.75rem", maxHeight: "350px", overflowY: "auto" }}>
                   {evaluations.map(ev => (
                     <div
@@ -726,7 +731,7 @@ export function OutcomesAiChangeTab({ currentTenant, token }: OutcomesAiChangeTa
                     </div>
                   ))}
                 </div>
-              )}
+              </StateView>
             </div>
           )}
         </div>
@@ -915,7 +920,7 @@ export function OutcomesAiChangeTab({ currentTenant, token }: OutcomesAiChangeTa
                   onChange={e => setAffectedRoles(e.target.value)}
                   className="text-control"
                   style={{ width: "100%" }}
-                  placeholder="Associate, Paralegal"
+                  placeholder="Senior Analyst, Coordinator"
                 />
               </div>
 

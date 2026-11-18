@@ -176,7 +176,7 @@ export async function seedTwoTenants(opts: SeedTwoTenantsOptions = {}) {
     definition: {
       purpose: "Cohort work-pattern condition. NOT an individual risk score, NOT a legal threshold.",
       formula: "outside_schedule_minutes / total_work_minutes; percent; 1 decimal",
-      allowedDimensions: ["practice_area", "team"],
+      allowedDimensions: ["unit", "team"],
       qualityFloor: 0.8,
       releaseClass: "CLASS_B",
       contributorFloor: 10
@@ -581,8 +581,8 @@ export async function seedTwoTenants(opts: SeedTwoTenantsOptions = {}) {
              VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12, $13, $14::jsonb, $15)
              ON CONFLICT (id) DO NOTHING`,
             [br.snapshot_id, tA.id, br.metric_id, br.metric_version, "cohort:seed-baseline", ba.period_start, ba.period_end,
-             ba.period_end, "seed-baseline", "seed-v1", ba.value, ba.quality, GOLDEN_01.tenantA.cohortSize ?? 16,
-             JSON.stringify({ seeded: true }), validFrom]
+            ba.period_end, "seed-baseline", "seed-v1", ba.value, ba.quality, GOLDEN_01.tenantA.cohortSize ?? 16,
+            JSON.stringify({ seeded: true }), validFrom]
           );
           await client.query(
             `INSERT INTO privacy_decision (id, tenant_id, semantic_query_hash, outcome, reason_code, policy_version, decided_at)
@@ -602,7 +602,7 @@ export async function seedTwoTenants(opts: SeedTwoTenantsOptions = {}) {
              VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12)
              ON CONFLICT (release_id) DO NOTHING`,
             [ba.release_id, tA.id, ba.metric_id, ba.metric_version, ba.value, ba.unit, ba.period_start, ba.period_end,
-             ba.quality, ba.interpretation, ba.status, ba.artifact_hash]
+            ba.quality, ba.interpretation, ba.status, ba.artifact_hash]
           );
           await client.query(
             `INSERT INTO hazard (id, tenant_id, title, owner_principal_id, originating_release_id, disposition, version, created_at)
@@ -622,7 +622,7 @@ export async function seedTwoTenants(opts: SeedTwoTenantsOptions = {}) {
              VALUES ($1, $2, $3, $4, 'APPROVED', 1, $5, $6, $7, $8, $9::jsonb, $10, $11)
              ON CONFLICT (id) DO NOTHING`,
             [ac.interventionId, tA.id, ac.hazardId, ac.causeId, controlDraft.scope, controlDraft.objective, principalA.id,
-             controlDraft.dueDate, JSON.stringify(controlDraft.verificationPlan), controlHash, validFrom]
+            controlDraft.dueDate, JSON.stringify(controlDraft.verificationPlan), controlHash, validFrom]
           );
           await client.query(
             `INSERT INTO approval (id, tenant_id, intervention_id, approved_version, approved_material_hash, approver_principal_id,
@@ -648,8 +648,8 @@ export async function seedTwoTenants(opts: SeedTwoTenantsOptions = {}) {
                VALUES ($1, $2, $3, $4, $5, $6, $7, $8::jsonb, $9, $10, $11::jsonb, $12)
                ON CONFLICT (pack_key, version) DO NOTHING`,
               [pack.id, pack.pack_key, pack.version, pack.kind, pack.effective_from, pack.effective_to, pack.status,
-               JSON.stringify(pack.source_refs), pack.accountable_reviewer, pack.review_date,
-               JSON.stringify(pack.content), pack.content_hash]
+              JSON.stringify(pack.source_refs), pack.accountable_reviewer, pack.review_date,
+              JSON.stringify(pack.content), pack.content_hash]
             );
           }
           for (const b of memDb.tenantPolicyBindings as Array<{ tenant_id: string; pack_key: string; pack_version: number; applies_to: unknown; bound_from: string; bound_to: string | null }>) {

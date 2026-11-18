@@ -5,8 +5,10 @@ import {
   type AiRunView,
   type KillSwitchRecord,
   type ActionAttemptView,
+  type AiQuotaStatus,
   fetchAiRuns,
   fetchKillSwitches,
+  fetchAiQuota,
   setKillSwitch,
   explainReleaseAi,
   proposeAction,
@@ -17,6 +19,7 @@ import {
   SEEDED_APPROVAL_ID
 } from "../../api/client";
 import { AiPanel } from "../AiPanel";
+import { StateView } from "../StateView";
 
 function fmtBoundedAiErr(err: unknown): string {
   if (err instanceof ApiError) {
@@ -33,6 +36,7 @@ interface BoundedAiTabProps {
 export function BoundedAiTab({ currentTenant, token }: BoundedAiTabProps) {
   const [runs, setRuns] = useState<AiRunView[]>([]);
   const [killSwitches, setKillSwitches] = useState<KillSwitchRecord[]>([]);
+  const [quota, setQuota] = useState<AiQuotaStatus | null>(null);
   const [loading, setLoading] = useState(false);
   const [feedback, setFeedback] = useState<{
     type: "success" | "warning" | "error" | "conflict";
@@ -49,12 +53,14 @@ export function BoundedAiTab({ currentTenant, token }: BoundedAiTabProps) {
     if (!token) return;
     try {
       setLoading(true);
-      const [rList, ksList] = await Promise.all([
+      const [rList, ksList, qStatus] = await Promise.all([
         fetchAiRuns(token),
-        fetchKillSwitches(token)
+        fetchKillSwitches(token),
+        fetchAiQuota(token).catch(() => null)
       ]);
       setRuns(rList);
       setKillSwitches(ksList);
+      setQuota(qStatus);
     } catch (err: unknown) {
       setFeedback({
         type: "error",
@@ -71,12 +77,14 @@ export function BoundedAiTab({ currentTenant, token }: BoundedAiTabProps) {
     let cancelled = false;
     void Promise.all([
       fetchAiRuns(token),
-      fetchKillSwitches(token)
+      fetchKillSwitches(token),
+      fetchAiQuota(token).catch(() => null)
     ])
-      .then(([rList, ksList]) => {
+      .then(([rList, ksList, qStatus]) => {
         if (cancelled) return;
         setRuns(rList);
         setKillSwitches(ksList);
+        setQuota(qStatus);
       })
       .catch((err: unknown) => {
         if (cancelled) return;
@@ -437,6 +445,51 @@ export function BoundedAiTab({ currentTenant, token }: BoundedAiTabProps) {
         </div>
       )}
 
+      {/* Monthly Per-Tenant AI Quota Visibility */}
+      {quota && (
+        <div className="card" style={{ marginTop: "1rem" }}>
+          <div className="card-header">
+            <div>
+              <h3>Tenant Monthly AI Quota ({quota.window})</h3>
+              <p className="card-desc">
+                Atomic per-tenant monthly budget tracking (UTC). Returns HTTP 429 with <code>Retry-After</code> when exhausted; kill switches always override quota immediately.
+              </p>
+            </div>
+            <span className={`badge ${quota.allAiDisabled ? "badge-coral" : "badge-aubergine"}`}>
+              {quota.allAiDisabled ? "ALL AI DISABLED BY KILL SWITCH" : `RESET ${new Date(quota.resetAt).toISOString().slice(0, 10)}`}
+            </span>
+          </div>
+          <div className="table-responsive" style={{ marginTop: "0.75rem" }}>
+            <table className="data-table">
+              <thead>
+                <tr>
+                  <th>Use Case</th>
+                  <th>Model</th>
+                  <th>Spent / Cap (minor)</th>
+                  <th>Remaining Slots (Est.)</th>
+                  <th>Override Status</th>
+                </tr>
+              </thead>
+              <tbody>
+                {quota.useCases.map(uc => (
+                  <tr key={uc.useCaseKey}>
+                    <td className="monospace">{uc.useCaseKey} (v{uc.version})</td>
+                    <td className="monospace">{uc.modelRef}</td>
+                    <td>{uc.spentMinor} / {uc.monthlyBudgetMinor}</td>
+                    <td><strong>{uc.remainingRunsEst}</strong> ({uc.remainingMinor} remaining)</td>
+                    <td>
+                      <span className={`badge ${uc.killSwitchActive ? "badge-coral" : uc.remainingMinor < uc.estimatedRunCostMinor ? "badge-warning" : "badge-success"}`}>
+                        {uc.killSwitchActive ? "KILL-SWITCH DISABLED" : uc.remainingMinor < uc.estimatedRunCostMinor ? "QUOTA EXHAUSTED (429)" : "OPERATIONAL"}
+                      </span>
+                    </td>
+                  </tr>
+                ))}
+              </tbody>
+            </table>
+          </div>
+        </div>
+      )}
+
       {/* Kill Switch Operations Console */}
       <div className="card" style={{ marginTop: "1rem" }}>
         <div className="card-header">
@@ -494,11 +547,15 @@ export function BoundedAiTab({ currentTenant, token }: BoundedAiTabProps) {
           <span className="monospace-badge">{runs.length} Runs Recorded</span>
         </div>
 
-        {runs.length === 0 ? (
-          <p style={{ fontSize: "0.85rem", color: "#64748B", padding: "1rem 0" }}>
-            No AI runs recorded yet. Generate an explanation or run a lab test above.
-          </p>
-        ) : (
+        <StateView
+          state={
+            loading && runs.length === 0
+              ? { kind: "loading" }
+              : runs.length === 0
+                ? { kind: "empty", reason: "No AI runs recorded yet. Generate an explanation or run a lab test above." }
+                : { kind: "ok" }
+          }
+        >
           <div style={{ overflowX: "auto", marginTop: "0.5rem" }}>
             <table className="table" style={{ width: "100%", fontSize: "0.8rem" }}>
               <thead>
@@ -516,9 +573,8 @@ export function BoundedAiTab({ currentTenant, token }: BoundedAiTabProps) {
                     <td><code className="monospace">{r.id.slice(0, 8)}...</code></td>
                     <td>{r.useCaseKey} (v{r.useCaseVersion})</td>
                     <td>
-                      <span className={`badge ${
-                        r.status === "PROPOSED" ? "badge-warning" : (r.status === "ACCEPTED" ? "badge-success" : "badge-danger")
-                      }`}>
+                      <span className={`badge ${r.status === "PROPOSED" ? "badge-warning" : (r.status === "ACCEPTED" ? "badge-success" : "badge-danger")
+                        }`}>
                         {r.status}
                       </span>
                     </td>
@@ -529,7 +585,7 @@ export function BoundedAiTab({ currentTenant, token }: BoundedAiTabProps) {
               </tbody>
             </table>
           </div>
-        )}
+        </StateView>
       </div>
     </div>
   );

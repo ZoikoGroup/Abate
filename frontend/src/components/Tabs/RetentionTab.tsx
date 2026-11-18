@@ -18,6 +18,7 @@ import {
   type Connection,
   type RetentionRunStatus
 } from "../../api/client";
+import { StateView } from "../StateView";
 
 function formatRetentionError(err: unknown): string {
   if (err instanceof ApiError) {
@@ -123,7 +124,7 @@ export function RetentionTab({ currentTenant, token }: RetentionTabProps) {
     }, newKey(), token!);
     setMatterRef("");
     setHoldReason("");
-    return `Matter ${matterRef}: ${holdScope ? "facts from one connection" : "all work facts"} are now exempt from purge.`;
+    return `Hold ${matterRef}: ${holdScope ? "facts from one connection" : "all work facts"} are now exempt from purge.`;
   });
 
   const handleReleaseHold = (holdId: string) => act("Legal hold released", async () => {
@@ -192,6 +193,8 @@ export function RetentionTab({ currentTenant, token }: RetentionTabProps) {
         </div>
       )}
 
+      {!state && !feedback && <StateView state={{ kind: "loading" }} />}
+
       <div className="card">
         <div className="card-header">
           <div>
@@ -201,7 +204,10 @@ export function RetentionTab({ currentTenant, token }: RetentionTabProps) {
             </p>
           </div>
           {coverage && (
-            <span className={coverage.status === "COVERED" ? "badge badge-success" : "badge badge-coral"}>{coverage.status}</span>
+            <div style={{ display: "flex", gap: "0.4rem", alignItems: "center" }}>
+              {isSynthetic && <span className="badge badge-warning">PLACEHOLDER (unapproved)</span>}
+              <span className={coverage.status === "COVERED" ? "badge badge-success" : "badge badge-coral"}>{coverage.status}</span>
+            </div>
           )}
         </div>
 
@@ -312,8 +318,8 @@ export function RetentionTab({ currentTenant, token }: RetentionTabProps) {
 
         <div className="form-grid">
           <div className="form-group">
-            <label className="form-label" htmlFor="hold-matter">Matter reference</label>
-            <input id="hold-matter" className="text-control" value={matterRef} onChange={e => setMatterRef(e.target.value)} placeholder="MATTER-2026-014" />
+            <label className="form-label" htmlFor="hold-matter">Work item / Hold reference</label>
+            <input id="hold-matter" className="text-control" value={matterRef} onChange={e => setMatterRef(e.target.value)} placeholder="HOLD-2026-014" />
           </div>
           <div className="form-group">
             <label className="form-label" htmlFor="hold-scope">Scope</label>
@@ -332,7 +338,7 @@ export function RetentionTab({ currentTenant, token }: RetentionTabProps) {
         {state && state.holds.length > 0 && (
           <div className="table-responsive">
             <table className="data-table">
-              <thead><tr><th>Matter</th><th>Scope</th><th>Reason</th><th>Placed</th><th>Status</th><th></th></tr></thead>
+              <thead><tr><th>Reference</th><th>Scope</th><th>Reason</th><th>Placed</th><th>Status</th><th></th></tr></thead>
               <tbody>
                 {state.holds.map(h => (
                   <tr key={h.id}>

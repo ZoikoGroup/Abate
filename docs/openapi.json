@@ -1,0 +1,2982 @@
+{
+  "openapi": "3.1.0",
+  "info": {
+    "title": "Zoiko Abate Authoritative API Contract Registry",
+    "version": "2.0.0",
+    "description": "API v2 specification for Zoiko Abate psychosocial-risk governance, privacy release compiler, bounded AI, work-design outcomes, and zero-impersonation diagnostic infrastructure."
+  },
+  "servers": [
+    {
+      "url": "/api/v2",
+      "description": "API v2 Base (Default Tenant Environment)"
+    }
+  ],
+  "components": {
+    "securitySchemes": {
+      "BearerAuth": {
+        "type": "http",
+        "scheme": "bearer",
+        "bearerFormat": "JWT",
+        "description": "Bearer token with embedded tenant_id, sub, and role."
+      }
+    }
+  },
+  "security": [
+    {
+      "BearerAuth": []
+    }
+  ],
+  "paths": {
+    "/auth/token": {
+      "post": {
+        "tags": [
+          "Authentication & Tenancy"
+        ],
+        "summary": "Issue dev/test token with strict tenant context binding",
+        "security": [],
+        "requestBody": {
+          "required": true,
+          "content": {
+            "application/json": {
+              "schema": {
+                "type": "object",
+                "required": [
+                  "tenantId",
+                  "subject"
+                ],
+                "properties": {
+                  "tenantId": {
+                    "type": "string",
+                    "format": "uuid"
+                  },
+                  "subject": {
+                    "type": "string"
+                  },
+                  "role": {
+                    "type": "string",
+                    "enum": [
+                      "RISK_OWNER",
+                      "CONTROL_OWNER",
+                      "REVIEWER",
+                      "WORKS_COUNCIL",
+                      "EMPLOYER_ADMIN",
+                      "OPS_ADMIN"
+                    ]
+                  }
+                }
+              }
+            }
+          }
+        },
+        "responses": {
+          "200": {
+            "description": "Bearer token successfully issued"
+          },
+          "400": {
+            "description": "Validation error"
+          }
+        }
+      }
+    },
+    "/auth/refresh": {
+      "post": {
+        "tags": [
+          "Authentication & Tenancy"
+        ],
+        "summary": "Refresh active Bearer token with identical tenant context",
+        "responses": {
+          "200": {
+            "description": "New Bearer token successfully issued"
+          },
+          "401": {
+            "description": "Unauthenticated"
+          }
+        }
+      }
+    },
+    "/auth/logout": {
+      "post": {
+        "tags": [
+          "Authentication & Tenancy"
+        ],
+        "summary": "Invalidate session credentials",
+        "responses": {
+          "204": {
+            "description": "Session successfully terminated"
+          }
+        }
+      }
+    },
+    "/me": {
+      "get": {
+        "tags": [
+          "Authentication & Tenancy"
+        ],
+        "summary": "Retrieve authenticated principal profile, tenant, memberships, and navigation permissions",
+        "responses": {
+          "200": {
+            "description": "Principal profile and allowed navigation items"
+          },
+          "401": {
+            "description": "Unauthenticated"
+          }
+        }
+      }
+    },
+    "/tenants": {
+      "get": {
+        "tags": [
+          "Authentication & Tenancy"
+        ],
+        "summary": "List available tenant workspaces for workspace switching",
+        "responses": {
+          "200": {
+            "description": "List of available tenants"
+          },
+          "401": {
+            "description": "Unauthenticated"
+          }
+        }
+      }
+    },
+    "/tenants/{id}": {
+      "get": {
+        "tags": [
+          "Authentication & Tenancy"
+        ],
+        "summary": "Inspect tenant profile by ID (enforces strict tenant boundary)",
+        "parameters": [
+          {
+            "name": "id",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "type": "string",
+              "format": "uuid"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "Tenant profile details"
+          },
+          "403": {
+            "description": "Forbidden: cross-tenant access prohibited"
+          },
+          "404": {
+            "description": "Tenant not found"
+          }
+        }
+      }
+    },
+    "/tenants/current": {
+      "get": {
+        "tags": [
+          "Authentication & Tenancy"
+        ],
+        "summary": "Retrieve current tenant profile from token context",
+        "responses": {
+          "200": {
+            "description": "Current tenant metadata"
+          },
+          "401": {
+            "description": "Unauthenticated"
+          }
+        }
+      }
+    },
+    "/organizations": {
+      "post": {
+        "tags": [
+          "Organizations"
+        ],
+        "summary": "Create organizational unit within tenant scope",
+        "parameters": [
+          {
+            "name": "Idempotency-Key",
+            "in": "header",
+            "required": true,
+            "schema": {
+              "type": "string"
+            }
+          }
+        ],
+        "requestBody": {
+          "required": true,
+          "content": {
+            "application/json": {
+              "schema": {
+                "type": "object",
+                "required": [
+                  "name"
+                ],
+                "properties": {
+                  "name": {
+                    "type": "string",
+                    "minLength": 1
+                  },
+                  "parentId": {
+                    "type": "string",
+                    "format": "uuid"
+                  }
+                },
+                "additionalProperties": false
+              }
+            }
+          }
+        },
+        "responses": {
+          "200": {
+            "description": "Organization unit created or returned via idempotency replay"
+          },
+          "409": {
+            "description": "Idempotency conflict"
+          }
+        }
+      },
+      "get": {
+        "tags": [
+          "Organizations"
+        ],
+        "summary": "List organizations strictly scoped to caller's tenant",
+        "responses": {
+          "200": {
+            "description": "Tenant organization hierarchy"
+          }
+        }
+      }
+    },
+    "/organizations/{id}": {
+      "get": {
+        "tags": [
+          "Organizations"
+        ],
+        "summary": "Get organization unit by ID",
+        "parameters": [
+          {
+            "name": "id",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "type": "string",
+              "format": "uuid"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "Organization unit details"
+          },
+          "404": {
+            "description": "Not found (identically returned for foreign tenant IDs)"
+          }
+        }
+      }
+    },
+    "/audit-events": {
+      "get": {
+        "tags": [
+          "Audit & Outbox"
+        ],
+        "summary": "Query append-only audit trail for caller's tenant",
+        "responses": {
+          "200": {
+            "description": "Tenant audit logs"
+          }
+        }
+      }
+    },
+    "/outbox/drain": {
+      "post": {
+        "tags": [
+          "Audit & Outbox"
+        ],
+        "summary": "Drain and publish transactional outbox events",
+        "responses": {
+          "200": {
+            "description": "Outbox drain summary"
+          }
+        }
+      }
+    },
+    "/ingest/batches": {
+      "post": {
+        "tags": [
+          "Ingest & Work Ledger"
+        ],
+        "summary": "Submit append-only immutable work telemetry batch",
+        "requestBody": {
+          "required": true,
+          "content": {
+            "application/json": {
+              "schema": {
+                "type": "object",
+                "required": [
+                  "connectionId",
+                  "records"
+                ],
+                "properties": {
+                  "connectionId": {
+                    "type": "string",
+                    "format": "uuid"
+                  },
+                  "records": {
+                    "type": "array",
+                    "items": {
+                      "type": "object"
+                    }
+                  }
+                }
+              }
+            }
+          }
+        },
+        "responses": {
+          "200": {
+            "description": "Batch accepted and ledger recorded"
+          },
+          "400": {
+            "description": "Invalid batch or schema contract mismatch"
+          }
+        }
+      }
+    },
+    "/work-ledger": {
+      "get": {
+        "tags": [
+          "Ingest & Work Ledger"
+        ],
+        "summary": "Inspect raw immutable work ledger entries",
+        "responses": {
+          "200": {
+            "description": "List of work facts with cryptographically hashed record keys"
+          }
+        }
+      }
+    },
+    "/connectors/calendar-cadence/batches": {
+      "post": {
+        "tags": [
+          "Ingest & Work Ledger"
+        ],
+        "summary": "Ingest bounded CalendarCadence v1 batches (rejects meeting subjects, attendees, and descriptions)",
+        "responses": {
+          "200": {
+            "description": "CalendarCadence batch accepted and safe receipt returned"
+          },
+          "400": {
+            "description": "Strict contract rejection (unallowlisted field or invalid timestamp)"
+          }
+        }
+      }
+    },
+    "/source-contracts": {
+      "get": {
+        "tags": [
+          "Ingest & Work Ledger"
+        ],
+        "summary": "List approved source contracts scoped to caller's tenant",
+        "responses": {
+          "200": {
+            "description": "Tenant source contracts"
+          }
+        }
+      }
+    },
+    "/connections": {
+      "get": {
+        "tags": [
+          "Ingest & Work Ledger"
+        ],
+        "summary": "List tenant connections with wall-clock freshness health",
+        "responses": {
+          "200": {
+            "description": "Enriched connection list"
+          }
+        }
+      },
+      "post": {
+        "tags": [
+          "Ingest & Work Ledger"
+        ],
+        "summary": "Idempotently register a new connection bound to an active source contract",
+        "responses": {
+          "200": {
+            "description": "Registered connection"
+          },
+          "400": {
+            "description": "Validation or missing Idempotency-Key error"
+          },
+          "409": {
+            "description": "Idempotency conflict or inactive contract"
+          }
+        }
+      }
+    },
+    "/tenant/sector-profile": {
+      "get": {
+        "tags": [
+          "Tenants & Organizations"
+        ],
+        "summary": "Resolve active sector pack, neutral/pack vocabulary, demand windows, and enabled claim scope for caller's tenant",
+        "responses": {
+          "200": {
+            "description": "TenantSectorProfile"
+          }
+        }
+      }
+    },
+    "/connections/{id}/pause": {
+      "post": {
+        "tags": [
+          "Ingest & Work Ledger"
+        ],
+        "summary": "Pause connection via idempotent command pipeline with audit and outbox event",
+        "responses": {
+          "200": {
+            "description": "Connection paused"
+          },
+          "409": {
+            "description": "Suspended (REVOKED) connection cannot transition"
+          }
+        }
+      }
+    },
+    "/connections/{id}/resume": {
+      "post": {
+        "tags": [
+          "Ingest & Work Ledger"
+        ],
+        "summary": "Resume paused or suspended connection via idempotent command pipeline",
+        "responses": {
+          "200": {
+            "description": "Connection resumed (ACTIVE or RESUMED)"
+          },
+          "409": {
+            "description": "Disconnected/revoked terminal connection cannot transition"
+          }
+        }
+      }
+    },
+    "/connections/{id}/suspend": {
+      "post": {
+        "tags": [
+          "Ingest & Work Ledger"
+        ],
+        "summary": "Reversibly suspend connection (SUSPENDED) via idempotent command pipeline",
+        "responses": {
+          "200": {
+            "description": "Connection suspended (SUSPENDED)"
+          },
+          "409": {
+            "description": "Connection is in a terminal state"
+          }
+        }
+      }
+    },
+    "/connections/{id}/disconnect": {
+      "post": {
+        "tags": [
+          "Ingest & Work Ledger"
+        ],
+        "summary": "Permanently disconnect connection (terminal DISCONNECTED) via idempotent command pipeline",
+        "responses": {
+          "200": {
+            "description": "Connection permanently disconnected (DISCONNECTED)"
+          },
+          "409": {
+            "description": "Connection already disconnected"
+          }
+        }
+      }
+    },
+    "/connections/{id}/revoke": {
+      "post": {
+        "tags": [
+          "Ingest & Work Ledger"
+        ],
+        "summary": "Legacy terminal revoke connection (REVOKED) via idempotent command pipeline",
+        "responses": {
+          "200": {
+            "description": "Connection revoked (REVOKED)"
+          },
+          "409": {
+            "description": "Already in terminal connection state"
+          }
+        }
+      }
+    },
+    "/metrics/definitions": {
+      "get": {
+        "tags": [
+          "Cohort Privacy & Measurement"
+        ],
+        "summary": "List approved metric definitions (e.g. BOUNDARY_INTRUSION_SHARE)",
+        "responses": {
+          "200": {
+            "description": "Metric definitions"
+          }
+        }
+      }
+    },
+    "/privacy/query": {
+      "post": {
+        "tags": [
+          "Cohort Privacy & Measurement"
+        ],
+        "summary": "Execute semantic query through the privacy release compiler",
+        "requestBody": {
+          "required": true,
+          "content": {
+            "application/json": {
+              "schema": {
+                "type": "object",
+                "required": [
+                  "metricId",
+                  "cohortRef",
+                  "periodStart",
+                  "periodEnd"
+                ],
+                "properties": {
+                  "metricId": {
+                    "type": "string"
+                  },
+                  "metricVersion": {
+                    "type": "integer",
+                    "default": 1
+                  },
+                  "cohortRef": {
+                    "type": "string"
+                  },
+                  "periodStart": {
+                    "type": "string",
+                    "format": "date-time"
+                  },
+                  "periodEnd": {
+                    "type": "string",
+                    "format": "date-time"
+                  },
+                  "releaseClass": {
+                    "type": "string",
+                    "enum": [
+                      "CLASS_A",
+                      "CLASS_B"
+                    ],
+                    "default": "CLASS_B"
+                  }
+                }
+              }
+            }
+          }
+        },
+        "responses": {
+          "200": {
+            "description": "RELEASED with aggregate value OR uniform UNAVAILABLE suppression"
+          }
+        }
+      }
+    },
+    "/releases/{id}": {
+      "get": {
+        "tags": [
+          "Cohort Privacy & Measurement"
+        ],
+        "summary": "Retrieve immutable privacy release artifact (Plane A)",
+        "parameters": [
+          {
+            "name": "id",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "type": "string"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "Release artifact without individual contributor counts"
+          },
+          "404": {
+            "description": "Not found or cross-plane refusal"
+          }
+        }
+      }
+    },
+    "/hazards": {
+      "post": {
+        "tags": [
+          "Assurance & Hazards (Plane A)"
+        ],
+        "summary": "Register authoritative psychosocial hazard anchored to RELEASED evidence",
+        "requestBody": {
+          "required": true,
+          "content": {
+            "application/json": {
+              "schema": {
+                "type": "object",
+                "required": [
+                  "title",
+                  "originatingReleaseId"
+                ],
+                "properties": {
+                  "title": {
+                    "type": "string",
+                    "minLength": 3
+                  },
+                  "originatingReleaseId": {
+                    "type": "string"
+                  }
+                }
+              }
+            }
+          }
+        },
+        "responses": {
+          "201": {
+            "description": "Hazard registered in state OPEN"
+          },
+          "400": {
+            "description": "Validation error or release not in RELEASED status"
+          }
+        }
+      },
+      "get": {
+        "tags": [
+          "Assurance & Hazards (Plane A)"
+        ],
+        "summary": "List authoritative hazards for tenant",
+        "responses": {
+          "200": {
+            "description": "Hazard list"
+          }
+        }
+      }
+    },
+    "/hazards/{id}": {
+      "get": {
+        "tags": [
+          "Assurance & Hazards (Plane A)"
+        ],
+        "summary": "Get complete hazard detail view with causes and controls",
+        "parameters": [
+          {
+            "name": "id",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "type": "string",
+              "format": "uuid"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "Hazard detail view"
+          },
+          "404": {
+            "description": "Hazard not found"
+          }
+        }
+      }
+    },
+    "/hazards/{id}/causes": {
+      "post": {
+        "tags": [
+          "Assurance & Hazards (Plane A)"
+        ],
+        "summary": "Propose organizational cause statement (never individual worker blame)",
+        "parameters": [
+          {
+            "name": "id",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "type": "string",
+              "format": "uuid"
+            }
+          }
+        ],
+        "requestBody": {
+          "required": true,
+          "content": {
+            "application/json": {
+              "schema": {
+                "type": "object",
+                "required": [
+                  "statement"
+                ],
+                "properties": {
+                  "statement": {
+                    "type": "string",
+                    "minLength": 5
+                  }
+                }
+              }
+            }
+          }
+        },
+        "responses": {
+          "201": {
+            "description": "Organizational cause proposed in state PROPOSED"
+          }
+        }
+      }
+    },
+    "/causes/{id}/review": {
+      "post": {
+        "tags": [
+          "Assurance & Hazards (Plane A)"
+        ],
+        "summary": "Named reviewer decision on organizational cause",
+        "parameters": [
+          {
+            "name": "id",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "type": "string",
+              "format": "uuid"
+            }
+          }
+        ],
+        "requestBody": {
+          "required": true,
+          "content": {
+            "application/json": {
+              "schema": {
+                "type": "object",
+                "required": [
+                  "status"
+                ],
+                "properties": {
+                  "status": {
+                    "type": "string",
+                    "enum": [
+                      "REVIEWED_ACCEPTED",
+                      "REVIEWED_REJECTED"
+                    ]
+                  },
+                  "note": {
+                    "type": "string"
+                  }
+                }
+              }
+            }
+          }
+        },
+        "responses": {
+          "200": {
+            "description": "Cause status updated"
+          }
+        }
+      }
+    },
+    "/controls": {
+      "post": {
+        "tags": [
+          "Assurance & Controls (Plane A)"
+        ],
+        "summary": "Draft version-bound control intervention",
+        "requestBody": {
+          "required": true,
+          "content": {
+            "application/json": {
+              "schema": {
+                "type": "object",
+                "required": [
+                  "hazardId",
+                  "causeId",
+                  "scope",
+                  "objective",
+                  "dueDate",
+                  "verificationPlan"
+                ],
+                "properties": {
+                  "hazardId": {
+                    "type": "string",
+                    "format": "uuid"
+                  },
+                  "causeId": {
+                    "type": "string",
+                    "format": "uuid"
+                  },
+                  "scope": {
+                    "type": "string"
+                  },
+                  "objective": {
+                    "type": "string"
+                  },
+                  "dueDate": {
+                    "type": "string",
+                    "format": "date"
+                  },
+                  "verificationPlan": {
+                    "type": "object"
+                  }
+                }
+              }
+            }
+          }
+        },
+        "responses": {
+          "201": {
+            "description": "Control drafted in state PROPOSED"
+          }
+        }
+      }
+    },
+    "/controls/{id}/approve": {
+      "post": {
+        "tags": [
+          "Assurance & Controls (Plane A)"
+        ],
+        "summary": "Authorized Risk Owner approves control bound to immutable version & hash",
+        "parameters": [
+          {
+            "name": "id",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "type": "string",
+              "format": "uuid"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "Control state advanced to APPROVED"
+          }
+        }
+      }
+    },
+    "/controls/{id}/receipt": {
+      "post": {
+        "tags": [
+          "Assurance & Controls (Plane A)"
+        ],
+        "summary": "Record implementation receipt with audit trail",
+        "parameters": [
+          {
+            "name": "id",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "type": "string",
+              "format": "uuid"
+            }
+          }
+        ],
+        "requestBody": {
+          "required": true,
+          "content": {
+            "application/json": {
+              "schema": {
+                "type": "object",
+                "required": [
+                  "kind",
+                  "completedOn",
+                  "evidenceRefs"
+                ],
+                "properties": {
+                  "kind": {
+                    "type": "string",
+                    "enum": [
+                      "MANUAL",
+                      "INTEGRATED"
+                    ]
+                  },
+                  "completedOn": {
+                    "type": "string",
+                    "format": "date"
+                  },
+                  "evidenceRefs": {
+                    "type": "array",
+                    "items": {
+                      "type": "string"
+                    }
+                  }
+                }
+              }
+            }
+          }
+        },
+        "responses": {
+          "200": {
+            "description": "Receipt attached; state advances to IMPLEMENTED"
+          }
+        }
+      }
+    },
+    "/controls/{id}/evaluate": {
+      "post": {
+        "tags": [
+          "Assurance & Controls (Plane A)"
+        ],
+        "summary": "Human reviewer concludes verification outcome",
+        "parameters": [
+          {
+            "name": "id",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "type": "string",
+              "format": "uuid"
+            }
+          }
+        ],
+        "requestBody": {
+          "required": true,
+          "content": {
+            "application/json": {
+              "schema": {
+                "type": "object",
+                "required": [
+                  "outcome",
+                  "residualRisk"
+                ],
+                "properties": {
+                  "outcome": {
+                    "type": "string",
+                    "enum": [
+                      "EFFECTIVE",
+                      "PARTIALLY_EFFECTIVE",
+                      "NOT_EFFECTIVE",
+                      "INCONCLUSIVE"
+                    ]
+                  },
+                  "residualRisk": {
+                    "type": "string"
+                  }
+                }
+              }
+            }
+          }
+        },
+        "responses": {
+          "200": {
+            "description": "Verification concluded; control state advances to CLOSED"
+          }
+        }
+      }
+    },
+    "/hazards/{id}/evidence-package": {
+      "post": {
+        "tags": [
+          "Assurance & Cryptographic Packages"
+        ],
+        "summary": "Export tamper-evident cryptographic evidence package with SHA-256 manifest",
+        "parameters": [
+          {
+            "name": "id",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "type": "string",
+              "format": "uuid"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "Signed manifest and bundled evidence artifacts"
+          }
+        }
+      }
+    },
+    "/jurisdictions/active": {
+      "get": {
+        "tags": [
+          "Retention & Jurisdictions"
+        ],
+        "summary": "List active policy packs and tenant bindings",
+        "responses": {
+          "200": {
+            "description": "Active jurisdiction policy packs"
+          }
+        }
+      }
+    },
+    "/retention/runs": {
+      "post": {
+        "tags": [
+          "Retention & Jurisdictions"
+        ],
+        "summary": "Trigger scheduled retention evaluation run with legal hold guards",
+        "responses": {
+          "200": {
+            "description": "Purged count and tombstone generation summary"
+          }
+        }
+      }
+    },
+    "/support/diagnostics": {
+      "post": {
+        "tags": [
+          "Operations & Support (B8)"
+        ],
+        "summary": "Tenant issues signed HMAC-SHA256 diagnostic receipt without database access",
+        "responses": {
+          "200": {
+            "description": "Signed diagnostic receipt"
+          }
+        }
+      }
+    },
+    "/support/diagnostics/verify": {
+      "post": {
+        "tags": [
+          "Operations & Support (B8)"
+        ],
+        "summary": "Verify authenticity of a diagnostic receipt signature",
+        "requestBody": {
+          "required": true,
+          "content": {
+            "application/json": {
+              "schema": {
+                "type": "object",
+                "required": [
+                  "receipt"
+                ],
+                "properties": {
+                  "receipt": {
+                    "type": "object"
+                  }
+                }
+              }
+            }
+          }
+        },
+        "responses": {
+          "200": {
+            "description": "Verification status (true/false)"
+          }
+        }
+      }
+    },
+    "/ai/use-cases": {
+      "get": {
+        "tags": [
+          "Bounded AI & Actions (Phase 6)"
+        ],
+        "summary": "List registered bounded AI use cases",
+        "responses": {
+          "200": {
+            "description": "Use case definitions"
+          }
+        }
+      }
+    },
+    "/ai/proposals": {
+      "post": {
+        "tags": [
+          "Bounded AI & Actions (Phase 6)"
+        ],
+        "summary": "Generate grounded AI mitigation explanation and proposal",
+        "requestBody": {
+          "required": true,
+          "content": {
+            "application/json": {
+              "schema": {
+                "type": "object",
+                "required": [
+                  "useCaseKey",
+                  "version",
+                  "releaseId",
+                  "userQuery"
+                ],
+                "properties": {
+                  "useCaseKey": {
+                    "type": "string"
+                  },
+                  "version": {
+                    "type": "integer",
+                    "default": 1
+                  },
+                  "releaseId": {
+                    "type": "string"
+                  },
+                  "userQuery": {
+                    "type": "string"
+                  }
+                }
+              }
+            }
+          }
+        },
+        "responses": {
+          "201": {
+            "description": "AI Proposal created with verified citation grounding"
+          }
+        }
+      }
+    },
+    "/ai/proposals/{id}/accept": {
+      "post": {
+        "tags": [
+          "Bounded AI & Actions (Phase 6)"
+        ],
+        "summary": "Human authority accepts AI proposal into human workflow state",
+        "parameters": [
+          {
+            "name": "id",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "type": "string",
+              "format": "uuid"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "Proposal accepted with decision audit record"
+          }
+        }
+      }
+    },
+    "/actions/proposals": {
+      "post": {
+        "tags": [
+          "Bounded AI & Actions (Phase 6)"
+        ],
+        "summary": "Generate cryptographic short-lived action grant bound to approval",
+        "responses": {
+          "201": {
+            "description": "Grant token and action attempt recorded"
+          }
+        }
+      }
+    },
+    "/actions/{id}/dispatch": {
+      "post": {
+        "tags": [
+          "Bounded AI & Actions (Phase 6)"
+        ],
+        "summary": "Safely execute approved action with fencing token",
+        "parameters": [
+          {
+            "name": "id",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "type": "string",
+              "format": "uuid"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "Dispatch outcome (SUCCEEDED/FAILED)"
+          }
+        }
+      }
+    },
+    "/ops/kill-switches": {
+      "get": {
+        "tags": [
+          "Bounded AI & Actions (Phase 6)"
+        ],
+        "summary": "List global AI kill-switches",
+        "responses": {
+          "200": {
+            "description": "Kill switch state map"
+          }
+        }
+      },
+      "post": {
+        "tags": [
+          "Bounded AI & Actions (Phase 6)"
+        ],
+        "summary": "Trip or reset an operational kill-switch",
+        "responses": {
+          "200": {
+            "description": "Kill switch record updated"
+          }
+        }
+      }
+    },
+    "/flags": {
+      "get": {
+        "tags": [
+          "Work-Design & Outcomes (Plane B)"
+        ],
+        "summary": "Get active tenant feature flags (e.g. outcomes_plane_b)",
+        "responses": {
+          "200": {
+            "description": "Feature flag state dictionary"
+          }
+        }
+      },
+      "post": {
+        "tags": [
+          "Work-Design & Outcomes (Plane B)"
+        ],
+        "summary": "Toggle a feature flag for tenant",
+        "requestBody": {
+          "required": true,
+          "content": {
+            "application/json": {
+              "schema": {
+                "type": "object",
+                "required": [
+                  "flag",
+                  "enabled"
+                ],
+                "properties": {
+                  "flag": {
+                    "type": "string"
+                  },
+                  "enabled": {
+                    "type": "boolean"
+                  }
+                }
+              }
+            }
+          }
+        },
+        "responses": {
+          "200": {
+            "description": "Feature flag state updated"
+          }
+        }
+      }
+    },
+    "/outcomes/definitions": {
+      "get": {
+        "tags": [
+          "Work-Design & Outcomes (Plane B)"
+        ],
+        "summary": "List prototype work-design outcome definitions (Plane B)",
+        "responses": {
+          "200": {
+            "description": "Outcome definitions"
+          }
+        }
+      },
+      "post": {
+        "tags": [
+          "Work-Design & Outcomes (Plane B)"
+        ],
+        "summary": "Create new outcome definition",
+        "responses": {
+          "201": {
+            "description": "Outcome definition created in state DRAFT"
+          }
+        }
+      }
+    },
+    "/outcomes/definitions/{id}/approve": {
+      "post": {
+        "tags": [
+          "Work-Design & Outcomes (Plane B)"
+        ],
+        "summary": "Approve outcome definition for production measurement",
+        "parameters": [
+          {
+            "name": "id",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "type": "string"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "Outcome definition approved"
+          }
+        }
+      }
+    },
+    "/outcomes/evaluations": {
+      "get": {
+        "tags": [
+          "Work-Design & Outcomes (Plane B)"
+        ],
+        "summary": "List recorded Plane B outcome evaluations",
+        "responses": {
+          "200": {
+            "description": "Evaluations list with permitted claims"
+          }
+        }
+      },
+      "post": {
+        "tags": [
+          "Work-Design & Outcomes (Plane B)"
+        ],
+        "summary": "Evaluate work-design outcome with permitted claims check",
+        "requestBody": {
+          "required": true,
+          "content": {
+            "application/json": {
+              "schema": {
+                "type": "object",
+                "required": [
+                  "outcomeId",
+                  "releaseId",
+                  "permittedClaims"
+                ],
+                "properties": {
+                  "outcomeId": {
+                    "type": "string"
+                  },
+                  "outcomeVersion": {
+                    "type": "integer",
+                    "default": 1
+                  },
+                  "releaseId": {
+                    "type": "string"
+                  },
+                  "comparisonBasis": {
+                    "type": "object"
+                  },
+                  "confounders": {
+                    "type": "object"
+                  },
+                  "seriesBreak": {
+                    "type": "boolean",
+                    "default": false
+                  },
+                  "outcomeConfidence": {
+                    "type": "string",
+                    "enum": [
+                      "HIGH",
+                      "MEDIUM",
+                      "LOW",
+                      "INSUFFICIENT_DATA"
+                    ]
+                  },
+                  "permittedClaims": {
+                    "type": "array",
+                    "items": {
+                      "type": "string"
+                    }
+                  },
+                  "evidenceRefs": {
+                    "type": "array",
+                    "items": {
+                      "type": "string"
+                    }
+                  }
+                }
+              }
+            }
+          }
+        },
+        "responses": {
+          "201": {
+            "description": "Outcome evaluation recorded in Plane B"
+          },
+          "400": {
+            "description": "Prohibited claim detected (e.g. claiming hazard mitigation)"
+          }
+        }
+      }
+    },
+    "/outcomes/releases/{id}": {
+      "get": {
+        "tags": [
+          "Work-Design & Outcomes (Plane B)"
+        ],
+        "summary": "Retrieve Plane B release artifact (strictly isolated from Plane A)",
+        "parameters": [
+          {
+            "name": "id",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "type": "string"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "Plane B release view"
+          },
+          "404": {
+            "description": "Cross-plane refusal or not found"
+          }
+        }
+      }
+    },
+    "/ai-changes": {
+      "get": {
+        "tags": [
+          "Governed AI Change (Domain S14)"
+        ],
+        "summary": "List AI work-design risk assessments",
+        "responses": {
+          "200": {
+            "description": "Active assessments"
+          }
+        }
+      },
+      "post": {
+        "tags": [
+          "Governed AI Change (Domain S14)"
+        ],
+        "summary": "Register AI Change Profile and initialize 8-stage assessment",
+        "requestBody": {
+          "required": true,
+          "content": {
+            "application/json": {
+              "schema": {
+                "type": "object",
+                "required": [
+                  "title",
+                  "affectedRoles",
+                  "affectedTasks",
+                  "decisionRights",
+                  "humanOverride",
+                  "monitoringChanges",
+                  "throughputAssumptions",
+                  "rolloutDate",
+                  "trainingSupport"
+                ],
+                "properties": {
+                  "title": {
+                    "type": "string"
+                  },
+                  "affectedRoles": {
+                    "type": "array",
+                    "items": {
+                      "type": "string"
+                    }
+                  },
+                  "affectedTasks": {
+                    "type": "array",
+                    "items": {
+                      "type": "string"
+                    }
+                  },
+                  "automationMode": {
+                    "type": "string",
+                    "enum": [
+                      "ASSIST",
+                      "AUTOMATE_WITH_REVIEW",
+                      "AUTONOMOUS_BOUNDED"
+                    ]
+                  },
+                  "decisionRights": {
+                    "type": "string"
+                  },
+                  "humanOverride": {
+                    "type": "string"
+                  },
+                  "monitoringChanges": {
+                    "type": "string"
+                  },
+                  "throughputAssumptions": {
+                    "type": "string"
+                  },
+                  "rolloutDate": {
+                    "type": "string",
+                    "format": "date"
+                  },
+                  "trainingSupport": {
+                    "type": "string"
+                  }
+                }
+              }
+            }
+          }
+        },
+        "responses": {
+          "201": {
+            "description": "Profile registered and assessment started in stage REGISTERED"
+          }
+        }
+      }
+    },
+    "/ai-changes/{id}": {
+      "get": {
+        "tags": [
+          "Governed AI Change (Domain S14)"
+        ],
+        "summary": "Get assessment detail with assurance and performance summaries",
+        "parameters": [
+          {
+            "name": "id",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "type": "string",
+              "format": "uuid"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "Assessment view"
+          }
+        }
+      }
+    },
+    "/ai-changes/{id}/advance": {
+      "post": {
+        "tags": [
+          "Governed AI Change (Domain S14)"
+        ],
+        "summary": "Advance assessment stage (strictly guarded by If-Match versioning & prerequisite evidence)",
+        "parameters": [
+          {
+            "name": "id",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "type": "string",
+              "format": "uuid"
+            }
+          },
+          {
+            "name": "If-Match",
+            "in": "header",
+            "required": true,
+            "schema": {
+              "type": "string"
+            },
+            "description": "Current entity version (e.g. \"1\")"
+          }
+        ],
+        "requestBody": {
+          "required": true,
+          "content": {
+            "application/json": {
+              "schema": {
+                "type": "object",
+                "required": [
+                  "to"
+                ],
+                "properties": {
+                  "to": {
+                    "type": "string",
+                    "enum": [
+                      "REGISTERED",
+                      "BASELINE",
+                      "DETECT",
+                      "ATTRIBUTE",
+                      "CONTROL",
+                      "VERIFY",
+                      "PERFORMANCE_REVIEW",
+                      "CLOSED"
+                    ]
+                  },
+                  "version": {
+                    "type": "integer"
+                  },
+                  "hazardIds": {
+                    "type": "array",
+                    "items": {
+                      "type": "string"
+                    }
+                  },
+                  "controlIds": {
+                    "type": "array",
+                    "items": {
+                      "type": "string"
+                    }
+                  },
+                  "baselineReleaseIds": {
+                    "type": "array",
+                    "items": {
+                      "type": "string"
+                    }
+                  },
+                  "verificationRefs": {
+                    "type": "array",
+                    "items": {
+                      "type": "string"
+                    }
+                  }
+                }
+              }
+            }
+          }
+        },
+        "responses": {
+          "200": {
+            "description": "Stage successfully advanced"
+          },
+          "409": {
+            "description": "Conflict - Prerequisite evidence not met or version mismatch"
+          }
+        }
+      }
+    },
+    "/jobs/{id}": {
+      "get": {
+        "tags": [
+          "Operations & Jobs"
+        ],
+        "summary": "Poll status of long-running asynchronous background job (Guide §C.6)",
+        "parameters": [
+          {
+            "name": "id",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "type": "string"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "Async job status and progress"
+          },
+          "401": {
+            "description": "Unauthenticated"
+          },
+          "404": {
+            "description": "Job not found"
+          }
+        }
+      }
+    },
+    "/ops/jobs": {
+      "get": {
+        "tags": [
+          "Operations & Jobs"
+        ],
+        "summary": "List active background workers and async queue depth (Guide §D.8)",
+        "responses": {
+          "200": {
+            "description": "Async job queue status"
+          },
+          "401": {
+            "description": "Unauthenticated"
+          },
+          "403": {
+            "description": "Forbidden"
+          }
+        }
+      }
+    },
+    "/ops/dead-letters/{id}/replay": {
+      "post": {
+        "tags": [
+          "Operations & Jobs"
+        ],
+        "summary": "Human-approved replay of a dead-lettered outbox event (requires support token & reason)",
+        "parameters": [
+          {
+            "name": "id",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "type": "string",
+              "format": "uuid"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "Dead-letter row marked replayed and outbox event restored to PENDING"
+          },
+          "400": {
+            "description": "Missing/invalid approval reason"
+          },
+          "401": {
+            "description": "Unauthenticated or non-support credential"
+          },
+          "404": {
+            "description": "Dead-letter event not found"
+          },
+          "409": {
+            "description": "Dead-letter event already replayed"
+          }
+        }
+      }
+    },
+    "/auth/oidc/config": {
+      "get": {
+        "tags": [
+          "Authentication & Tenancy"
+        ],
+        "summary": "Discover OIDC login configuration and dev-token availability",
+        "security": [],
+        "responses": {
+          "200": {
+            "description": "OIDC configuration payload ({ enabled, devTokenEnabled, ... })"
+          }
+        }
+      }
+    },
+    "/auth/oidc/exchange": {
+      "post": {
+        "tags": [
+          "Authentication & Tenancy"
+        ],
+        "summary": "Exchange OIDC authorization code + PKCE verifier or ID token for session cookies",
+        "security": [],
+        "requestBody": {
+          "required": true,
+          "content": {
+            "application/json": {
+              "schema": {
+                "type": "object",
+                "properties": {
+                  "code": {
+                    "type": "string"
+                  },
+                  "codeVerifier": {
+                    "type": "string"
+                  },
+                  "redirectUri": {
+                    "type": "string"
+                  },
+                  "idToken": {
+                    "type": "string"
+                  }
+                }
+              }
+            }
+          }
+        },
+        "responses": {
+          "200": {
+            "description": "Authenticated principal and session cookie set"
+          },
+          "400": {
+            "description": "Validation error"
+          },
+          "401": {
+            "description": "OIDC token verification failed"
+          }
+        }
+      }
+    },
+    "/auth/support-token": {
+      "post": {
+        "tags": [
+          "Operations & Support"
+        ],
+        "summary": "Issue scoped support operator token (non-tenant, zero tenant data access)",
+        "security": [],
+        "requestBody": {
+          "required": true,
+          "content": {
+            "application/json": {
+              "schema": {
+                "type": "object",
+                "required": [
+                  "operator"
+                ],
+                "properties": {
+                  "operator": {
+                    "type": "string"
+                  }
+                }
+              }
+            }
+          }
+        },
+        "responses": {
+          "200": {
+            "description": "Issued support token and operator identity"
+          },
+          "403": {
+            "description": "Disabled outside local/test"
+          }
+        }
+      }
+    },
+    "/connectors/zoikotime/batches": {
+      "post": {
+        "tags": [
+          "Ingestion & Ledger (Phase 2)"
+        ],
+        "summary": "Ingest ZoikoTime work interval batch (strict allowlist; physical minimization)",
+        "parameters": [
+          {
+            "name": "Idempotency-Key",
+            "in": "header",
+            "required": false,
+            "schema": {
+              "type": "string"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "IngestReceipt JSON ({ id, batch_id, accepted, duplicate, rejected, conflicted })"
+          },
+          "400": {
+            "description": "Schema validation error (unallowlisted surveillance fields rejected)"
+          },
+          "409": {
+            "description": "Batch payload conflict or inactive connection"
+          }
+        }
+      }
+    },
+    "/connections/{id}": {
+      "get": {
+        "tags": [
+          "Ingestion & Ledger (Phase 2)"
+        ],
+        "summary": "Fetch single source connection and cadence health",
+        "parameters": [
+          {
+            "name": "id",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "type": "string",
+              "format": "uuid"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "Connection detail view"
+          },
+          "404": {
+            "description": "Connection not found"
+          }
+        }
+      }
+    },
+    "/receipts": {
+      "get": {
+        "tags": [
+          "Ingestion & Ledger (Phase 2)"
+        ],
+        "summary": "List traceable ingestion receipts (counts only, zero quarantined rows)",
+        "responses": {
+          "200": {
+            "description": "Array of IngestReceipt objects"
+          }
+        }
+      }
+    },
+    "/work-facts": {
+      "get": {
+        "tags": [
+          "Ingestion & Ledger (Phase 2)"
+        ],
+        "summary": "List append-only pseudonymized work-state facts for tenant",
+        "responses": {
+          "200": {
+            "description": "Array of WorkFact objects"
+          }
+        }
+      }
+    },
+    "/releases/query": {
+      "post": {
+        "tags": [
+          "Privacy Compiler & Analytics (Phase 3)"
+        ],
+        "summary": "Compile deterministic privacy-safe cohort metric release (floor n>=10, window>=28d, diff>=5)",
+        "requestBody": {
+          "required": true,
+          "content": {
+            "application/json": {
+              "schema": {
+                "type": "object",
+                "required": [
+                  "metricId",
+                  "cohortRef",
+                  "periodStart",
+                  "periodEnd"
+                ],
+                "properties": {
+                  "metricId": {
+                    "type": "string"
+                  },
+                  "metricVersion": {
+                    "type": "integer"
+                  },
+                  "cohortRef": {
+                    "type": "string"
+                  },
+                  "periodStart": {
+                    "type": "string",
+                    "format": "date-time"
+                  },
+                  "periodEnd": {
+                    "type": "string",
+                    "format": "date-time"
+                  },
+                  "releaseClass": {
+                    "type": "string",
+                    "enum": [
+                      "CLASS_A",
+                      "CLASS_B"
+                    ]
+                  },
+                  "memberRefs": {
+                    "type": "array",
+                    "items": {
+                      "type": "string"
+                    }
+                  }
+                }
+              }
+            }
+          }
+        },
+        "responses": {
+          "200": {
+            "description": "ReleaseView (RELEASED with aggregate value or uniform UNAVAILABLE when suppressed)"
+          }
+        }
+      }
+    },
+    "/releases/{id}/export.csv": {
+      "get": {
+        "tags": [
+          "Privacy Compiler & Analytics (Phase 3)"
+        ],
+        "summary": "Export suppressed aggregate release as CSV (fails closed if not RELEASED)",
+        "parameters": [
+          {
+            "name": "id",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "type": "string",
+              "format": "uuid"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "text/csv release export"
+          },
+          "404": {
+            "description": "Release not found or not exportable"
+          }
+        }
+      }
+    },
+    "/metrics/{id}/recalculate": {
+      "post": {
+        "tags": [
+          "Privacy Compiler & Analytics (Phase 3)"
+        ],
+        "summary": "Recalculate metric version and mark existing releases STALE / SUPERSEDED",
+        "parameters": [
+          {
+            "name": "id",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "type": "string"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "Recalculation summary ({ count })"
+          }
+        }
+      }
+    },
+    "/hazards/{id}/causes/{causeId}/review": {
+      "post": {
+        "tags": [
+          "Hazards & Controls (Phase 4)"
+        ],
+        "summary": "Accept or reject proposed organizational cause under a hazard",
+        "parameters": [
+          {
+            "name": "id",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "type": "string",
+              "format": "uuid"
+            }
+          },
+          {
+            "name": "causeId",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "type": "string",
+              "format": "uuid"
+            }
+          }
+        ],
+        "requestBody": {
+          "required": true,
+          "content": {
+            "application/json": {
+              "schema": {
+                "type": "object",
+                "required": [
+                  "status"
+                ],
+                "properties": {
+                  "status": {
+                    "type": "string",
+                    "enum": [
+                      "REVIEWED_ACCEPTED",
+                      "REVIEWED_REJECTED"
+                    ]
+                  },
+                  "note": {
+                    "type": "string"
+                  }
+                }
+              }
+            }
+          }
+        },
+        "responses": {
+          "200": {
+            "description": "Updated cause record"
+          },
+          "404": {
+            "description": "Cause not found"
+          }
+        }
+      }
+    },
+    "/controls/{id}": {
+      "get": {
+        "tags": [
+          "Hazards & Controls (Phase 4)"
+        ],
+        "summary": "Get ControlDetailView by ID",
+        "parameters": [
+          {
+            "name": "id",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "type": "string",
+              "format": "uuid"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "ControlDetailView object"
+          },
+          "404": {
+            "description": "Control not found"
+          }
+        }
+      },
+      "patch": {
+        "tags": [
+          "Hazards & Controls (Phase 4)"
+        ],
+        "summary": "Material edit to control scope/objective/plan (increments version & invalidates prior approval)",
+        "parameters": [
+          {
+            "name": "id",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "type": "string",
+              "format": "uuid"
+            }
+          },
+          {
+            "name": "If-Match",
+            "in": "header",
+            "required": true,
+            "schema": {
+              "type": "string"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "Updated ControlDetailView"
+          },
+          "409": {
+            "description": "Version mismatch conflict"
+          }
+        }
+      }
+    },
+    "/controls/{id}/implementation": {
+      "post": {
+        "tags": [
+          "Hazards & Controls (Phase 4)"
+        ],
+        "summary": "Commit implementation receipt (requires APPROVED state and matching material hash)",
+        "parameters": [
+          {
+            "name": "id",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "type": "string",
+              "format": "uuid"
+            }
+          }
+        ],
+        "requestBody": {
+          "required": true,
+          "content": {
+            "application/json": {
+              "schema": {
+                "type": "object",
+                "required": [
+                  "kind",
+                  "completedOn",
+                  "evidenceRefs"
+                ],
+                "properties": {
+                  "kind": {
+                    "type": "string",
+                    "enum": [
+                      "MANUAL",
+                      "INTEGRATED"
+                    ]
+                  },
+                  "completedOn": {
+                    "type": "string"
+                  },
+                  "evidenceRefs": {
+                    "type": "array",
+                    "items": {
+                      "type": "string"
+                    }
+                  }
+                }
+              }
+            }
+          }
+        },
+        "responses": {
+          "201": {
+            "description": "Updated ControlDetailView in IMPLEMENTED state"
+          },
+          "400": {
+            "description": "Schema validation error"
+          },
+          "409": {
+            "description": "Conflict - control is not APPROVED"
+          }
+        }
+      }
+    },
+    "/controls/{id}/verification/pin": {
+      "post": {
+        "tags": [
+          "Hazards & Controls (Phase 4)"
+        ],
+        "summary": "Pin pre-analysis verification plan before observing post-implementation data",
+        "parameters": [
+          {
+            "name": "id",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "type": "string",
+              "format": "uuid"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "Updated ControlDetailView in VERIFYING state"
+          },
+          "409": {
+            "description": "Conflict - control must be IMPLEMENTED"
+          }
+        }
+      }
+    },
+    "/controls/{id}/verification/conclude": {
+      "post": {
+        "tags": [
+          "Hazards & Controls (Phase 4)"
+        ],
+        "summary": "Human reviewer concludes control verification evaluation",
+        "parameters": [
+          {
+            "name": "id",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "type": "string",
+              "format": "uuid"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "Updated ControlDetailView in CLOSED state"
+          }
+        }
+      }
+    },
+    "/hazards/{id}/disposition": {
+      "post": {
+        "tags": [
+          "Hazards & Controls (Phase 4)"
+        ],
+        "summary": "Commit formal hazard disposition decision",
+        "parameters": [
+          {
+            "name": "id",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "type": "string",
+              "format": "uuid"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "Updated Hazard record"
+          }
+        }
+      }
+    },
+    "/jurisdiction/coverage": {
+      "get": {
+        "tags": [
+          "Retention & Legal Holds (Phase 5)"
+        ],
+        "summary": "Resolve tenant's active jurisdiction pack coverage over [effective_from, effective_to)",
+        "responses": {
+          "200": {
+            "description": "JurisdictionCoverage object"
+          }
+        }
+      }
+    },
+    "/jurisdiction/pack-versions": {
+      "get": {
+        "tags": [
+          "Retention & Legal Holds (Phase 5)"
+        ],
+        "summary": "List read-only jurisdiction pack versions",
+        "responses": {
+          "200": {
+            "description": "{ versions: JurisdictionPack[] }"
+          }
+        }
+      }
+    },
+    "/retention": {
+      "get": {
+        "tags": [
+          "Retention & Legal Holds (Phase 5)"
+        ],
+        "summary": "Get tenant retention classes, active legal holds, runs, and tombstone verification counts",
+        "responses": {
+          "200": {
+            "description": "RetentionState payload"
+          }
+        }
+      }
+    },
+    "/retention/preview": {
+      "get": {
+        "tags": [
+          "Retention & Legal Holds (Phase 5)"
+        ],
+        "summary": "Dry-run retention preview calculating eligible, purgeable, and held facts",
+        "responses": {
+          "200": {
+            "description": "RetentionPreview payload"
+          }
+        }
+      }
+    },
+    "/retention/classes": {
+      "post": {
+        "tags": [
+          "Retention & Legal Holds (Phase 5)"
+        ],
+        "summary": "Configure tenant retention schedule constrained by active jurisdiction pack floor/ceiling",
+        "parameters": [
+          {
+            "name": "Idempotency-Key",
+            "in": "header",
+            "required": true,
+            "schema": {
+              "type": "string"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "Created retention class record"
+          },
+          "201": {
+            "description": "Created retention class record"
+          },
+          "400": {
+            "description": "Validation or jurisdiction pack bound refusal"
+          }
+        }
+      }
+    },
+    "/legal-holds": {
+      "post": {
+        "tags": [
+          "Retention & Legal Holds (Phase 5)"
+        ],
+        "summary": "Place legal preservation hold over tenant or connection scope",
+        "parameters": [
+          {
+            "name": "Idempotency-Key",
+            "in": "header",
+            "required": true,
+            "schema": {
+              "type": "string"
+            }
+          }
+        ],
+        "responses": {
+          "201": {
+            "description": "Created legal hold record"
+          }
+        }
+      }
+    },
+    "/lifecycle/holds": {
+      "post": {
+        "tags": [
+          "Retention & Legal Holds (Phase 5)"
+        ],
+        "summary": "Alias for /legal-holds",
+        "responses": {
+          "201": {
+            "description": "Created legal hold record"
+          }
+        }
+      }
+    },
+    "/legal-holds/{id}/release": {
+      "post": {
+        "tags": [
+          "Retention & Legal Holds (Phase 5)"
+        ],
+        "summary": "Release an active legal hold with audit reason",
+        "parameters": [
+          {
+            "name": "id",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "type": "string",
+              "format": "uuid"
+            }
+          },
+          {
+            "name": "Idempotency-Key",
+            "in": "header",
+            "required": true,
+            "schema": {
+              "type": "string"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "Released legal hold record"
+          }
+        }
+      }
+    },
+    "/lifecycle/holds/{id}/release": {
+      "post": {
+        "tags": [
+          "Retention & Legal Holds (Phase 5)"
+        ],
+        "summary": "Alias for /legal-holds/{id}/release",
+        "parameters": [
+          {
+            "name": "id",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "type": "string",
+              "format": "uuid"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "Released legal hold record"
+          }
+        }
+      }
+    },
+    "/ops/slo": {
+      "get": {
+        "tags": [
+          "Operations & Support"
+        ],
+        "summary": "Compute live SLO latency/availability report from request ring buffer (support token required)",
+        "responses": {
+          "200": {
+            "description": "SloReport payload"
+          },
+          "403": {
+            "description": "Tenant tokens forbidden on support routes"
+          }
+        }
+      }
+    },
+    "/ops/requests/{requestId}": {
+      "get": {
+        "tags": [
+          "Operations & Support"
+        ],
+        "summary": "Look up sanitized route template, status, and latency by requestId",
+        "parameters": [
+          {
+            "name": "requestId",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "type": "string"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "OpsRequestRecord"
+          },
+          "404": {
+            "description": "Request not found"
+          }
+        }
+      }
+    },
+    "/ops/errors": {
+      "get": {
+        "tags": [
+          "Operations & Support"
+        ],
+        "summary": "List fingerprinted safe internal errors without stack traces or tenant PII",
+        "responses": {
+          "200": {
+            "description": "Array of SafeErrorLogEntry"
+          }
+        }
+      }
+    },
+    "/ops/diagnostic-receipts/verify": {
+      "post": {
+        "tags": [
+          "Operations & Support"
+        ],
+        "summary": "Verify HMAC/signature integrity of tenant-provided diagnostic receipt",
+        "responses": {
+          "200": {
+            "description": "Verification result ({ valid, receiptId, tenantId, generatedAt })"
+          }
+        }
+      }
+    },
+    "/ops/alerts": {
+      "get": {
+        "tags": [
+          "Operations & Support"
+        ],
+        "summary": "List operational threshold alerts",
+        "responses": {
+          "200": {
+            "description": "Active alerts list"
+          }
+        }
+      }
+    },
+    "/ops/release-readiness": {
+      "get": {
+        "tags": [
+          "Operations & Support"
+        ],
+        "summary": "Summarize release readiness checks and P0 blockers",
+        "responses": {
+          "200": {
+            "description": "Release readiness summary"
+          }
+        }
+      }
+    },
+    "/ops/connectors": {
+      "get": {
+        "tags": [
+          "Operations & Support"
+        ],
+        "summary": "Inspect connector lag and health across service",
+        "responses": {
+          "200": {
+            "description": "Connector health summary"
+          }
+        }
+      }
+    },
+    "/support/diagnostic-receipts": {
+      "post": {
+        "tags": [
+          "Operations & Support"
+        ],
+        "summary": "Tenant self-issues signed diagnostic state snapshot for zero-impersonation support",
+        "parameters": [
+          {
+            "name": "Idempotency-Key",
+            "in": "header",
+            "required": true,
+            "schema": {
+              "type": "string"
+            }
+          }
+        ],
+        "responses": {
+          "201": {
+            "description": "Signed DiagnosticReceipt payload"
+          }
+        }
+      }
+    },
+    "/entitlements": {
+      "get": {
+        "tags": [
+          "Retention & Legal Holds (Phase 5)"
+        ],
+        "summary": "Retrieve tenant feature entitlements",
+        "responses": {
+          "200": {
+            "description": "Entitlements configuration"
+          }
+        }
+      }
+    },
+    "/policy/resolution": {
+      "get": {
+        "tags": [
+          "Retention & Legal Holds (Phase 5)"
+        ],
+        "summary": "Resolve effective policy envelope for tenant",
+        "responses": {
+          "200": {
+            "description": "Resolved policy payload"
+          }
+        }
+      }
+    },
+    "/evidence-packages": {
+      "get": {
+        "tags": [
+          "Audit & Evidence"
+        ],
+        "summary": "List cryptographic evidence packages for tenant",
+        "responses": {
+          "200": {
+            "description": "Array of EvidencePackage manifests"
+          }
+        }
+      },
+      "post": {
+        "tags": [
+          "Audit & Evidence"
+        ],
+        "summary": "Issue and persist signed Merkle evidence bundle for tenant",
+        "responses": {
+          "201": {
+            "description": "Issued EvidencePackage bundle with Merkle root and manifestHash"
+          }
+        }
+      }
+    },
+    "/evidence-packages/{id}": {
+      "get": {
+        "tags": [
+          "Audit & Evidence"
+        ],
+        "summary": "Retrieve stored EvidencePackage by ID",
+        "parameters": [
+          {
+            "name": "id",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "type": "string"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "EvidencePackage JSON"
+          },
+          "404": {
+            "description": "Package not found"
+          }
+        }
+      }
+    },
+    "/evidence-packages/{id}/verify": {
+      "get": {
+        "tags": [
+          "Audit & Evidence"
+        ],
+        "summary": "Server-side verification of stored EvidencePackage",
+        "parameters": [
+          {
+            "name": "id",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "type": "string"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "Verification result"
+          }
+        }
+      }
+    },
+    "/corrections/ingest": {
+      "post": {
+        "tags": [
+          "Retention & Legal Holds (Phase 5)"
+        ],
+        "summary": "Record immutable correction against ledger data",
+        "responses": {
+          "201": {
+            "description": "Correction recorded"
+          }
+        }
+      }
+    },
+    "/corrections/{id}/acknowledge": {
+      "post": {
+        "tags": [
+          "Retention & Legal Holds (Phase 5)"
+        ],
+        "summary": "Acknowledge a recorded ledger correction",
+        "parameters": [
+          {
+            "name": "id",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "type": "string"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "Correction acknowledged"
+          }
+        }
+      }
+    },
+    "/lifecycle/rights-requests": {
+      "post": {
+        "tags": [
+          "Retention & Legal Holds (Phase 5)"
+        ],
+        "summary": "Submit GDPR / data-subject erasure or access rights request",
+        "responses": {
+          "201": {
+            "description": "Rights request logged"
+          }
+        }
+      }
+    },
+    "/ai/explain-release": {
+      "post": {
+        "tags": [
+          "Bounded AI & Actions (Phase 6)"
+        ],
+        "summary": "Generate grounded explanation draft for a released privacy artifact (supports Idempotency-Key deduplication)",
+        "responses": {
+          "200": {
+            "description": "AiRunView with validatorReport"
+          },
+          "400": {
+            "description": "Individual-inference or unsafe question refused"
+          },
+          "409": {
+            "description": "Idempotency-Key reused with different request payload"
+          },
+          "429": {
+            "description": "Monthly AI quota exceeded (RATE_LIMITED, sets Retry-After header)"
+          },
+          "503": {
+            "description": "Disabled by kill-switch"
+          }
+        }
+      }
+    },
+    "/ai/draft-cause": {
+      "post": {
+        "tags": [
+          "Bounded AI & Actions (Phase 6)"
+        ],
+        "summary": "Draft candidate organizational cause proposal (requires human accept; supports Idempotency-Key)",
+        "responses": {
+          "200": {
+            "description": "AiRunView draft"
+          },
+          "409": {
+            "description": "Idempotency-Key reused with different request payload"
+          },
+          "429": {
+            "description": "Monthly AI quota exceeded (RATE_LIMITED, sets Retry-After header)"
+          },
+          "503": {
+            "description": "Disabled by kill-switch"
+          }
+        }
+      }
+    },
+    "/ai/draft-control": {
+      "post": {
+        "tags": [
+          "Bounded AI & Actions (Phase 6)"
+        ],
+        "summary": "Draft candidate control intervention proposal (requires human accept; supports Idempotency-Key)",
+        "responses": {
+          "200": {
+            "description": "AiRunView draft"
+          },
+          "409": {
+            "description": "Idempotency-Key reused with different request payload"
+          },
+          "429": {
+            "description": "Monthly AI quota exceeded (RATE_LIMITED, sets Retry-After header)"
+          },
+          "503": {
+            "description": "Disabled by kill-switch"
+          }
+        }
+      }
+    },
+    "/ai/quota": {
+      "get": {
+        "tags": [
+          "Bounded AI & Actions (Phase 6)"
+        ],
+        "summary": "Inspect current tenant monthly AI quota usage, remaining allowance, and active kill switches",
+        "responses": {
+          "200": {
+            "description": "Tenant AI quota status per use case"
+          }
+        }
+      }
+    },
+    "/ops/ai-quota": {
+      "get": {
+        "tags": [
+          "Operations & Support"
+        ],
+        "summary": "Support ops visibility into per-tenant monthly AI quota usage and kill-switch state",
+        "responses": {
+          "200": {
+            "description": "Array of tenant AI quota summaries"
+          }
+        }
+      }
+    },
+    "/ai/runs": {
+      "get": {
+        "tags": [
+          "Bounded AI & Actions (Phase 6)"
+        ],
+        "summary": "List AI run audit records for tenant",
+        "responses": {
+          "200": {
+            "description": "Array of AiRunView"
+          }
+        }
+      }
+    },
+    "/ai/runs/{id}/accept": {
+      "post": {
+        "tags": [
+          "Bounded AI & Actions (Phase 6)"
+        ],
+        "summary": "Human reviewer accepts AI draft as a non-binding workflow proposal",
+        "parameters": [
+          {
+            "name": "id",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "type": "string",
+              "format": "uuid"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "Accepted proposal with registered decisionRef"
+          }
+        }
+      }
+    },
+    "/ai/runs/{id}/discard": {
+      "post": {
+        "tags": [
+          "Bounded AI & Actions (Phase 6)"
+        ],
+        "summary": "Human reviewer discards AI draft proposal",
+        "parameters": [
+          {
+            "name": "id",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "type": "string",
+              "format": "uuid"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "Proposal marked DISCARDED"
+          }
+        }
+      }
+    },
+    "/ai/kill-switches": {
+      "get": {
+        "tags": [
+          "Bounded AI & Actions (Phase 6)"
+        ],
+        "summary": "Inspect current AI and tool kill-switch status",
+        "responses": {
+          "200": {
+            "description": "Array of KillSwitchRecord"
+          }
+        }
+      }
+    },
+    "/release/dossier": {
+      "get": {
+        "tags": [
+          "Operations & Support"
+        ],
+        "summary": "Retrieve synthesized Platform Release Evidence Dossier JSON",
+        "security": [],
+        "responses": {
+          "200": {
+            "description": "Release dossier JSON (status, testSuites, openFindingsBySeverity, signOff)"
+          }
+        }
+      }
+    },
+    "/release-dossier": {
+      "get": {
+        "tags": [
+          "Operations & Support"
+        ],
+        "summary": "Alias for /release/dossier",
+        "security": [],
+        "responses": {
+          "200": {
+            "description": "Release dossier JSON"
+          }
+        }
+      }
+    },
+    "/outcomes/definitions/{id}": {
+      "get": {
+        "tags": [
+          "Work-Design & Outcomes (Plane B)"
+        ],
+        "summary": "Get Plane B outcome definition by ID",
+        "parameters": [
+          {
+            "name": "id",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "type": "string"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "OutcomeDefinitionView"
+          },
+          "404": {
+            "description": "Not found"
+          }
+        }
+      }
+    },
+    "/outcomes/evaluations/{id}": {
+      "get": {
+        "tags": [
+          "Work-Design & Outcomes (Plane B)"
+        ],
+        "summary": "Get single Plane B outcome evaluation by ID",
+        "parameters": [
+          {
+            "name": "id",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "type": "string",
+              "format": "uuid"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "OutcomeEvaluationView"
+          },
+          "404": {
+            "description": "Not found"
+          }
+        }
+      }
+    },
+    "/sector/legal/matters": {
+      "get": {
+        "tags": [
+          "UK Legal Sector Pack (SRA 2023)"
+        ],
+        "summary": "List UK Legal Practice matters and active court/closing demand windows",
+        "responses": {
+          "200": {
+            "description": "Array of LegalMatterView"
+          }
+        }
+      }
+    },
+    "/sector/legal/matters/map": {
+      "post": {
+        "tags": [
+          "UK Legal Sector Pack (SRA 2023)"
+        ],
+        "summary": "Translate legal matter metadata into domain-neutral WORK_ITEM (rejects privileged/billing/ranking fields)",
+        "responses": {
+          "200": {
+            "description": "Neutral workItem representation"
+          },
+          "400": {
+            "description": "Validation error - prohibited legal privilege, billing rate, or lawyer ranking rejected"
+          }
+        }
+      }
+    },
+    "/sector/legal/fatigue-check": {
+      "post": {
+        "tags": [
+          "UK Legal Sector Pack (SRA 2023)"
+        ],
+        "summary": "Evaluate consecutive late-night sessions and SRA 2023 supervisory partner consultation trigger",
+        "responses": {
+          "200": {
+            "description": "LegalFatigueAssessmentView"
+          },
+          "404": {
+            "description": "Matter not found"
+          }
+        }
+      }
+    }
+  }
+}

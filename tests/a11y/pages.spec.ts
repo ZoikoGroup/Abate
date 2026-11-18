@@ -69,4 +69,29 @@ test.describe("WCAG 2.1 AA Accessibility Gates", () => {
 
     expect(severeViolations).toEqual([]);
   });
+
+  for (const vp of [
+    { name: "desktop", width: 1280, height: 800 },
+    { name: "tablet", width: 768, height: 1024 },
+    { name: "phone", width: 390, height: 844 }
+  ]) {
+    test(`responsive layout keeps navigation & primary actions reachable at ${vp.name} (${vp.width}x${vp.height})`, async ({ page }) => {
+      await page.setViewportSize({ width: vp.width, height: vp.height });
+      await page.goto(BASE_URL);
+      await page.waitForLoadState("domcontentloaded");
+      await expect(page.getByText(/Backend Connected/i)).toBeVisible({ timeout: 15_000 });
+
+      const navBtn = page.locator("nav.tabs-navigation").getByRole("button", { name: "Ingestion & Work Ledger (Phase 2)", exact: true });
+      await navBtn.scrollIntoViewIfNeeded();
+      await expect(navBtn).toBeVisible();
+      await navBtn.click();
+
+      const sendBtn = page.getByRole("button", { name: /Send Clean Batch/i });
+      await sendBtn.scrollIntoViewIfNeeded();
+      await expect(sendBtn).toBeVisible();
+
+      const overflowPx = await page.evaluate(() => document.documentElement.scrollWidth - window.innerWidth);
+      expect(overflowPx).toBeLessThanOrEqual(24);
+    });
+  }
 });

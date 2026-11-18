@@ -100,9 +100,14 @@ export const RequestInspector: React.FC<RequestInspectorProps> = ({
           </button>
         </div>
       </div>
-      {expectedRefusalCode && (
+      {expectedRefusalCode && status === expectedRefusalCode && (
         <div className="expected-refusal-note" role="status">
           Expected: {expectedRefusalCode} &mdash; The backend refused this on purpose.
+        </div>
+      )}
+      {expectedRefusalCode && status !== expectedRefusalCode && (
+        <div className="expected-refusal-note" role="alert">
+          Expected HTTP {expectedRefusalCode}, but received HTTP {status}.
         </div>
       )}
 

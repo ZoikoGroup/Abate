@@ -110,9 +110,22 @@ export async function demoApi<T = any>(
 
     const response = await fetch(resolvedUrl, fetchInit);
 
+    const HTTP_REASON_FALLBACK: Record<number, string> = {
+      200: "OK",
+      201: "Created",
+      202: "Accepted",
+      400: "Bad Request",
+      401: "Unauthorized",
+      403: "Forbidden",
+      404: "Not Found",
+      409: "Conflict",
+      429: "Too Many Requests",
+      500: "Internal Server Error",
+      503: "Service Unavailable"
+    };
     const elapsedMs = Math.round(performance.now() - startTime);
     status = response.status;
-    statusText = response.statusText || (status === 200 ? "OK" : `${status}`);
+    statusText = response.statusText || HTTP_REASON_FALLBACK[status] || `${status}`;
 
     response.headers.forEach((val, key) => {
       respHeaders[key.toLowerCase()] = val;

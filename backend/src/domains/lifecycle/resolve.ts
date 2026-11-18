@@ -80,13 +80,29 @@ function detectConflicts(applied: PackRef[]): string[] {
   return conflicts;
 }
 
-function deriveGates(applied: PackRef[]): Array<"APPROVAL" | "CONSULTATION" | "REVIEW"> {
-  const gates: Array<"APPROVAL" | "CONSULTATION" | "REVIEW"> = ["APPROVAL"];
-  // If sector or customer packs are applied, derive consultation and review needs
-  if (applied.some(p => p.key.includes("sector") || p.key.includes("legal") || p.key.includes("bar"))) {
-    gates.push("CONSULTATION", "REVIEW");
+function deriveGates(
+  applied: PackRef[],
+  packs: PolicyPackRecord[]
+): Array<"APPROVAL" | "CONSULTATION" | "REVIEW"> {
+  const gates = new Set<"APPROVAL" | "CONSULTATION" | "REVIEW">(["APPROVAL"]);
+  for (const p of packs) {
+    const declared = Array.isArray(p.content?.requiredGates) ? p.content.requiredGates : null;
+    if (declared) {
+      for (const g of declared) {
+        if (g === "APPROVAL" || g === "CONSULTATION" || g === "REVIEW") {
+          gates.add(g);
+        }
+      }
+    } else if (p.kind === "SECTOR" || p.kind === "CUSTOMER" || p.kind === "JURISDICTION") {
+      gates.add("CONSULTATION");
+      gates.add("REVIEW");
+    }
   }
-  return gates;
+  if (packs.length === 0 && applied.some(p => p.key.includes("sector") || p.key.includes("jurisdiction"))) {
+    gates.add("CONSULTATION");
+    gates.add("REVIEW");
+  }
+  return Array.from(gates);
 }
 
 /**
@@ -100,6 +116,7 @@ export async function resolvePolicy(
 ): Promise<PolicyResolution> {
   const bindings = await activeBindings(tx, q.tenantId, q.at);
   const applied: PackRef[] = [];
+  const appliedPacks: PolicyPackRecord[] = [];
   const restricted: string[] = [];
 
   for (const b of bindings) {
@@ -121,10 +138,11 @@ export async function resolvePolicy(
       version: pack.version,
       hash: pack.content_hash
     });
+    appliedPacks.push(pack);
   }
 
   const conflicts = detectConflicts(applied);
-  const requiredGates = deriveGates(applied);
+  const requiredGates = deriveGates(applied, appliedPacks);
 
   return {
     applied,

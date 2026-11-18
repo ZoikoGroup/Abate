@@ -12,7 +12,7 @@ export function ConstitutionalTab({ health, info }: ConstitutionalTabProps) {
       <div className="card hero-banner">
         <h2>Zoiko Abate Core Mission & Architecture Baseline</h2>
         <p className="lead">
-          Organizational work-design and psychosocial-risk infrastructure for legal services.
+          Sector-neutral organizational work-design and psychosocial-risk infrastructure for regulated knowledge-work teams (UK Legal Sector Pack active today).
           Abate measures work conditions at cohort level (never individuals), helps companies identify hazards, review organizational causes, approve controls, and compile independently checkable evidence packages.
         </p>
         <div className="tagline-quote">
@@ -38,7 +38,7 @@ export function ConstitutionalTab({ health, info }: ConstitutionalTabProps) {
               <strong>1. No Individual Scoring:</strong> Zero individual psychosocial, mental-health, performance, or employability scores. No worker ranking; no automated individual employment decisions.
             </li>
             <li>
-              <strong>2. No Surveillance or Keystrokes:</strong> No screenshots, keystroke logging, URLs, application names, email contents, legal work product, or emotion recognition.
+              <strong>2. No Surveillance or Keystrokes:</strong> No screenshots, keystroke logging, URLs, application names, email contents, substantive work product, or emotion recognition.
             </li>
             <li>
               <strong>3. No Clinical Path in v1.0:</strong> No clinical screening, diagnostic treatment, therapeutic chat, or private Vault dependencies (ZAB-ARCH-001 governs).
@@ -124,7 +124,7 @@ export function ConstitutionalTab({ health, info }: ConstitutionalTabProps) {
           <div className="domain-item">
             <span className="domain-code">S10</span>
             <div className="domain-name">Governance &amp; Jurisdiction</div>
-            <div className="domain-desc">Legal sector policy packs, evidence manifests, cryptographic hashes.</div>
+            <div className="domain-desc">Jurisdiction &amp; sector policy packs, evidence manifests, cryptographic hashes.</div>
             <span className="status-pill">Phase 5</span>
           </div>
         </div>

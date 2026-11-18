@@ -1,7 +1,7 @@
 // backend/src/domains/privacy/compile-release.ts
 import { loadConfig } from "../../platform/config";
 import crypto from "node:crypto";
-import { withTenant, Tx } from "../../platform/db/with-tenant";
+import { withProtectedCompute, withReleaseCompiler, Tx } from "../../platform/db/with-tenant";
 import { SemanticQuery } from "../../contracts/release";
 import { boundaryIntrusionShare } from "../measure/boundary-intrusion";
 import { Interval } from "../measure/intervals";
@@ -77,7 +77,7 @@ export async function compileRelease(
   q: SemanticQuery,
   customCohortMembers?: string[]
 ): Promise<ReleaseResult> {
-  return withTenant(tenantId, async (tx: Tx) => {
+  return withReleaseCompiler(tenantId, async (tx: Tx) => {
     if (await isKillSwitchActive(tx, "release_path")) {
       throw new AppError("UNAVAILABLE", "Privacy release compiler disabled by kill switch (release_path).");
     }
@@ -99,35 +99,33 @@ export async function compileRelease(
       return { status: "RELEASED", releaseId: existingDec.rows[0].id };
     }
 
-    // 3. Resolve cohort membership & contributors
+    // 3. Resolve cohort membership via abate_protected_compute (Section 5.1)
     let memberIds: string[] = [];
     if (customCohortMembers && customCohortMembers.length > 0) {
       memberIds = customCohortMembers;
     } else {
-      // Fetch effective members belonging to cohort organization when cohortRef names an org UUID
-      if (q.cohortRef && q.cohortRef.startsWith("org:")) {
-        const orgId = q.cohortRef.replace(/^org:/, "");
-        if (/^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i.test(orgId)) {
-          const orgMembersRes = await tx.q(
-            `SELECT DISTINCT principal_id FROM effective_membership
-             WHERE tenant_id = $1 AND organization_id = $2 AND (valid_to IS NULL OR valid_to > $3)`,
-            [tenantId, orgId, q.periodStart]
-          );
-          if (orgMembersRes.rowCount && orgMembersRes.rowCount > 0) {
-            memberIds = orgMembersRes.rows.map(r => r.principal_id);
+      memberIds = await withProtectedCompute(tenantId, async (computeTx) => {
+        if (q.cohortRef && q.cohortRef.startsWith("org:")) {
+          const orgId = q.cohortRef.replace(/^org:/, "");
+          if (/^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i.test(orgId)) {
+            const orgMembersRes = await computeTx.q(
+              `SELECT DISTINCT principal_id FROM effective_membership
+               WHERE tenant_id = $1 AND organization_id = $2 AND (valid_to IS NULL OR valid_to > $3)`,
+              [tenantId, orgId, q.periodStart]
+            );
+            if (orgMembersRes.rowCount && orgMembersRes.rowCount > 0) {
+              return orgMembersRes.rows.map((r: any) => r.principal_id);
+            }
           }
+          return [];
         }
-      }
-      // An org: cohort with no effective members must stay empty (and be suppressed by the floor). It used to fall back
-      // to every principal in the tenant, so a mistyped or foreign org id was measured against the whole tenant.
-      if (memberIds.length === 0 && !(q.cohortRef && q.cohortRef.startsWith("org:"))) {
-        const membersRes = await tx.q(
+        const membersRes = await computeTx.q(
           `SELECT DISTINCT principal_id FROM effective_membership
            WHERE tenant_id = $1 AND (valid_to IS NULL OR valid_to > $2)`,
           [tenantId, q.periodStart]
         );
-        memberIds = membersRes.rows.map(r => r.principal_id);
-      }
+        return membersRes.rows.map((r: any) => r.principal_id);
+      });
     }
 
     const memberSet = new Set(memberIds);
@@ -196,55 +194,89 @@ export async function compileRelease(
       }
     }
 
-    // 7. Deterministic Measurement Computation
-    // Retrieve distinct work interval bounds for this cohort and window (union is idempotent)
-    const factsRes = await tx.q(
-      `SELECT DISTINCT start_at, end_at FROM work_fact_revision
-       WHERE tenant_id = $1 AND kind = 'WORK' AND start_at >= $2 AND end_at <= $3`,
-      [tenantId, q.periodStart, q.periodEnd]
-    );
+    // 7. Deterministic Measurement Computation & Protected Snapshot via abate_protected_compute
+    const snapshotId = crypto.randomUUID();
+    const computedMetric = await withProtectedCompute(tenantId, async (computeTx) => {
+      const factsRes = await computeTx.q(
+        `SELECT DISTINCT start_at, end_at FROM work_fact_revision
+         WHERE tenant_id = $1 AND kind = 'WORK' AND start_at >= $2 AND end_at <= $3`,
+        [tenantId, q.periodStart, q.periodEnd]
+      );
 
-    const workIntervals: Interval[] = factsRes.rows.map(r => ({
-      start: new Date(r.start_at).getTime(),
-      end: new Date(r.end_at).getTime()
-    }));
+      const workIntervals: Interval[] = factsRes.rows.map((r: any) => ({
+        start: new Date(r.start_at).getTime(),
+        end: new Date(r.end_at).getTime()
+      }));
 
-    // Standard business hours schedule: 09:00 - 17:00 UTC across window
-    const pStart = new Date(q.periodStart).getTime();
-    const pEnd = new Date(q.periodEnd).getTime();
-    const scheduleIntervals: Interval[] = [];
-    const oneDay = 24 * 3600 * 1000;
+      // Standard business hours schedule: 09:00 - 17:00 UTC across window
+      const pStart = new Date(q.periodStart).getTime();
+      const pEnd = new Date(q.periodEnd).getTime();
+      const scheduleIntervals: Interval[] = [];
+      const oneDay = 24 * 3600 * 1000;
 
-    for (let day = pStart; day < pEnd; day += oneDay) {
-      const d = new Date(day);
-      d.setUTCHours(9, 0, 0, 0);
-      const sStart = d.getTime();
-      d.setUTCHours(17, 0, 0, 0);
-      const sEnd = d.getTime();
-      scheduleIntervals.push({ start: sStart, end: sEnd });
-    }
+      for (let day = pStart; day < pEnd; day += oneDay) {
+        const d = new Date(day);
+        d.setUTCHours(9, 0, 0, 0);
+        const sStart = d.getTime();
+        d.setUTCHours(17, 0, 0, 0);
+        const sEnd = d.getTime();
+        scheduleIntervals.push({ start: sStart, end: sEnd });
+      }
 
-    // Calculate boundary intrusion share (reproducible arithmetic)
-    let computedMetric = boundaryIntrusionShare(workIntervals, scheduleIntervals);
+      let metric = boundaryIntrusionShare(workIntervals, scheduleIntervals);
 
-    // Demo/test only: with no work facts the seeded environments use the golden baseline (25.0% VALID) so the walkthrough
-    // has a number to show. Anywhere else, "no data" must never be released as a valid measurement.
-    if (computedMetric.quality === "NOT_APPLICABLE" && (cfg.appEnv === "local" || cfg.appEnv === "test")) {
-      computedMetric = {
-        quality: "VALID",
-        value: 25.0,
-        totalWorkMinutes: 240,
-        outsideScheduleMinutes: 60
-      };
-    }
+      // Demo/test only: with no work facts the seeded environments use the golden baseline (25.0% VALID) so the walkthrough
+      // has a number to show. Anywhere else, "no data" must never be released as a valid measurement.
+      if (metric.quality === "NOT_APPLICABLE" && (cfg.appEnv === "local" || cfg.appEnv === "test")) {
+        metric = {
+          quality: "VALID",
+          value: 25.0,
+          totalWorkMinutes: 240,
+          outsideScheduleMinutes: 60
+        };
+      }
+
+      if (metric.quality === "VALID" && metric.value !== null) {
+        await computeTx.q(
+          `INSERT INTO metric_snapshot (
+            id, tenant_id, metric_id, metric_version, cohort_ref,
+            period_start, period_end, source_cutoff, code_digest, membership_version,
+            value, quality, contributor_count, lineage
+          ) VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12, $13, $14)`,
+          [
+            snapshotId,
+            tenantId,
+            q.metricId,
+            q.metricVersion,
+            q.cohortRef,
+            q.periodStart,
+            q.periodEnd,
+            new Date().toISOString(),
+            "git:zab-eng-001-phase3-sha256",
+            "v1.0",
+            metric.value,
+            metric.quality,
+            memberSet.size,
+            JSON.stringify({
+              source: "work_fact_revision",
+              formula: "outside_schedule_minutes / total_work_minutes",
+              schedule: "09:00-17:00 UTC",
+              totalMinutes: metric.totalWorkMinutes,
+              outsideMinutes: metric.outsideScheduleMinutes
+            })
+          ]
+        );
+      }
+
+      return metric;
+    });
 
     if (computedMetric.quality !== "VALID" || computedMetric.value === null) {
       return suppress("QUALITY");
     }
 
-    // 8. Atomic Persistence: Decision + Snapshot + Release + Artifact + Disclosure Ledger
+    // 8. Atomic Persistence: Decision + Release + Artifact + Disclosure Ledger (abate_release_compiler)
     const decisionId = crypto.randomUUID();
-    const snapshotId = crypto.randomUUID();
     const releaseId = crypto.randomUUID();
 
     // (a) Record Decision
@@ -252,37 +284,6 @@ export async function compileRelease(
       `INSERT INTO privacy_decision (id, tenant_id, semantic_query_hash, outcome, reason_code, policy_version)
        VALUES ($1, $2, $3, 'RELEASED', 'APPROVED', 'v1.0')`,
       [decisionId, tenantId, queryHash]
-    );
-
-    // (b) Record Protected Snapshot (Protected intermediate; stores contributor_count for audit)
-    await tx.q(
-      `INSERT INTO metric_snapshot (
-        id, tenant_id, metric_id, metric_version, cohort_ref,
-        period_start, period_end, source_cutoff, code_digest, membership_version,
-        value, quality, contributor_count, lineage
-      ) VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12, $13, $14)`,
-      [
-        snapshotId,
-        tenantId,
-        q.metricId,
-        q.metricVersion,
-        q.cohortRef,
-        q.periodStart,
-        q.periodEnd,
-        new Date().toISOString(),
-        "git:zab-eng-001-phase3-sha256",
-        "v1.0",
-        computedMetric.value,
-        computedMetric.quality,
-        memberSet.size,
-        JSON.stringify({
-          source: "work_fact_revision",
-          formula: "outside_schedule_minutes / total_work_minutes",
-          schedule: "09:00-17:00 UTC",
-          totalMinutes: computedMetric.totalWorkMinutes,
-          outsideMinutes: computedMetric.outsideScheduleMinutes
-        })
-      ]
     );
 
     // (c) Record Release

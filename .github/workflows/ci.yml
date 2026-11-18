@@ -57,17 +57,25 @@ jobs:
           DATABASE_URL_WORKER: postgres://abate_worker:worker_pw@localhost:5432/abate
         run: npm --prefix backend run migrate
 
-      - name: Verify live Postgres role isolation and migration checksums
+      - name: Verify live Postgres role isolation, DB catalog audit, and migration checksums
         env:
           ABATE_REQUIRE_PG: "1"
           DATABASE_URL_MIGRATOR: postgres://abate_migrator:migrator_pw@localhost:5432/abate
           DATABASE_URL_APP: postgres://abate_app:app_pw@localhost:5432/abate
           DATABASE_URL_WORKER: postgres://abate_worker:worker_pw@localhost:5432/abate
-        run: npm --prefix backend run verify-pg -- --require-live
+          DATABASE_URL_IDENTITY: postgres://abate_identity:identity_pw@localhost:5432/abate
+          DATABASE_URL_PROTECTED_COMPUTE: postgres://abate_protected_compute:protected_compute_pw@localhost:5432/abate
+          DATABASE_URL_RELEASE_COMPILER: postgres://abate_release_compiler:release_compiler_pw@localhost:5432/abate
+          DATABASE_URL_PERFORMANCE: postgres://abate_performance:performance_pw@localhost:5432/abate
+          DATABASE_URL_OPS: postgres://abate_ops:ops_pw@localhost:5432/abate
+        run: |
+          npm --prefix backend run verify-pg -- --require-live
+          npm --prefix backend run db:audit -- --require-live
+          npm --prefix backend run test-pg-parity -- --require-live
+          npm --prefix backend run test-explain -- --require-live
 
-      - name: Seed live Postgres fixtures, load benchmark, and restore drill
+      - name: Verify idempotent migration re-run and schema snapshot (no drift)
         env:
-          CI: "true"
           ABATE_REQUIRE_PG: "1"
           DATABASE_URL_MIGRATOR: postgres://abate_migrator:migrator_pw@localhost:5432/abate
           DATABASE_URL_APP: postgres://abate_app:app_pw@localhost:5432/abate
@@ -77,13 +85,59 @@ jobs:
             sudo apt-get update
             sudo apt-get install -y postgresql-client-16
           fi
+          npm --prefix backend run migrate
+          pg_dump --schema-only "postgres://abate_migrator:migrator_pw@localhost:5432/abate" > /tmp/abate-schema-1.sql
+          npm --prefix backend run migrate
+          pg_dump --schema-only "postgres://abate_migrator:migrator_pw@localhost:5432/abate" > /tmp/abate-schema-2.sql
+          diff -u /tmp/abate-schema-1.sql /tmp/abate-schema-2.sql
+
+      - name: Verify upgrade migration path from previous release (0001..0083 -> HEAD)
+        env:
+          ABATE_REQUIRE_PG: "1"
+          DATABASE_URL_MIGRATOR: postgres://abate_migrator:migrator_pw@localhost:5432/abate_upgrade
+          DATABASE_URL_APP: postgres://abate_app:app_pw@localhost:5432/abate_upgrade
+          DATABASE_URL_WORKER: postgres://abate_worker:worker_pw@localhost:5432/abate_upgrade
+          DATABASE_URL_IDENTITY: postgres://abate_identity:identity_pw@localhost:5432/abate_upgrade
+          DATABASE_URL_PROTECTED_COMPUTE: postgres://abate_protected_compute:protected_compute_pw@localhost:5432/abate_upgrade
+          DATABASE_URL_RELEASE_COMPILER: postgres://abate_release_compiler:release_compiler_pw@localhost:5432/abate_upgrade
+          DATABASE_URL_PERFORMANCE: postgres://abate_performance:performance_pw@localhost:5432/abate_upgrade
+          DATABASE_URL_OPS: postgres://abate_ops:ops_pw@localhost:5432/abate_upgrade
+        run: |
+          psql "postgres://abate_migrator:migrator_pw@localhost:5432/abate" -c "DROP DATABASE IF EXISTS abate_upgrade; CREATE DATABASE abate_upgrade;"
+          mkdir -p /tmp/abate_prev_migrations
+          cp backend/db/migrations/00*.sql /tmp/abate_prev_migrations/
+          rm -f /tmp/abate_prev_migrations/0084_*.sql /tmp/abate_prev_migrations/0085_*.sql
+          for f in $(ls /tmp/abate_prev_migrations/*.sql | sort); do
+            psql "postgres://abate_migrator:migrator_pw@localhost:5432/abate_upgrade" -v ON_ERROR_STOP=1 -f "$f" >/dev/null
+          done
+          psql "postgres://abate_migrator:migrator_pw@localhost:5432/abate_upgrade" -c "CREATE TABLE IF NOT EXISTS schema_migrations (version text PRIMARY KEY, checksum text NOT NULL, applied_at timestamptz NOT NULL DEFAULT now());"
+          node -e "const fs=require('fs'),crypto=require('crypto'),{Client}=require('pg');(async()=>{const c=new Client('postgres://abate_migrator:migrator_pw@localhost:5432/abate_upgrade');await c.connect();for(const f of fs.readdirSync('/tmp/abate_prev_migrations').sort()){const h=crypto.createHash('sha256').update(fs.readFileSync('/tmp/abate_prev_migrations/'+f,'utf8')).digest('hex');await c.query('INSERT INTO schema_migrations(version,checksum) VALUES(\$1,\$2) ON CONFLICT DO NOTHING',[f,h]);}await c.end();})();"
+          npm --prefix backend run migrate
+          npm --prefix backend run db:audit -- --require-live
+
+      - name: Seed live Postgres fixtures, load benchmark, and restore drill
+        env:
+          CI: "true"
+          ABATE_REQUIRE_PG: "1"
+          DATABASE_URL_MIGRATOR: postgres://abate_migrator:migrator_pw@localhost:5432/abate
+          DATABASE_URL_APP: postgres://abate_app:app_pw@localhost:5432/abate
+          DATABASE_URL_WORKER: postgres://abate_worker:worker_pw@localhost:5432/abate
+          DATABASE_URL_IDENTITY: postgres://abate_identity:identity_pw@localhost:5432/abate
+          DATABASE_URL_PROTECTED_COMPUTE: postgres://abate_protected_compute:protected_compute_pw@localhost:5432/abate
+          DATABASE_URL_RELEASE_COMPILER: postgres://abate_release_compiler:release_compiler_pw@localhost:5432/abate
+          DATABASE_URL_PERFORMANCE: postgres://abate_performance:performance_pw@localhost:5432/abate
+          DATABASE_URL_OPS: postgres://abate_ops:ops_pw@localhost:5432/abate
+        run: |
           npm --prefix backend run seed-demo -- --pg
           npm --prefix backend run verify-pg-smoke
           npm --prefix backend run test-load -- --http --tcp
           npm --prefix backend run measure-restore
 
-      - name: Typecheck and compile backend
-        run: npm --prefix backend run build
+      - name: Run wording lint, OpenAPI contract check, typecheck and compile backend
+        run: |
+          npm --prefix backend run lint:wording
+          npm --prefix backend run generate:openapi -- --check
+          npm --prefix backend run build
 
       - name: Run Phase 1-9 and Worker constitutional suites
         env:
@@ -93,13 +147,16 @@ jobs:
           DATABASE_URL_WORKER: postgres://disabled:disabled@127.0.0.1:1/abate
         run: |
           npm --prefix backend run test-fast
+          npm --prefix backend run test-completion
           npm --prefix backend run test-pilot
+          npm --prefix backend run test-legal
           npm --prefix backend run test-boundaries
           npm --prefix backend run test-ingest
           npm --prefix backend run test-privacy
           npm --prefix backend run test-control
           npm --prefix backend run test-retention
           npm --prefix backend run test-ai
+          npm --prefix backend run test-ai-evals
           npm --prefix backend run test-planes
           npm --prefix backend run test-worker
 
@@ -112,17 +169,25 @@ jobs:
         run: |
           npm --prefix backend run verify-evidence
           npm --prefix backend run drill-kill-switches
+          npm --prefix backend run challenge
           npm --prefix backend run sim-30d -- --tcp
           npm --prefix backend run check:endpoints
 
-      - name: Lint and build frontend
+      - name: Lint, unit-test and build frontend
         run: |
           npm --prefix frontend run lint
+          npm --prefix frontend test
           npm --prefix frontend run build
+
+      - name: Generate SBOM and run dependency security audit
+        run: |
+          npm --prefix backend run generate:sbom
+          npm --prefix backend audit --omit=dev --audit-level=high || true
+          npm --prefix frontend audit --omit=dev --audit-level=high || true
 
       - name: Validate Docker Compose config and container image builds
         run: |
-          docker compose config --quiet
+          docker compose config -q
           docker build -t abate-backend:ci ./backend
           docker build -t abate-frontend:ci ./frontend
 
@@ -143,6 +208,8 @@ jobs:
           name: release-dossier
           path: |
             evidence/release-dossier.json
+            evidence/independent-challenge-report.json
+            evidence/challenge-findings.md
             evidence/sim-30d-report.json
             evidence/kill-switch-drill-report.json
             evidence/restore-rehearsal-report.json
@@ -155,6 +222,15 @@ jobs:
     runs-on: ubuntu-24.04
     env:
       APP_ENV: test
+      ABATE_REQUIRE_PG: "0"
+      DATABASE_URL_MIGRATOR: postgres://disabled:disabled@127.0.0.1:1/abate
+      DATABASE_URL_APP: postgres://disabled:disabled@127.0.0.1:1/abate
+      DATABASE_URL_WORKER: postgres://disabled:disabled@127.0.0.1:1/abate
+      DATABASE_URL_IDENTITY: postgres://disabled:disabled@127.0.0.1:1/abate
+      DATABASE_URL_PROTECTED_COMPUTE: postgres://disabled:disabled@127.0.0.1:1/abate
+      DATABASE_URL_RELEASE_COMPILER: postgres://disabled:disabled@127.0.0.1:1/abate
+      DATABASE_URL_PERFORMANCE: postgres://disabled:disabled@127.0.0.1:1/abate
+      DATABASE_URL_OPS: postgres://disabled:disabled@127.0.0.1:1/abate
       AUTH_ISSUER: http://localhost:5000/auth
       AUTH_AUDIENCE: abate-api
       AUTH_SECRET: ci_test_auth_secret_key_abate_minimum_32_characters_long

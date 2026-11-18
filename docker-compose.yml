@@ -44,11 +44,16 @@ services:
       postgres:
         condition: service_healthy
     environment:
-      APP_ENV: staging
+      APP_ENV: test
       ABATE_REQUIRE_PG: "1"
       DATABASE_URL_MIGRATOR: postgres://abate_migrator:migrator_pw@postgres:5432/abate
       DATABASE_URL_APP: postgres://abate_app:app_pw@postgres:5432/abate
       DATABASE_URL_WORKER: postgres://abate_worker:worker_pw@postgres:5432/abate
+      DATABASE_URL_IDENTITY: postgres://abate_identity:identity_pw@postgres:5432/abate
+      DATABASE_URL_PROTECTED_COMPUTE: postgres://abate_protected_compute:protected_compute_pw@postgres:5432/abate
+      DATABASE_URL_RELEASE_COMPILER: postgres://abate_release_compiler:release_compiler_pw@postgres:5432/abate
+      DATABASE_URL_PERFORMANCE: postgres://abate_performance:performance_pw@postgres:5432/abate
+      DATABASE_URL_OPS: postgres://abate_ops:ops_pw@postgres:5432/abate
     command: ["npm", "run", "migrate"]
     restart: "no"
 
@@ -71,6 +76,11 @@ services:
       DATABASE_URL_MIGRATOR: postgres://abate_migrator:migrator_pw@postgres:5432/abate
       DATABASE_URL_APP: postgres://abate_app:app_pw@postgres:5432/abate
       DATABASE_URL_WORKER: postgres://abate_worker:worker_pw@postgres:5432/abate
+      DATABASE_URL_IDENTITY: postgres://abate_identity:identity_pw@postgres:5432/abate
+      DATABASE_URL_PROTECTED_COMPUTE: postgres://abate_protected_compute:protected_compute_pw@postgres:5432/abate
+      DATABASE_URL_RELEASE_COMPILER: postgres://abate_release_compiler:release_compiler_pw@postgres:5432/abate
+      DATABASE_URL_PERFORMANCE: postgres://abate_performance:performance_pw@postgres:5432/abate
+      DATABASE_URL_OPS: postgres://abate_ops:ops_pw@postgres:5432/abate
       OBJECT_STORE_ENDPOINT: http://objectstore:9000
       OBJECT_STORE_ACCESS_KEY: minioadmin
       OBJECT_STORE_SECRET_KEY: minioadmin_dev_only

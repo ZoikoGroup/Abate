@@ -15,6 +15,17 @@ import {
   LegalMatter,
   FORBIDDEN_LEGAL_FIELDS
 } from "../src/domains/sector-legal";
+import {
+  accountingMapping,
+  genericMapping,
+  evaluateNeutralFatigueSurge,
+  resolveTenantSectorProfile,
+  setTenantSectorSetting,
+  assertTenantHasLegalPack,
+  validateSectorPack
+} from "../src/domains/lifecycle/sector";
+import { withTenant } from "../src/platform/db/with-tenant";
+import { GOLDEN_01 } from "../src/fixtures/golden01";
 import { seedTwoTenants } from "../src/fixtures/seed";
 
 console.log("\x1b[36m=== Abate Task Runner: test-sector-legal (UK Legal Sector Pack & SRA 2023 Invariants) ===\x1b[0m");
@@ -169,7 +180,91 @@ async function run() {
     assert.strictEqual(assessment.applicableGate, "STANDARD_APPROVAL");
   });
 
-  console.log(`\x1b[32m[SUCCESS] All ${passed} UK Legal Sector Pack invariant tests passed!\x1b[0m\n`);
+  // Test 9: Generic / Accounting Portability Fixture (Tenant C with NO Legal pack)
+  await it("Non-legal Tenant C runs neutral work-item + fatigue rule without legal terms or core code forks", async () => {
+    const tenantCId = "00000000-0000-4000-c000-00000000000c";
+    await withTenant(tenantCId, async (tx) => {
+      await tx.q(
+        `INSERT INTO tenant (id, name, region, jurisdiction_config_ref) VALUES ($1, $2, $3, $4) ON CONFLICT DO NOTHING`,
+        [tenantCId, "Northbridge Accounting (Tenant C)", "eu-west-2", "generic-work-design"]
+      );
+      const profile = await resolveTenantSectorProfile(tx, tenantCId);
+      assert.strictEqual(profile.hasLegalPack, false);
+      assert.strictEqual(profile.sectorKey, "GENERIC");
+      assert.strictEqual(profile.vocabulary.workItem, "Work Item");
+      assert.ok(!JSON.stringify(profile.vocabulary).toLowerCase().includes("matter"));
+      assert.ok(!JSON.stringify(profile.vocabulary).toLowerCase().includes("partner"));
+
+      await assert.rejects(
+        () => assertTenantHasLegalPack(tx, tenantCId),
+        (err: any) => err?.code === "FORBIDDEN",
+        "Legal endpoints must reject a non-legal tenant with FORBIDDEN"
+      );
+    });
+
+    // Accounting fixture runs through the neutral engine cleanly
+    const neutralWorkItem = accountingMapping.workItem.fromEntity({
+      engagementId: "ENG-2026-AUDIT-11",
+      serviceLine: "TAX_ADVISORY"
+    });
+    assert.strictEqual(neutralWorkItem.kind, "WORK_ITEM");
+    assert.strictEqual(neutralWorkItem.externalRef, "ENG-2026-AUDIT-11");
+    assert.strictEqual(neutralWorkItem.unit, "TAX_ADVISORY");
+
+    const neutralFatigue = evaluateNeutralFatigueSurge(
+      { workItemId: neutralWorkItem.externalRef, unit: neutralWorkItem.unit, demandWindow: "BUSY_SEASON" },
+      [
+        { startUtc: "2026-03-02T09:00:00Z", endUtc: "2026-03-02T21:30:00Z" },
+        { startUtc: "2026-03-03T09:00:00Z", endUtc: "2026-03-03T22:15:00Z" },
+        { startUtc: "2026-03-04T09:00:00Z", endUtc: "2026-03-04T23:00:00Z" }
+      ],
+      accountingMapping.fatigueRule
+    );
+    assert.strictEqual(neutralFatigue.hasFatigueSurge, true);
+    assert.strictEqual(neutralFatigue.consecutiveLateNightsCount, 3);
+    assert.ok(genericMapping.claimScope.includes("UK Legal Sector Pack"));
+  });
+
+  // Test 10: Tenant A still resolves Legal Sector Pack & sector pack cannot weaken privacy or expand AI authority
+  await it("Legal tenant resolves Legal pack while validateSectorPack blocks privacy/AI downgrades", async () => {
+    await withTenant(GOLDEN_01.tenantA.id, async (tx) => {
+      const profileA = await resolveTenantSectorProfile(tx, GOLDEN_01.tenantA.id);
+      assert.strictEqual(profileA.hasLegalPack, true);
+      assert.strictEqual(profileA.sectorKey, "LEGAL");
+    });
+
+    assert.throws(
+      () => validateSectorPack({ privacyFloor: 5 }),
+      /cannot lower privacyFloor/
+    );
+    assert.throws(
+      () => validateSectorPack({ aiAuthority: "EXPANDED" }),
+      /cannot expand AI authority/
+    );
+  });
+
+  // Test 11: Two same-region tenants using tenant_sector_setting behave differently without code branches
+  await it("Same-region tenants with distinct tenant_sector_setting rows resolve distinct vocabularies and gates", async () => {
+    const tenantDId = "00000000-0000-4000-d000-00000000000d";
+    await withTenant(tenantDId, async (tx) => {
+      await tx.q(
+        `INSERT INTO tenant (id, name, region, jurisdiction_config_ref) VALUES ($1, $2, $3, $4) ON CONFLICT DO NOTHING`,
+        [tenantDId, "AuditCo Advisory (Tenant D)", "eu-west-2", "generic-work-design"]
+      );
+      await setTenantSectorSetting(tx, {
+        tenantId: tenantDId,
+        sectorKey: "ACCOUNTING",
+        packKey: "accounting-fixture"
+      });
+      const profileD = await resolveTenantSectorProfile(tx, tenantDId);
+      assert.strictEqual(profileD.sectorKey, "ACCOUNTING");
+      assert.strictEqual(profileD.hasLegalPack, false);
+      assert.strictEqual(profileD.vocabulary.workItem, "Engagement");
+      assert.strictEqual(profileD.vocabulary.unit, "Service Line");
+    });
+  });
+
+  console.log(`\x1b[32m[SUCCESS] All ${passed} Legal Sector Pack & Sector-Neutral Core invariant tests passed!\x1b[0m\n`);
 }
 
 run().catch((err) => {

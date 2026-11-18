@@ -1,5 +1,6 @@
 // backend/src/domains/ingest/ingest-batch.ts
 import crypto from "node:crypto";
+import { withIdentity, withProtectedCompute } from "../../platform/db/with-tenant";
 import { runCommand, computeRequestHash, Actor } from "../../platform/command";
 import { AppError } from "../../platform/errors";
 import { AuthenticatedIdentity, authorize } from "../tenant/auth";
@@ -55,14 +56,17 @@ export async function ingestBatch(args: {
     items: args.batch.items
   });
 
-  return runCommand({
+  const pendingIdentityMappings: Array<{ id: string; connectionId: string; subjectRef: string; pseudonym: string }> = [];
+  const pendingStaleRanges: Array<{ startUtc: string; endUtc: string }> = [];
+
+  const cmdResult = await runCommand({
     tenantId: args.who.tenantId,
     operation: "ingest.batch",
     idempotencyKey: batchKey,
     requestHash,
     actor: args.actor,
     body: async (tx) => {
-      // Step 2: Validate Connection exists, matches adapter source, kill switch is inactive, and connection is ACTIVE
+      // Step 2: Validate Connection exists, matches adapter source, kill switch is inactive, and connection is ACTIVE/RESUMED
       const connRes = await tx.q(
         `SELECT id, state, source FROM connection WHERE id = $1`,
         [args.batch.connectionId]
@@ -85,7 +89,7 @@ export async function ingestBatch(args: {
       if (await isKillSwitchActive(tx, connectorScope)) {
         throw new AppError("UNAVAILABLE", `Ingestion disabled by kill switch (${connectorScope}).`);
       }
-      if (conn.state !== "ACTIVE") {
+      if (conn.state !== "ACTIVE" && conn.state !== "RESUMED") {
         throw new AppError("FORBIDDEN", `Connection is ${conn.state}; further data collection is blocked.`);
       }
 
@@ -93,7 +97,7 @@ export async function ingestBatch(args: {
       let accepted = 0;
       let duplicate = 0;
       let conflicted = 0;
-      let staleSnapshotsMarked = 0;
+      const staleSnapshotsMarked = 0;
 
       // Step 3a: Persist parent Ingest Receipt BEFORE inserting work_fact_revision children (FK receipt_id -> ingest_receipt.id)
       await tx.q(
@@ -105,24 +109,21 @@ export async function ingestBatch(args: {
       // Tenant secret for HMAC pseudonym derivation
       const tenantSecret = `${cfg.pseudonymSecret}:${args.who.tenantId}`;
 
-      // Step 3b: Process validated items into work_fact_revision and identity_map
+      // Step 3b: Process validated items into work_fact_revision (identity_map & metric_snapshot use their dedicated roles after commit)
       const mappedSubjects = new Set<string>();
       for (const item of ok) {
         const itemHash = computeRequestHash(item);
         const pseudonym = derivePseudonym(tenantSecret, item.subjectRef);
         const factId = crypto.randomUUID();
 
-        // Persist pseudonym mapping to isolated identity_map table (never accessible to abate_worker).
-        // One insert per distinct subject per batch: a 1000-item batch typically has far fewer people than items.
         if (!mappedSubjects.has(item.subjectRef)) {
           mappedSubjects.add(item.subjectRef);
-          const identityMapId = crypto.randomUUID();
-          await tx.q(
-            `INSERT INTO identity_map (id, tenant_id, connection_id, source_subject_ref, subject_pseudonym)
-             VALUES ($1, $2, $3, $4, $5)
-             ON CONFLICT (tenant_id, connection_id, source_subject_ref) DO NOTHING`,
-            [identityMapId, tx.tenantId, conn.id, item.subjectRef, pseudonym]
-          );
+          pendingIdentityMappings.push({
+            id: crypto.randomUUID(),
+            connectionId: conn.id,
+            subjectRef: item.subjectRef,
+            pseudonym
+          });
         }
 
         // A record purged by retention stays purged: re-delivery is a duplicate, never a resurrection
@@ -165,14 +166,9 @@ export async function ingestBatch(args: {
         if (insRes.rowCount === 1) {
           accepted++;
 
-          // Invalidation of overlapping metric snapshots on corrections / revisions > 1
+          // Queue overlapping metric_snapshot invalidation for abate_protected_compute
           if (item.revision > 1) {
-            const staleRes = await tx.q(
-              `UPDATE metric_snapshot SET is_stale = true
-               WHERE tenant_id = $1 AND period_start <= $3 AND period_end >= $2`,
-              [tx.tenantId, item.startUtc, item.endUtc]
-            );
-            staleSnapshotsMarked += (staleRes.rowCount ?? 0);
+            pendingStaleRanges.push({ startUtc: item.startUtc, endUtc: item.endUtc });
           }
         } else {
           // Check if it's an exact duplicate or payload conflict
@@ -247,4 +243,36 @@ export async function ingestBatch(args: {
       return { result, audit, events };
     }
   });
+
+  if (pendingIdentityMappings.length > 0) {
+    await withIdentity(args.who.tenantId, async (idTx) => {
+      for (const m of pendingIdentityMappings) {
+        await idTx.q(
+          `INSERT INTO identity_map (id, tenant_id, connection_id, source_subject_ref, subject_pseudonym)
+           VALUES ($1, $2, $3, $4, $5)
+           ON CONFLICT (tenant_id, connection_id, source_subject_ref) DO NOTHING`,
+          [m.id, idTx.tenantId, m.connectionId, m.subjectRef, m.pseudonym]
+        );
+      }
+    });
+  }
+
+  if (pendingStaleRanges.length > 0) {
+    let marked = 0;
+    await withProtectedCompute(args.who.tenantId, async (compTx) => {
+      for (const rng of pendingStaleRanges) {
+        const staleRes = await compTx.q(
+          `UPDATE metric_snapshot SET is_stale = true
+           WHERE tenant_id = $1 AND period_start <= $3 AND period_end >= $2`,
+          [compTx.tenantId, rng.startUtc, rng.endUtc]
+        );
+        marked += (staleRes.rowCount ?? 0);
+      }
+    });
+    if (cmdResult.body && typeof cmdResult.body === "object") {
+      (cmdResult.body as any).staleSnapshotsMarked = marked;
+    }
+  }
+
+  return cmdResult;
 }

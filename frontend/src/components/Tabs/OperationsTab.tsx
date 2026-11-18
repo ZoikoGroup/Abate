@@ -11,6 +11,9 @@ import {
   fetchKillSwitchesOps,
   setKillSwitch,
   fetchOpsJobs,
+  fetchOpsAiQuota,
+  replayDeadLetter,
+  type AiQuotaStatus,
   type OpsJobsOverview,
   type SloReport,
   type SloStatus,
@@ -19,6 +22,7 @@ import {
   type DiagnosticReceipt,
   type KillSwitchRecord
 } from "../../api/client";
+import { StateView } from "../StateView";
 
 interface OperationsTabProps {
   currentTenant: typeof PRESET_TENANTS[0];
@@ -48,6 +52,7 @@ export function OperationsTab({ currentTenant, token }: OperationsTabProps) {
   const [report, setReport] = useState<SloReport | null>(null);
   const [errors, setErrors] = useState<SafeErrorLogEntry[]>([]);
   const [killSwitches, setKillSwitches] = useState<KillSwitchRecord[]>([]);
+  const [opsAiQuotas, setOpsAiQuotas] = useState<AiQuotaStatus[]>([]);
   const [opsJobs, setOpsJobs] = useState<OpsJobsOverview | null>(null);
   const [dossier, setDossier] = useState<any | null>(null);
   const [requestId, setRequestId] = useState("");
@@ -97,17 +102,19 @@ export function OperationsTab({ currentTenant, token }: OperationsTabProps) {
   };
 
   const refreshOps = async (t: string) => {
-    const [r, e, ks, oj] = await Promise.all([
+    const [r, e, ks, oj, aq] = await Promise.all([
       fetchSloReport(t),
       fetchOpsErrors(t),
       fetchKillSwitchesOps(t).catch(() => []),
       fetchOpsJobs(t).catch(() => null),
+      fetchOpsAiQuota(t).catch(() => []),
       loadDossier()
     ]);
     setReport(r);
     setErrors(e);
     setKillSwitches(ks);
     setOpsJobs(oj);
+    setOpsAiQuotas(aq);
     return r;
   };
 
@@ -136,6 +143,16 @@ export function OperationsTab({ currentTenant, token }: OperationsTabProps) {
     const r = await refreshOps(supportToken!);
     return `${r.window.requests} requests in window; overall ${r.overall}.`;
   });
+
+  const handleReplayDeadLetter = (deadLetterId: string) => {
+    const reason = window.prompt("Enter human-approval reason for replaying this dead-letter event (min 5 chars):", "Operator verified downstream consumer health");
+    if (!reason || reason.trim().length < 5) return;
+    void act(`Dead-letter replayed (${deadLetterId.slice(0, 8)}...)`, async () => {
+      const res = await replayDeadLetter(deadLetterId, reason.trim(), supportToken!);
+      await refreshOps(supportToken!);
+      return `Dead-letter ${res.deadLetterId.slice(0, 8)}... replayed back to PENDING outbox by ${res.replayedBy}.`;
+    });
+  };
 
   const handleIssue = () => act("Diagnostic receipt issued", async () => {
     const r = await issueDiagnosticReceipt(`idem-${crypto.randomUUID()}`, token!);
@@ -302,6 +319,7 @@ export function OperationsTab({ currentTenant, token }: OperationsTabProps) {
                     <th>State</th>
                     <th>Attempts</th>
                     <th>Created</th>
+                    <th>Action</th>
                   </tr>
                 </thead>
                 <tbody>
@@ -316,6 +334,20 @@ export function OperationsTab({ currentTenant, token }: OperationsTabProps) {
                       </td>
                       <td className="monospace">{j.attempts ?? 0}</td>
                       <td className="text-sm">{fmt(j.createdAt || null)}</td>
+                      <td>
+                        {j.state === "DEAD_LETTER" ? (
+                          <button
+                            type="button"
+                            className="btn btn-secondary btn-sm"
+                            disabled={busy}
+                            onClick={() => handleReplayDeadLetter(j.id)}
+                          >
+                            Replay
+                          </button>
+                        ) : (
+                          <span className="text-muted text-sm">—</span>
+                        )}
+                      </td>
                     </tr>
                   ))}
                 </tbody>
@@ -389,6 +421,42 @@ export function OperationsTab({ currentTenant, token }: OperationsTabProps) {
               </tbody>
             </table>
           </div>
+
+          {opsAiQuotas.length > 0 && (
+            <div style={{ marginTop: "1.25rem" }}>
+              <h4 style={{ marginBottom: "0.5rem" }}>Per-Tenant AI Quota &amp; Kill-Switch Override Visibility</h4>
+              <div className="table-responsive">
+                <table className="data-table">
+                  <thead>
+                    <tr>
+                      <th>Tenant</th>
+                      <th>Use Case</th>
+                      <th>Spent / Cap (minor)</th>
+                      <th>Remaining Est.</th>
+                      <th>Kill-Switch / Quota State</th>
+                    </tr>
+                  </thead>
+                  <tbody>
+                    {opsAiQuotas.flatMap(tq =>
+                      tq.useCases.map(uc => (
+                        <tr key={`${tq.tenantId}:${uc.useCaseKey}`}>
+                          <td className="monospace text-sm">{tq.tenantId.slice(0, 14)}...</td>
+                          <td className="monospace">{uc.useCaseKey}</td>
+                          <td>{uc.spentMinor} / {uc.monthlyBudgetMinor}</td>
+                          <td>{uc.remainingRunsEst} runs ({uc.remainingMinor} minor)</td>
+                          <td>
+                            <span className={`badge ${uc.killSwitchActive ? "badge-coral" : uc.remainingMinor < uc.estimatedRunCostMinor ? "badge-warning" : "badge-success"}`}>
+                              {uc.killSwitchActive ? "KILL-SWITCH OVERRIDE (DISABLED)" : uc.remainingMinor < uc.estimatedRunCostMinor ? "429 RATE LIMITED" : "OPERATIONAL"}
+                            </span>
+                          </td>
+                        </tr>
+                      ))
+                    )}
+                  </tbody>
+                </table>
+              </div>
+            </div>
+          )}
         </div>
       )}
 
@@ -639,6 +707,11 @@ export function OperationsTab({ currentTenant, token }: OperationsTabProps) {
             <textarea id="ops-receipt" className="text-control monospace" rows={8} value={receiptText} onChange={e => setReceiptText(e.target.value)} />
           </div>
           <button type="button" className="btn btn-primary" disabled={busy || !receiptText.trim()} onClick={handleVerify}>Verify signature</button>
+        </div>
+      )}
+      {!supportToken && (
+        <div className="card">
+          <StateView state={{ kind: "unauthorized" }} />
         </div>
       )}
     </div>

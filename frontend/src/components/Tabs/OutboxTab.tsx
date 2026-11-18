@@ -1,6 +1,7 @@
 // frontend/src/components/Tabs/OutboxTab.tsx
 import { useState } from "react";
 import { api, ApiError, type OutboxDrainReport, PRESET_TENANTS } from "../../api/client";
+import { StateView } from "../StateView";
 
 interface OutboxTabProps {
   currentTenant: typeof PRESET_TENANTS[0];
@@ -93,6 +94,8 @@ export function OutboxTab({ currentTenant, onRefresh, token }: OutboxTabProps) {
             )}
           </div>
         )}
+
+        {draining && <StateView state={{ kind: "loading" }} />}
 
         {drainReport && (
           <div className="feedback-alert alert-success" role="status">

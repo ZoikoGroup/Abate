@@ -32,6 +32,35 @@ export interface SafeErrorLogEntry {
   fingerprint: string;
 }
 
+export const TELEMETRY_ALLOWLIST_KEYS = new Set([
+  "requestId",
+  "at",
+  "method",
+  "route",
+  "routeClass",
+  "status",
+  "durationMs",
+  "errorCode",
+  "errorFingerprint",
+  "level",
+  "errorName",
+  "fingerprint"
+]);
+
+/**
+ * Scrubs any arbitrary telemetry/log object down to the strict allow-list of metadata fields,
+ * guaranteeing request bodies, query parameters, decoy fields, tokens, and tenant/subject IDs never leak.
+ */
+export function scrubTelemetryAttributes<T extends Record<string, unknown>>(input: T): Partial<T> {
+  const clean: Record<string, unknown> = {};
+  for (const [key, val] of Object.entries(input)) {
+    if (TELEMETRY_ALLOWLIST_KEYS.has(key)) {
+      clean[key] = val;
+    }
+  }
+  return clean as Partial<T>;
+}
+
 const MAX_REQUEST_RECORDS = 5000;
 const MAX_ERROR_LOGS = 1000;
 
@@ -41,8 +70,9 @@ class TelemetryStore {
   public errorLog: SafeErrorLogEntry[] = [];
 
   record(r: RequestRecord) {
-    this.records.push(r);
-    this.byId.set(r.requestId, r);
+    const clean = scrubTelemetryAttributes(r as unknown as Record<string, unknown>) as unknown as RequestRecord;
+    this.records.push(clean);
+    this.byId.set(clean.requestId, clean);
     if (this.records.length > MAX_REQUEST_RECORDS) {
       const dropped = this.records.shift()!;
       this.byId.delete(dropped.requestId);
@@ -50,7 +80,8 @@ class TelemetryStore {
   }
 
   logError(e: SafeErrorLogEntry) {
-    this.errorLog.push(e);
+    const clean = scrubTelemetryAttributes(e as unknown as Record<string, unknown>) as unknown as SafeErrorLogEntry;
+    this.errorLog.push(clean);
     if (this.errorLog.length > MAX_ERROR_LOGS) this.errorLog.shift();
   }
 

@@ -47,7 +47,10 @@ export function AiPanel({ releaseId, hazardId, token, onDraftAccepted, onActionS
         );
       }
     } catch (err: any) {
-      if (err?.status === 503 || err?.code === "UNAVAILABLE") {
+      if (err?.status === 429 || err?.code === "RATE_LIMITED") {
+        const retryNote = err?.retryAfter ? ` Reset window in ${err.retryAfter}s.` : "";
+        setErrorMsg(`Monthly AI quota reached.${retryNote} Please continue with the manual hazard & control workflow.${err instanceof ApiError ? ` (Request ID: ${err.requestId})` : ""}`);
+      } else if (err?.status === 503 || err?.code === "UNAVAILABLE") {
         setErrorMsg(`AI assistance is disabled or unavailable right now.${err instanceof ApiError ? ` (Request ID: ${err.requestId})` : ""}`);
       } else {
         setErrorMsg(fmtAiErr(err, "Failed to generate AI explanation."));
