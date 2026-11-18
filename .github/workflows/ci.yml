@@ -139,6 +139,11 @@ jobs:
           DATABASE_URL_MIGRATOR: postgres://disabled:disabled@127.0.0.1:1/abate
           DATABASE_URL_APP: postgres://disabled:disabled@127.0.0.1:1/abate
           DATABASE_URL_WORKER: postgres://disabled:disabled@127.0.0.1:1/abate
+          DATABASE_URL_IDENTITY: postgres://disabled:disabled@127.0.0.1:1/abate
+          DATABASE_URL_PROTECTED_COMPUTE: postgres://disabled:disabled@127.0.0.1:1/abate
+          DATABASE_URL_RELEASE_COMPILER: postgres://disabled:disabled@127.0.0.1:1/abate
+          DATABASE_URL_PERFORMANCE: postgres://disabled:disabled@127.0.0.1:1/abate
+          DATABASE_URL_OPS: postgres://disabled:disabled@127.0.0.1:1/abate
         run: |
           npm --prefix backend run test-fast
           npm --prefix backend run test-completion
@@ -160,6 +165,11 @@ jobs:
           DATABASE_URL_MIGRATOR: postgres://disabled:disabled@127.0.0.1:1/abate
           DATABASE_URL_APP: postgres://disabled:disabled@127.0.0.1:1/abate
           DATABASE_URL_WORKER: postgres://disabled:disabled@127.0.0.1:1/abate
+          DATABASE_URL_IDENTITY: postgres://disabled:disabled@127.0.0.1:1/abate
+          DATABASE_URL_PROTECTED_COMPUTE: postgres://disabled:disabled@127.0.0.1:1/abate
+          DATABASE_URL_RELEASE_COMPILER: postgres://disabled:disabled@127.0.0.1:1/abate
+          DATABASE_URL_PERFORMANCE: postgres://disabled:disabled@127.0.0.1:1/abate
+          DATABASE_URL_OPS: postgres://disabled:disabled@127.0.0.1:1/abate
         run: |
           npm --prefix backend run verify-evidence
           npm --prefix backend run drill-kill-switches
@@ -191,6 +201,11 @@ jobs:
           DATABASE_URL_MIGRATOR: postgres://disabled:disabled@127.0.0.1:1/abate
           DATABASE_URL_APP: postgres://disabled:disabled@127.0.0.1:1/abate
           DATABASE_URL_WORKER: postgres://disabled:disabled@127.0.0.1:1/abate
+          DATABASE_URL_IDENTITY: postgres://disabled:disabled@127.0.0.1:1/abate
+          DATABASE_URL_PROTECTED_COMPUTE: postgres://disabled:disabled@127.0.0.1:1/abate
+          DATABASE_URL_RELEASE_COMPILER: postgres://disabled:disabled@127.0.0.1:1/abate
+          DATABASE_URL_PERFORMANCE: postgres://disabled:disabled@127.0.0.1:1/abate
+          DATABASE_URL_OPS: postgres://disabled:disabled@127.0.0.1:1/abate
         run: |
           npm --prefix backend run build-dossier
           node -e "const d = require('./evidence/release-dossier.json'); if (d.status !== 'READY FOR REVIEW' && d.status !== 'RATIFIED') { console.error('Expected READY FOR REVIEW or RATIFIED, got', d.status); process.exit(1); }"

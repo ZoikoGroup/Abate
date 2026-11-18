@@ -21,6 +21,7 @@ import {
 } from "../src/platform/db/with-tenant";
 import { GOLDEN_01 } from "../src/fixtures/golden01";
 import { seedTwoTenants } from "../src/fixtures/seed";
+import { loadConfig } from "../src/platform/config";
 import { resolveTenantSectorProfile, setTenantSectorSetting } from "../src/domains/lifecycle/sector";
 import { createOrganization } from "../src/domains/tenant/commands";
 import { resolveActor } from "../src/domains/tenant/auth";
@@ -67,7 +68,7 @@ async function main() {
 
   process.env.ABATE_REQUIRE_PG = "1";
   resetPgHealthCache();
-  await seedTwoTenants({ persistToPostgres: true });
+  await seedTwoTenants({ clock: new Date(loadConfig().fixedClock), persistToPostgres: true });
 
   const tenantA = GOLDEN_01.tenantA.id;
   const tenantB = GOLDEN_01.tenantB.id;

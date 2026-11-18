@@ -13,6 +13,7 @@ import path from "node:path";
 import { Pool } from "pg";
 import { GOLDEN_01 } from "../src/fixtures/golden01";
 import { requestErasure } from "../src/domains/lifecycle";
+import { loadConfig } from "../src/platform/config";
 import { resolveActor } from "../src/domains/tenant/auth";
 import { seedTwoTenants } from "../src/fixtures/seed";
 
@@ -71,7 +72,7 @@ async function main() {
 
   try {
     await pool.query("SELECT 1");
-    await seedTwoTenants({ persistToPostgres: true });
+    await seedTwoTenants({ clock: new Date(loadConfig().fixedClock), persistToPostgres: true });
 
     const tenantA = GOLDEN_01.tenantA.id;
     const probeSubject = `restore-probe-${crypto.randomUUID().slice(0, 8)}`;
@@ -90,7 +91,7 @@ async function main() {
       );
       await q(
         `INSERT INTO work_fact_revision (id, tenant_id, connection_id, receipt_id, source_record_id, revision, subject_pseudonym, kind, start_at, end_at, work_tz, payload_hash)
-         VALUES ($1, $2, $3, $4, $5, 1, $6, 'WORK', '2026-03-02T09:00:00Z', '2026-03-02T17:00:00Z', 'Europe/London', 'sha256-probe')`,
+         VALUES ($1, $2, $3, $4, $5, 1, $6, 'WORK', '2025-06-02T09:00:00Z', '2025-06-02T17:00:00Z', 'Europe/London', 'sha256-probe')`,
         [factId, tenantA, connId, receiptId, recordId, probeSubject]
       );
     });

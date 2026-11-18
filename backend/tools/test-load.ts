@@ -141,7 +141,7 @@ async function prepareWorkload(pgLive: boolean): Promise<{
     throw new Error("--manifest-scale requires live PostgreSQL (check DATABASE_URL_* and run migrations first).");
   }
 
-  await seedTwoTenants({ persistToPostgres: pgLive });
+  await seedTwoTenants({ clock: new Date(loadConfig().fixedClock), persistToPostgres: pgLive });
 
   if (!pgLive) {
     const connA = ensureCalendarConnectionMemory(tenantA, CAL_CONTRACT_A, CAL_CONN_A);

@@ -331,12 +331,22 @@ export async function seedTwoTenants(opts: SeedTwoTenantsOptions = {}) {
     bound_from: validFrom,
     bound_to: null
   });
-  memDb.tenantPolicyBindings.push(
+  const seededBindings = [
     binding(tA.id, "legal-uk-sra"),
     binding(tA.id, "sector-legal"),
     binding(tB.id, "legal-uk-bar"),
     binding(tB.id, "sector-legal")
-  );
+  ];
+  for (const sb of seededBindings) {
+    const existingIdx = memDb.tenantPolicyBindings.findIndex(
+      (b: any) => b.tenant_id === sb.tenant_id && b.pack_key === sb.pack_key
+    );
+    if (existingIdx >= 0) {
+      memDb.tenantPolicyBindings[existingIdx] = sb;
+    } else {
+      memDb.tenantPolicyBindings.push(sb);
+    }
+  }
 
   // Seed an approved control chain for Tenant A (hazard -> accepted cause -> APPROVED control -> approval),
   // so external actions have a real Phase 4 approval to bind to.
@@ -593,7 +603,7 @@ export async function seedTwoTenants(opts: SeedTwoTenantsOptions = {}) {
           await client.query(
             `INSERT INTO privacy_release (id, tenant_id, decision_id, snapshot_id, metric_id, metric_version, release_class, status, superseded_by, released_at)
              VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10)
-             ON CONFLICT (id) DO NOTHING`,
+             ON CONFLICT (id) DO UPDATE SET status = EXCLUDED.status, superseded_by = EXCLUDED.superseded_by`,
             [br.id, tA.id, br.decision_id, br.snapshot_id, br.metric_id, br.metric_version, br.release_class, br.status, br.superseded_by, br.released_at]
           );
           await client.query(
@@ -646,14 +656,23 @@ export async function seedTwoTenants(opts: SeedTwoTenantsOptions = {}) {
               `INSERT INTO policy_pack (id, pack_key, version, kind, effective_from, effective_to, status, source_refs,
                  accountable_reviewer, review_date, content, content_hash)
                VALUES ($1, $2, $3, $4, $5, $6, $7, $8::jsonb, $9, $10, $11::jsonb, $12)
-               ON CONFLICT (pack_key, version) DO NOTHING`,
+               ON CONFLICT (pack_key, version) DO UPDATE SET
+                 effective_from = LEAST(policy_pack.effective_from, EXCLUDED.effective_from),
+                 effective_to = EXCLUDED.effective_to,
+                 status = EXCLUDED.status,
+                 content = EXCLUDED.content,
+                 content_hash = EXCLUDED.content_hash`,
               [pack.id, pack.pack_key, pack.version, pack.kind, pack.effective_from, pack.effective_to, pack.status,
               JSON.stringify(pack.source_refs), pack.accountable_reviewer, pack.review_date,
               JSON.stringify(pack.content), pack.content_hash]
             );
           }
-          for (const b of memDb.tenantPolicyBindings as Array<{ tenant_id: string; pack_key: string; pack_version: number; applies_to: unknown; bound_from: string; bound_to: string | null }>) {
+          for (const b of seededBindings) {
             await client.query("SELECT set_config('app.tenant_id', $1, true)", [b.tenant_id]);
+            await client.query(
+              `DELETE FROM tenant_policy_binding WHERE tenant_id = $1 AND pack_key = $2`,
+              [b.tenant_id, b.pack_key]
+            );
             await client.query(
               `INSERT INTO tenant_policy_binding (tenant_id, pack_key, pack_version, applies_to, bound_from, bound_to)
                VALUES ($1, $2, $3, $4::jsonb, $5, $6)
