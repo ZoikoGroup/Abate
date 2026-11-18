@@ -86,9 +86,9 @@ jobs:
             sudo apt-get install -y postgresql-client-16
           fi
           npm --prefix backend run migrate
-          pg_dump --schema-only "postgres://abate_migrator:migrator_pw@localhost:5432/abate" > /tmp/abate-schema-1.sql
+          pg_dump --schema-only "postgres://abate_migrator:migrator_pw@localhost:5432/abate" | grep -Ev '^\\(un)?restrict ' > /tmp/abate-schema-1.sql
           npm --prefix backend run migrate
-          pg_dump --schema-only "postgres://abate_migrator:migrator_pw@localhost:5432/abate" > /tmp/abate-schema-2.sql
+          pg_dump --schema-only "postgres://abate_migrator:migrator_pw@localhost:5432/abate" | grep -Ev '^\\(un)?restrict ' > /tmp/abate-schema-2.sql
           diff -u /tmp/abate-schema-1.sql /tmp/abate-schema-2.sql
 
       - name: Verify upgrade migration path from previous release (0001..0083 -> HEAD)
@@ -103,15 +103,9 @@ jobs:
           DATABASE_URL_PERFORMANCE: postgres://abate_performance:performance_pw@localhost:5432/abate_upgrade
           DATABASE_URL_OPS: postgres://abate_ops:ops_pw@localhost:5432/abate_upgrade
         run: |
-          psql "postgres://abate_migrator:migrator_pw@localhost:5432/abate" -c "DROP DATABASE IF EXISTS abate_upgrade; CREATE DATABASE abate_upgrade;"
-          mkdir -p /tmp/abate_prev_migrations
-          cp backend/db/migrations/00*.sql /tmp/abate_prev_migrations/
-          rm -f /tmp/abate_prev_migrations/0084_*.sql /tmp/abate_prev_migrations/0085_*.sql
-          for f in $(ls /tmp/abate_prev_migrations/*.sql | sort); do
-            psql "postgres://abate_migrator:migrator_pw@localhost:5432/abate_upgrade" -v ON_ERROR_STOP=1 -f "$f" >/dev/null
-          done
-          psql "postgres://abate_migrator:migrator_pw@localhost:5432/abate_upgrade" -c "CREATE TABLE IF NOT EXISTS schema_migrations (version text PRIMARY KEY, checksum text NOT NULL, applied_at timestamptz NOT NULL DEFAULT now());"
-          node -e "const fs=require('fs'),crypto=require('crypto'),{Client}=require('pg');(async()=>{const c=new Client('postgres://abate_migrator:migrator_pw@localhost:5432/abate_upgrade');await c.connect();for(const f of fs.readdirSync('/tmp/abate_prev_migrations').sort()){const h=crypto.createHash('sha256').update(fs.readFileSync('/tmp/abate_prev_migrations/'+f,'utf8')).digest('hex');await c.query('INSERT INTO schema_migrations(version,checksum) VALUES(\$1,\$2) ON CONFLICT DO NOTHING',[f,h]);}await c.end();})();"
+          psql "postgres://abate_migrator:migrator_pw@localhost:5432/abate" -c "DROP DATABASE IF EXISTS abate_upgrade;"
+          psql "postgres://abate_migrator:migrator_pw@localhost:5432/abate" -c "CREATE DATABASE abate_upgrade;"
+          npm --prefix backend run migrate -- --up-to=0083
           npm --prefix backend run migrate
           npm --prefix backend run db:audit -- --require-live
 

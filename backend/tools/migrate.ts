@@ -7,7 +7,13 @@ import { migratorPool } from "../src/platform/db/with-tenant";
 console.log("\x1b[36m=== Abate Task Runner: migrate ===\x1b[0m");
 
 const migrationsDir = path.resolve(__dirname, "../db/migrations");
-const files = fs.readdirSync(migrationsDir).filter(f => f.endsWith(".sql")).sort();
+const upToArg = process.argv.find(a => a.startsWith("--up-to="));
+const upToPrefix = upToArg ? upToArg.split("=")[1] : null;
+const files = fs
+  .readdirSync(migrationsDir)
+  .filter(f => f.endsWith(".sql"))
+  .sort()
+  .filter(f => !upToPrefix || f.slice(0, upToPrefix.length) <= upToPrefix);
 
 console.log(`Found ${files.length} ordered migration files.`);
 

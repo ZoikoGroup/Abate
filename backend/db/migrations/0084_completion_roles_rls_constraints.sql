@@ -34,7 +34,7 @@ END $$;
 DO $$
 BEGIN
   EXECUTE format(
-    'GRANT CONNECT ON DATABASE %I TO abate_identity, abate_protected_compute, abate_release_compiler, abate_performance, abate_ops',
+    'GRANT CONNECT ON DATABASE %I TO abate_app, abate_worker, abate_identity, abate_protected_compute, abate_release_compiler, abate_performance, abate_ops',
     current_database()
   );
 END $$;
