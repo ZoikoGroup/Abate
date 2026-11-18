@@ -1,7 +1,7 @@
 {
   "schemaVersion": "abate.sbom.v1",
-  "generatedAt": "2026-11-18T07:37:58.364Z",
-  "commit": "6710cb676a5fcb3b2d2f16b63c0bacdf51c04c7d",
+  "generatedAt": "2026-11-18T11:20:04.554Z",
+  "commit": "ff51f4e6ea75b5b4740f2e9843b2bbe491dee07a",
   "lockfileSha256": {
     "backend": "abbba712f14bc6637d2e01d17cc3a428d9a6111de7ff9c3a1edd7ee1b6e00a0c",
     "frontend": "9957dce16a8cc7fa3d1718814e26503ca00bc6dd90e4467b395227cd9f8a09db",

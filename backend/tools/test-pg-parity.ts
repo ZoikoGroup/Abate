@@ -75,8 +75,6 @@ async function main() {
   await check("Role Separation: abate_app cannot query protected tables (metric_snapshot, disclosure_ledger, identity_map)", async () => {
     const client = await appPool!.connect();
     try {
-      await client.query("BEGIN");
-      await client.query("SELECT set_config('app.tenant_id', $1, true)", [tenantA]);
       for (const tbl of ["metric_snapshot", "disclosure_ledger", "identity_map"]) {
         await assert.rejects(
           () => client.query(`SELECT count(*) FROM ${tbl}`),
@@ -84,7 +82,6 @@ async function main() {
           `abate_app must not have SELECT on ${tbl}`
         );
       }
-      await client.query("ROLLBACK");
     } finally {
       client.release();
     }
@@ -111,9 +108,9 @@ async function main() {
       await pc.query("BEGIN");
       await pc.query("SELECT set_config('app.tenant_id', $1, true)", [tenantA]);
       await pc.query("SELECT count(*) FROM work_fact_revision");
+      await pc.query("ROLLBACK");
       await assert.rejects(() => pc.query("SELECT count(*) FROM identity_map"), /permission denied/i);
       await assert.rejects(() => pc.query("SELECT count(*) FROM disclosure_ledger"), /permission denied/i);
-      await pc.query("ROLLBACK");
     } finally {
       pc.release();
     }
@@ -123,9 +120,9 @@ async function main() {
       await rc.query("BEGIN");
       await rc.query("SELECT set_config('app.tenant_id', $1, true)", [tenantA]);
       await rc.query("SELECT count(*) FROM metric_snapshot");
+      await rc.query("ROLLBACK");
       await assert.rejects(() => rc.query("SELECT count(*) FROM work_fact_revision"), /permission denied/i);
       await assert.rejects(() => rc.query("SELECT count(*) FROM identity_map"), /permission denied/i);
-      await rc.query("ROLLBACK");
     } finally {
       rc.release();
     }
@@ -156,6 +153,20 @@ async function main() {
   await check("Immutability Triggers: audit_event_immutable and metric_definition_immutable_guard refuse mutations", async () => {
     const mClient = await migratorPool!.connect();
     try {
+      // Ensure at least one audit_event and one APPROVED metric_definition row exist so FOR EACH ROW triggers fire
+      await mClient.query("BEGIN");
+      await mClient.query("SELECT set_config('app.tenant_id', $1, true)", [tenantA]);
+      await mClient.query(
+        `INSERT INTO audit_event (tenant_id, command, result) VALUES ($1, 'pg.parity.probe', 'SUCCESS')`,
+        [tenantA]
+      );
+      await mClient.query(
+        `INSERT INTO metric_definition (metric_id, version, tenant_id, definition, definition_hash, status)
+         VALUES ('BOUNDARY_INTRUSION_SHARE', 1, NULL, '{"formula":"outside/total"}'::jsonb, 'sha256-seed-v1', 'APPROVED')
+         ON CONFLICT (metric_id, version) DO NOTHING`
+      );
+      await mClient.query("COMMIT");
+
       await assert.rejects(
         () => mClient.query("UPDATE audit_event SET command = 'tampered' WHERE id = (SELECT id FROM audit_event LIMIT 1)"),
         /append-only/i
@@ -177,6 +188,18 @@ async function main() {
         });
       },
       /plane A|permission denied/i
+    );
+    await assert.rejects(
+      async () => {
+        await withTenant(
+          tenantA,
+          async (tx) => {
+            await tx.q("UPDATE hazard SET disposition = 'VERIFIED_CLOSURE' WHERE tenant_id = $1", [tenantA]);
+          },
+          { writePlane: "B" }
+        );
+      },
+      /plane A/i
     );
   });
 

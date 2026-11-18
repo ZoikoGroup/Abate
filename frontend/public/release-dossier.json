@@ -1,7 +1,7 @@
 {
   "schema": "abate.release-dossier.v1",
-  "commitSha": "6710cb6",
-  "generatedAt": "2026-11-18T10:57:35.297Z",
+  "commitSha": "ff51f4e",
+  "generatedAt": "2026-11-18T11:20:09.976Z",
   "system": {
     "name": "Zoiko Abate",
     "specification": "ZAB-ENG-001",
@@ -45,8 +45,8 @@
       "testsPassed": 57,
       "status": "PASS",
       "exitCode": 0,
-      "durationMs": 1125,
-      "lastRun": "2026-11-18T10:57:36.423Z"
+      "durationMs": 1190,
+      "lastRun": "2026-11-18T11:20:11.166Z"
     },
     {
       "name": "Phase 2 Ingestion & Decoy Lab",
@@ -55,8 +55,8 @@
       "testsPassed": 10,
       "status": "PASS",
       "exitCode": 0,
-      "durationMs": 1020,
-      "lastRun": "2026-11-18T10:57:37.444Z"
+      "durationMs": 1454,
+      "lastRun": "2026-11-18T11:20:12.620Z"
     },
     {
       "name": "Phase 3 Reconstruction Attack Lab",
@@ -65,8 +65,8 @@
       "testsPassed": 9,
       "status": "PASS",
       "exitCode": 0,
-      "durationMs": 1450,
-      "lastRun": "2026-11-18T10:57:38.894Z"
+      "durationMs": 1348,
+      "lastRun": "2026-11-18T11:20:13.968Z"
     },
     {
       "name": "Phase 4 Control & Evidence Suite",
@@ -75,8 +75,8 @@
       "testsPassed": 9,
       "status": "PASS",
       "exitCode": 0,
-      "durationMs": 1367,
-      "lastRun": "2026-11-18T10:57:40.262Z"
+      "durationMs": 1240,
+      "lastRun": "2026-11-18T11:20:15.208Z"
     },
     {
       "name": "Phase 5 Retention & Legal Hold Suite",
@@ -85,8 +85,8 @@
       "testsPassed": 11,
       "status": "PASS",
       "exitCode": 0,
-      "durationMs": 1482,
-      "lastRun": "2026-11-18T10:57:41.744Z"
+      "durationMs": 1293,
+      "lastRun": "2026-11-18T11:20:16.501Z"
     },
     {
       "name": "Phase 6 Bounded AI & Actions Suite",
@@ -95,8 +95,8 @@
       "testsPassed": 16,
       "status": "PASS",
       "exitCode": 0,
-      "durationMs": 2260,
-      "lastRun": "2026-11-18T10:57:44.005Z"
+      "durationMs": 1195,
+      "lastRun": "2026-11-18T11:20:17.696Z"
     },
     {
       "name": "Phase 7 Two-Plane & AI Change Suite",
@@ -105,8 +105,8 @@
       "testsPassed": 7,
       "status": "PASS",
       "exitCode": 0,
-      "durationMs": 821,
-      "lastRun": "2026-11-18T10:57:44.826Z"
+      "durationMs": 1199,
+      "lastRun": "2026-11-18T11:20:18.895Z"
     },
     {
       "name": "Worker Outbox Crash & Lease Suite",
@@ -115,8 +115,8 @@
       "testsPassed": 7,
       "status": "PASS",
       "exitCode": 0,
-      "durationMs": 841,
-      "lastRun": "2026-11-18T10:57:45.667Z"
+      "durationMs": 1031,
+      "lastRun": "2026-11-18T11:20:19.927Z"
     },
     {
       "name": "Stage B Pilot Readiness Gate",
@@ -125,8 +125,8 @@
       "testsPassed": 5,
       "status": "PASS",
       "exitCode": 0,
-      "durationMs": 1989,
-      "lastRun": "2026-11-18T10:57:47.656Z"
+      "durationMs": 2830,
+      "lastRun": "2026-11-18T11:20:22.757Z"
     },
     {
       "name": "Postgres Parity & Fail-Closed Guard",
@@ -135,8 +135,8 @@
       "testsPassed": 2,
       "status": "PASS",
       "exitCode": 0,
-      "durationMs": 1462,
-      "lastRun": "2026-11-18T10:57:49.119Z"
+      "durationMs": 786,
+      "lastRun": "2026-11-18T11:20:23.543Z"
     },
     {
       "name": "Daily Endpoint & Contract Drift Check",
@@ -145,8 +145,8 @@
       "testsPassed": 24,
       "status": "PASS",
       "exitCode": 0,
-      "durationMs": 3204,
-      "lastRun": "2026-11-18T10:57:52.323Z"
+      "durationMs": 1266,
+      "lastRun": "2026-11-18T11:20:24.809Z"
     },
     {
       "name": "Evidence Bundle & Merkle Verifier",
@@ -155,8 +155,8 @@
       "testsPassed": 3,
       "status": "PASS",
       "exitCode": 0,
-      "durationMs": 4,
-      "lastRun": "2026-11-18T10:57:52.327Z"
+      "durationMs": 2,
+      "lastRun": "2026-11-18T11:20:24.811Z"
     },
     {
       "name": "Scripted 30-Day Real HTTP Simulation",
@@ -165,8 +165,8 @@
       "testsPassed": 9,
       "status": "PASS",
       "exitCode": 0,
-      "durationMs": 523,
-      "lastRun": "2026-11-18T10:57:52.852Z"
+      "durationMs": 170,
+      "lastRun": "2026-11-18T11:20:24.982Z"
     },
     {
       "name": "Stage B Independent Challenge Harness",
@@ -175,8 +175,8 @@
       "testsPassed": 6,
       "status": "PASS",
       "exitCode": 0,
-      "durationMs": 272,
-      "lastRun": "2026-11-18T10:57:53.277Z"
+      "durationMs": 104,
+      "lastRun": "2026-11-18T11:20:25.129Z"
     }
   ],
   "totalChecksPassed": 175,
@@ -187,7 +187,7 @@
   },
   "recoveryRehearsal": {
     "reconcileTool": "backend/tools/reconcile-after-restore.ts",
-    "executedAt": "2026-11-18T10:57:52.876Z",
+    "executedAt": "2026-11-18T11:20:24.985Z",
     "targetRtoHours": 4,
     "targetRpoMinutes": 15,
     "measuredRtoMs": 1,
@@ -255,7 +255,7 @@
     "notice": "Scripted scenario running against real Express HTTP endpoints; synthetic cohort fixtures.",
     "passedSteps": 9,
     "totalSteps": 9,
-    "durationMs": 523
+    "durationMs": 170
   },
   "evidenceVerification": {
     "merkleTreeVersion": "abate.merkle.v1",
@@ -280,9 +280,9 @@
     "expiresAt": null,
     "scope": null,
     "conditions": null,
-    "commitSha": "6710cb6",
+    "commitSha": "ff51f4e",
     "imageDigests": null,
-    "dossierHash": "a157cb9934d30028ad6893adb7330113e2ceab49a7df1726a7fbe2c7e6faeb43",
+    "dossierHash": "56bf9230aaee1f13ce94165575ed997d5ad6fff28cbf3595ee631407b654b7f7",
     "instruction": "Run `npm --prefix backend run sign-dossier -- --signer=\"Full Name\" --role=\"Release Lead\" --scope=\"synthetic-sandbox\" --conditions=\"Sandbox evaluation only\" --expiry-days=14` after manual review."
   },
   "decision": {

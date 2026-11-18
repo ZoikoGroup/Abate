@@ -50,16 +50,19 @@ GRANT USAGE ON SCHEMA public TO
 GRANT SELECT ON work_fact_revision, effective_membership, metric_definition, tenant TO abate_protected_compute;
 GRANT SELECT, INSERT, UPDATE ON metric_snapshot TO abate_protected_compute;
 
-GRANT SELECT ON metric_snapshot, metric_definition, ai_kill_switch TO abate_release_compiler;
+GRANT SELECT ON metric_snapshot, metric_definition, ai_kill_switch, tenant TO abate_release_compiler;
 GRANT SELECT, INSERT, UPDATE ON privacy_decision, privacy_release, released_artifact, disclosure_ledger TO abate_release_compiler;
 DO $$
 BEGIN
   IF EXISTS (SELECT 1 FROM pg_class WHERE relname = 'disclosure_ledger_id_seq') THEN
     GRANT USAGE, SELECT ON SEQUENCE disclosure_ledger_id_seq TO abate_release_compiler;
   END IF;
+  IF EXISTS (SELECT 1 FROM pg_class WHERE relname = 'audit_event_id_seq') THEN
+    GRANT USAGE, SELECT ON SEQUENCE audit_event_id_seq TO abate_performance;
+  END IF;
 END $$;
 
-GRANT SELECT ON outcome_definition, released_artifact, intervention, hazard, privacy_release, feature_flag TO abate_performance;
+GRANT SELECT ON outcome_definition, released_artifact, intervention, hazard, privacy_release, feature_flag, tenant TO abate_performance;
 GRANT SELECT, INSERT, UPDATE ON outcome_evaluation, ai_change_profile, ai_workdesign_assessment, audit_event, outbox_event, idempotency_record TO abate_performance;
 
 GRANT SELECT ON ai_kill_switch, ingest_receipt, outbox_event, dead_letter_event TO abate_ops;
@@ -67,6 +70,7 @@ GRANT INSERT, UPDATE ON ai_kill_switch TO abate_ops;
 
 -- Ensure abate_identity has full needed grants for identity_map
 GRANT SELECT, INSERT ON identity_map TO abate_identity;
+GRANT SELECT ON tenant TO abate_identity;
 
 -- Revoke web role (abate_app) direct table grants on protected intermediate/identity tables (Section 5.3 query #4)
 REVOKE ALL ON metric_snapshot FROM abate_app;
