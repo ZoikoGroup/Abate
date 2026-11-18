@@ -41,7 +41,7 @@ export async function expressCall(
   method: string,
   urlPath: string,
   opts: { token?: string; body?: any; headers?: Record<string, string> } = {}
-): Promise<{ status: number; body: any; raw: string }> {
+): Promise<{ status: number; body: any; raw: string; headers: Record<string, string> }> {
   const payload = opts.body !== undefined ? JSON.stringify(opts.body) : "";
   const reqHeaders: Record<string, string> = {
     accept: "application/json"
@@ -94,12 +94,16 @@ export async function expressCall(
       } catch {
         parsed = raw;
       }
-      resolve({ status: res.statusCode, body: parsed, raw });
+      const headersOut: Record<string, string> = {};
+      for (const [k, v] of Object.entries(res.getHeaders())) {
+        headersOut[k.toLowerCase()] = Array.isArray(v) ? v.join(", ") : String(v);
+      }
+      resolve({ status: res.statusCode, body: parsed, raw, headers: headersOut });
     });
 
     (app as any)(req, res, (err: any) => {
       if (err) reject(err);
-      else resolve({ status: res.statusCode || 404, body: null, raw: "" });
+      else resolve({ status: res.statusCode || 404, body: null, raw: "", headers: {} });
     });
   });
 }

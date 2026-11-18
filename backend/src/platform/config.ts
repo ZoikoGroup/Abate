@@ -16,6 +16,12 @@ export interface AppConfig {
   databaseUrlMigrator: string;
   databaseUrlApp: string;
   databaseUrlWorker: string;
+  databaseUrlIdentity: string;
+  databaseUrlProtectedCompute: string;
+  databaseUrlReleaseCompiler: string;
+  databaseUrlPerformance: string;
+  databaseUrlOps: string;
+  connectorWebhookSecret: string;
   objectStoreEndpoint: string;
   objectStoreBucket: string;
   objectStoreRegion: string;
@@ -49,6 +55,11 @@ export const DEV_DEFAULTS = {
   databaseUrlMigrator: "postgres://abate_migrator:migrator_pw@localhost:5432/abate",
   databaseUrlApp: "postgres://abate_app:app_pw@localhost:5432/abate",
   databaseUrlWorker: "postgres://abate_worker:worker_pw@localhost:5432/abate",
+  databaseUrlIdentity: "postgres://abate_identity:identity_pw@localhost:5432/abate",
+  databaseUrlProtectedCompute: "postgres://abate_protected_compute:protected_compute_pw@localhost:5432/abate",
+  databaseUrlReleaseCompiler: "postgres://abate_release_compiler:release_compiler_pw@localhost:5432/abate",
+  databaseUrlPerformance: "postgres://abate_performance:performance_pw@localhost:5432/abate",
+  databaseUrlOps: "postgres://abate_ops:ops_pw@localhost:5432/abate",
   objectStoreEndpoint: "http://localhost:9000",
   objectStoreBucket: "abate-artifacts",
   objectStoreAccessKey: "minioadmin",
@@ -147,6 +158,12 @@ export function buildConfig(inputEnv: NodeJS.ProcessEnv): AppConfig {
     databaseUrlMigrator: env.DATABASE_URL_MIGRATOR || DEV_DEFAULTS.databaseUrlMigrator,
     databaseUrlApp: env.DATABASE_URL_APP || DEV_DEFAULTS.databaseUrlApp,
     databaseUrlWorker: env.DATABASE_URL_WORKER || DEV_DEFAULTS.databaseUrlWorker,
+    databaseUrlIdentity: env.DATABASE_URL_IDENTITY || DEV_DEFAULTS.databaseUrlIdentity,
+    databaseUrlProtectedCompute: env.DATABASE_URL_PROTECTED_COMPUTE || DEV_DEFAULTS.databaseUrlProtectedCompute,
+    databaseUrlReleaseCompiler: env.DATABASE_URL_RELEASE_COMPILER || DEV_DEFAULTS.databaseUrlReleaseCompiler,
+    databaseUrlPerformance: env.DATABASE_URL_PERFORMANCE || DEV_DEFAULTS.databaseUrlPerformance,
+    databaseUrlOps: env.DATABASE_URL_OPS || DEV_DEFAULTS.databaseUrlOps,
+    connectorWebhookSecret: env.CONNECTOR_WEBHOOK_SECRET || "",
     objectStoreEndpoint: env.OBJECT_STORE_ENDPOINT || DEV_DEFAULTS.objectStoreEndpoint,
     objectStoreBucket: env.OBJECT_STORE_BUCKET || DEV_DEFAULTS.objectStoreBucket,
     objectStoreRegion: env.OBJECT_STORE_REGION || "us-east-1",

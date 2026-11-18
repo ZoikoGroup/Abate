@@ -41,15 +41,15 @@ flowchart TD
 
 ## 2. Deliverables Implemented & Verified
 
-### 1. Signed SLO Manifest & Workload Specification
+### 1. SLO Manifest & Workload Specification (`PENDING_MEASURED_EVIDENCE`)
 - **Location**: [`ops/slo-manifest.v1.yaml`](file:///c:/Users/aparaziitha%20nitta/Abate/ops/slo-manifest.v1.yaml)
 - **Specification**: Guide §8.2 (Page 90)
-- **Key Objectives Ratified**:
+- **Key Engineering Targets (Awaiting Staging Measured Verification & Sign-Off)**:
   - Availability: `99.9% monthly` regional request success target.
   - Ordinary Reads $p95 \le 500$ ms; State-changing Mutations $p95 \le 800$ ms.
   - Released Analytics (Single Read Path) $p95 \le 1,500$ ms.
   - Disaster Recovery: RPO $\le 15$ minutes, RTO $\le 4$ hours.
-  - Formally signed by SRE Lead and Release Owner.
+  - Signature status: `PENDING_MEASURED_EVIDENCE` (awaiting fixed staging load/restore runs and SRE Owner / Release Owner signatures).
 
 ### 2. Decoy Minimization Lab (Minimization Suite)
 - **Location**: [`backend/tools/test-minimization.ts`](file:///c:/Users/aparaziitha%20nitta/Abate/backend/tools/test-minimization.ts)

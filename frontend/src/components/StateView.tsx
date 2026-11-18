@@ -38,9 +38,9 @@ export function StateView({ state, children }: StateViewProps) {
     case "suppressed":
       return (
         <div className="state-box state-suppressed" role="status">
-          <span className="state-badge badge-suppressed">PRIVACY SUPPRESSED</span>
+          <span className="state-badge badge-suppressed">UNAVAILABLE</span>
           <p><strong>Not available for this selection.</strong></p>
-          <small>Suppressed under constitutional privacy rule (insufficient cohort size or overlap risk). Counts are never exposed.</small>
+          <small>Try selecting a broader cohort or wider reporting period.</small>
         </div>
       );
 

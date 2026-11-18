@@ -1,6 +1,7 @@
 // frontend/src/components/Tabs/AuditTab.tsx
 import { useState } from "react";
 import { ApiError, type AuditEvent, PRESET_TENANTS } from "../../api/client";
+import { StateView } from "../StateView";
 
 interface AuditTabProps {
   currentTenant: typeof PRESET_TENANTS[0];
@@ -75,9 +76,15 @@ export function AuditTab({ currentTenant, auditEvents, onRefresh }: AuditTabProp
           </div>
         )}
 
-        {auditEvents.length === 0 ? (
-          <p className="empty-text">No audit events recorded yet for {currentTenant.name}. Create an organization or run a command to produce audit receipts.</p>
-        ) : (
+        <StateView
+          state={
+            refreshing && auditEvents.length === 0
+              ? { kind: "loading" }
+              : auditEvents.length === 0
+                ? { kind: "empty", reason: `No audit events recorded yet for ${currentTenant.name}. Create an organization or run a command to produce audit receipts.` }
+                : { kind: "ok" }
+          }
+        >
           <div className="table-responsive">
             <table className="data-table">
               <thead>
@@ -114,7 +121,7 @@ export function AuditTab({ currentTenant, auditEvents, onRefresh }: AuditTabProp
               </tbody>
             </table>
           </div>
-        )}
+        </StateView>
       </div>
     </div>
   );

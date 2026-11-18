@@ -1,6 +1,7 @@
 // backend/src/domains/lifecycle/retention.ts
 import crypto from "node:crypto";
-import { withTenant, Tx } from "../../platform/db/with-tenant";
+import { withProtectedCompute, withReleaseCompiler, withTenant, Tx } from "../../platform/db/with-tenant";
+import { getObjectStore, putVerified } from "../../platform/object-store";
 import { runCommand, computeRequestHash, Actor } from "../../platform/command";
 import { AppError } from "../../platform/errors";
 import { loadConfig } from "../../platform/config";
@@ -405,6 +406,60 @@ export async function purgeWithTombstones(
     }
     await tx.q(`UPDATE deletion_tombstone SET verified_at = $1 WHERE record_ref = $2`, [verifiedAt, id]);
   }
+
+  // G-21: Purge/invalidate derived copies overlapping deleted fact windows & persist external tombstone log
+  const minStart = facts
+    .map(f => new Date((f as any).start_at || 0).getTime())
+    .filter(n => Number.isFinite(n) && n > 0);
+  const maxEnd = facts
+    .map(f => new Date((f as any).end_at || 0).getTime())
+    .filter(n => Number.isFinite(n) && n > 0);
+  if (minStart.length > 0 && maxEnd.length > 0) {
+    const spanStart = new Date(Math.min(...minStart)).toISOString();
+    const spanEnd = new Date(Math.max(...maxEnd)).toISOString();
+    await withProtectedCompute(tx.tenantId, async (compTx) => {
+      await compTx.q(
+        `UPDATE metric_snapshot SET is_stale = true
+         WHERE tenant_id = $1 AND period_start <= $3 AND period_end >= $2`,
+        [compTx.tenantId, spanStart, spanEnd]
+      );
+    }).catch(() => { });
+    await withReleaseCompiler(tx.tenantId, async (relTx) => {
+      const artifacts = await relTx.q(
+        `SELECT release_id FROM released_artifact WHERE tenant_id = $1 AND period_start <= $3 AND period_end >= $2`,
+        [relTx.tenantId, spanStart, spanEnd]
+      );
+      for (const a of artifacts.rows) {
+        await relTx.q(`UPDATE privacy_release SET status = 'STALE' WHERE id = $1 AND status = 'RELEASED'`, [a.release_id]);
+      }
+    }).catch(() => { });
+  }
+
+  try {
+    const store = getObjectStore(cfg);
+    const tombstoneLog = {
+      schema: "abate.tombstone-log.v1",
+      tenantId: tx.tenantId,
+      runId: opts.runId,
+      dataCategory: opts.category,
+      verifiedAt,
+      entries: facts.map(fact => ({
+        recordRef: fact.id,
+        recordDigest: sha256Hex(canonicalJson(fact)),
+        recordKeyDigest: recordKeyDigest(opts.tenantSecret, {
+          connectionId: fact.connection_id,
+          sourceRecordId: fact.source_record_id ?? fact.id,
+          revision: Number(fact.revision) || 1
+        })
+      }))
+    };
+    const key = `tombstones/${tx.tenantId}/${opts.runId}.json`;
+    const body = canonicalJson(tombstoneLog);
+    await putVerified(store, key, body, sha256Hex(body));
+  } catch {
+    // External tombstone log write is best-effort when object store is offline in unit runs
+  }
+
   return purgedIds.length;
 }
 

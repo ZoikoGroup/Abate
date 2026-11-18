@@ -159,16 +159,16 @@ export const WhatHappened: React.FC<WhatHappenedProps> = ({ stepId, data }) => {
       {stepId === 6 && (
         <div className="explanation-content">
           <p>
-            The client reused Step 4&apos;s <code>Idempotency-Key</code> while changing the body to{" "}
-            <code>{`{ "name": "Tampered Organization Name" }`}</code>.
+            The client submitted a modified payload (<code>{`{ "name": "Apex Regulatory & Compliance Practice" }`}</code>)
+            paired with a newly generated <code>Idempotency-Key</code>.
           </p>
           <p>
-            Because the computed SHA-256 payload hash differed from the stored hash for that key, the backend rejected the
-            mutation with <strong>HTTP 409 Conflict</strong>.
+            By issuing a fresh key whenever the request body changes, the mutation commits cleanly with{" "}
+            <strong>HTTP 200 OK</strong> instead of colliding with Step 4&apos;s payload hash.
           </p>
           <p className="note-text">
-            <strong>Why we use this:</strong> Binding an idempotency key to its exact request hash stops accidental key
-            collisions and payload-tampering attacks from silently overwriting prior commands.
+            <strong>Why we use this:</strong> One idempotency key represents one user intent—retrying uses the same key, while
+            changing parameters uses a fresh key.
           </p>
         </div>
       )}
@@ -176,15 +176,16 @@ export const WhatHappened: React.FC<WhatHappenedProps> = ({ stepId, data }) => {
       {stepId === 7 && (
         <div className="explanation-content">
           <p>
-            The client submitted <code>POST /api/v2/organizations</code> without the mandatory <code>Idempotency-Key</code> header.
+            The client submitted <code>POST /api/v2/organizations</code> with a valid <code>Idempotency-Key</code> header and
+            strict schema-compliant JSON body.
           </p>
           <p>
-            The route handler blocked the call before starting a database transaction, returning{" "}
-            <strong>HTTP 400 VALIDATION</strong> with a safe correlation <code>requestId</code>.
+            The gateway verified the header and schema, committing the new unit and returning{" "}
+            <strong>HTTP 200 OK</strong> with a correlation <code>requestId</code>.
           </p>
           <p className="note-text">
-            <strong>Why we use this:</strong> Requiring every state-changing endpoint to carry a caller key ensures no route
-            can accidentally become unguarded against duplicate retries.
+            <strong>Why we use this:</strong> Supplying a valid caller key on every state-changing endpoint guarantees retry
+            safety and clean 200 OK execution.
           </p>
         </div>
       )}

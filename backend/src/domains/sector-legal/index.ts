@@ -5,6 +5,7 @@
 
 import { z } from "zod";
 import { AppError } from "../../platform/errors";
+import { evaluateNeutralFatigueSurge, legalMapping } from "../lifecycle/sector";
 
 export const PracticeAreaEnum = z.enum([
   "COMMERCIAL_LITIGATION",
@@ -116,56 +117,24 @@ export function evaluateLegalFatigueSurge(
   matter: LegalMatter,
   intervals: Array<{ startUtc: string; endUtc: string }>
 ): LegalFatigueAssessment {
-  // Sort intervals chronologically
-  const sorted = [...intervals].sort((a, b) => new Date(a.startUtc).getTime() - new Date(b.startUtc).getTime());
+  const neutral = evaluateNeutralFatigueSurge(
+    {
+      workItemId: matter.matterId,
+      unit: matter.practiceArea,
+      demandWindow: matter.currentPhase
+    },
+    intervals,
+    legalMapping.fatigueRule
+  );
 
-  // Group by calendar day (UTC)
-  const daysWithLateNightWork = new Set<string>();
-
-  for (const it of sorted) {
-    const end = new Date(it.endUtc);
-    const endHour = end.getUTCHours();
-    // Late night defined as work continuing past 20:00 (8 PM) or before 06:00 (6 AM)
-    if (endHour >= 20 || endHour < 6) {
-      const dateStr = end.toISOString().slice(0, 10);
-      daysWithLateNightWork.add(dateStr);
-    }
-  }
-
-  // Calculate max consecutive days
-  const sortedDays = Array.from(daysWithLateNightWork).sort();
-  let maxConsecutive = 0;
-  let currentConsecutive = 0;
-  let prevDate: Date | null = null;
-
-  for (const dayStr of sortedDays) {
-    const curDate = new Date(dayStr);
-    if (prevDate) {
-      const diffDays = Math.round((curDate.getTime() - prevDate.getTime()) / (24 * 3600 * 1000));
-      if (diffDays === 1) {
-        currentConsecutive++;
-      } else {
-        currentConsecutive = 1;
-      }
-    } else {
-      currentConsecutive = 1;
-    }
-    prevDate = curDate;
-    if (currentConsecutive > maxConsecutive) {
-      maxConsecutive = currentConsecutive;
-    }
-  }
-
-  // SRA / ISO 45003 threshold: >= 3 consecutive late nights during high-stakes demand window
-  const isHighStakes = matter.currentPhase === "TRIAL_PREP" || matter.currentPhase === "CLOSING_TRANSACTION";
-  const hasFatigueSurge = isHighStakes && maxConsecutive >= 3;
+  const hasFatigueSurge = neutral.hasFatigueSurge;
 
   return {
     matterId: matter.matterId,
     practiceArea: matter.practiceArea,
     currentPhase: matter.currentPhase,
     hasFatigueSurge,
-    consecutiveLateNightsCount: maxConsecutive,
+    consecutiveLateNightsCount: neutral.consecutiveLateNightsCount,
     statutoryReference: hasFatigueSurge
       ? "SRA Workplace Culture Guidance 2023 §3.2 & ISO 45003:2021 §6.1.2.1"
       : "SRA Baseline Practice Standards",

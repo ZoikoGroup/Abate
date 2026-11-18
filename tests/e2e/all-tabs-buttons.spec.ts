@@ -123,10 +123,25 @@ test.describe("All Tabs & Buttons Full Real Verification", () => {
     expect((await resumeRes).status()).toBe(200);
     await expect(page.getByText(/Connection RESUMED/i)).toBeVisible();
 
-    const revokeRes = page.waitForResponse(r => r.url().includes("/revoke") && r.request().method() === "POST");
-    await page.getByRole("button", { name: "Revoke", exact: true }).last().click();
-    expect((await revokeRes).status()).toBe(200);
-    await expect(page.getByText(/Connection REVOKED/i)).toBeVisible();
+    const suspendRes = page.waitForResponse(r => r.url().includes("/suspend") && r.request().method() === "POST");
+    await page.getByRole("button", { name: "Suspend", exact: true }).last().click();
+    expect((await suspendRes).status()).toBe(200);
+    await expect(page.getByText(/Connection SUSPENDED/i)).toBeVisible();
+    await expect(page.getByText(/State: Suspended/i).last()).toBeVisible();
+
+    // Reversible Suspend -> Resume
+    const resumeAfterSuspend = page.waitForResponse(r => r.url().includes("/resume") && r.request().method() === "POST");
+    await page.getByRole("button", { name: "Resume", exact: true }).last().click();
+    expect((await resumeAfterSuspend).status()).toBe(200);
+    await expect(page.getByText(/State: Resumed/i).last()).toBeVisible();
+
+    // Terminal Disconnect permanently with confirmation dialog
+    await page.getByRole("button", { name: "Disconnect permanently", exact: true }).last().click();
+    const disconnectRes = page.waitForResponse(r => r.url().includes("/disconnect") && r.request().method() === "POST");
+    await page.getByRole("button", { name: "Confirm Disconnect", exact: true }).click();
+    expect((await disconnectRes).status()).toBe(200);
+    await expect(page.getByText(/Connection DISCONNECTED/i)).toBeVisible();
+    await expect(page.getByText(/State: Disconnected/i).last()).toBeVisible();
   });
 
   test("Cohort Analytics & Privacy (Phase 3) tab: every reconstruction attack, query, CSV & recalc works", async ({ page }) => {
@@ -288,7 +303,7 @@ test.describe("All Tabs & Buttons Full Real Verification", () => {
     expect([200, 201]).toContain((await classRes).status());
     await expect(page.getByText(/Retention class saved/i)).toBeVisible();
 
-    await page.getByLabel(/Matter reference/i).fill("MATTER-E2E-2026");
+    await page.getByLabel(/Work item \/ Hold reference|Matter reference/i).fill("MATTER-E2E-2026");
     await page.getByLabel(/Reason/i).fill("Statutory litigation preservation hold");
     const holdRes = page.waitForResponse(r => r.url().includes("/legal-holds") && r.request().method() === "POST");
     await page.getByRole("button", { name: /Place legal hold/i }).click();

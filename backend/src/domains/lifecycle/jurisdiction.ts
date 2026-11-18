@@ -45,9 +45,12 @@ async function packVersions(db: { q: QueryFn }, packKey: string): Promise<PackRo
  */
 export async function loadTenantJurisdictionPacks(tx: Tx, at: Date): Promise<Array<{ packKey: string; versions: PackRow[] }>> {
   const out: Array<{ packKey: string; versions: PackRow[] }> = [];
+  const seenKeys = new Set<string>();
   for (const binding of await activeBindings(tx, tx.tenantId, at)) {
+    if (seenKeys.has(binding.pack_key)) continue;
     const versions = await packVersions(tx, binding.pack_key);
     if (versions.some(v => v.kind === "JURISDICTION")) {
+      seenKeys.add(binding.pack_key);
       out.push({ packKey: binding.pack_key, versions: versions.filter(v => v.kind === "JURISDICTION") });
     }
   }

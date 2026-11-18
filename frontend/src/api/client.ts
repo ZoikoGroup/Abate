@@ -3,22 +3,27 @@
 export const BACKEND_URL = typeof window !== "undefined" ? "" : "http://127.0.0.1:5000";
 
 export interface ApiErrorPayload {
-  code: "UNAUTHENTICATED" | "FORBIDDEN" | "NOT_FOUND" | "CONFLICT" | "VALIDATION" | "UNAVAILABLE";
+  code: "UNAUTHENTICATED" | "FORBIDDEN" | "NOT_FOUND" | "CONFLICT" | "VALIDATION" | "RATE_LIMITED" | "UNAVAILABLE";
   message: string;
   requestId: string;
+  fields?: string[];
 }
 
 export class ApiError extends Error {
   public readonly code: ApiErrorPayload["code"];
   public readonly requestId: string;
   public readonly status: number;
+  public readonly retryAfter?: string;
+  public readonly fields: string[];
 
-  constructor(status: number, payload: ApiErrorPayload) {
+  constructor(status: number, payload: ApiErrorPayload, retryAfter?: string) {
     super(payload.message || `API Error: ${status}`);
     this.name = "ApiError";
     this.status = status;
     this.code = payload.code || "UNAVAILABLE";
     this.requestId = payload.requestId || "unknown";
+    this.retryAfter = retryAfter;
+    this.fields = Array.isArray(payload.fields) ? payload.fields : [];
   }
 }
 
@@ -78,7 +83,7 @@ export async function api<T>(endpoint: string, options: ApiRequestOptions = {}):
         requestId: "network-error"
       };
     }
-    throw new ApiError(res.status, errorData);
+    throw new ApiError(res.status, errorData, res.headers.get("Retry-After") || undefined);
   }
 
   return (await res.json()) as T;
@@ -269,12 +274,15 @@ export interface SourceContract {
   status: "DRAFT" | "ACTIVE" | "RETIRED";
 }
 
+export type ConnectionStateValue = "ACTIVE" | "PAUSED" | "SUSPENDED" | "RESUMED" | "DISCONNECTED" | "REVOKED";
+
 export interface Connection {
   id: string;
   tenant_id: string;
   source: string;
   contract_id: string;
-  state: "ACTIVE" | "PAUSED" | "REVOKED";
+  state: ConnectionStateValue;
+  stateLabel?: string;
   last_success_at: string | null;
   expected_cadence_seconds: number;
   health: "FRESH" | "DELAYED" | "STALE" | "NEVER_SYNCED";
@@ -348,9 +356,27 @@ export async function registerConnection(
   });
 }
 
+export function formatConnectionStateLabel(state: Connection["state"]): string {
+  switch (state) {
+    case "ACTIVE":
+      return "Active";
+    case "PAUSED":
+      return "Paused";
+    case "SUSPENDED":
+      return "Suspended";
+    case "RESUMED":
+      return "Resumed";
+    case "DISCONNECTED":
+    case "REVOKED":
+      return "Disconnected";
+    default:
+      return state;
+  }
+}
+
 export async function setConnectionState(
   connectionId: string,
-  action: "pause" | "resume" | "revoke",
+  action: "pause" | "resume" | "suspend" | "disconnect" | "revoke",
   token: string
 ): Promise<Connection> {
   return api<Connection>(
@@ -1078,35 +1104,41 @@ export interface ActionAttemptView {
 export async function explainReleaseAi(
   releaseId: string,
   question?: string,
-  token?: string
+  token?: string,
+  idempotencyKey?: string
 ): Promise<AiRunView> {
   return api<AiRunView>("/api/v2/ai/explain-release", {
     method: "POST",
     body: JSON.stringify({ releaseId, question }),
-    token
+    token,
+    idempotencyKey
   });
 }
 
 export async function draftCauseAi(
   hazardId: string,
-  token?: string
+  token?: string,
+  idempotencyKey?: string
 ): Promise<AiRunView> {
   return api<AiRunView>("/api/v2/ai/draft-cause", {
     method: "POST",
     body: JSON.stringify({ hazardId }),
-    token
+    token,
+    idempotencyKey
   });
 }
 
 export async function draftControlAi(
   hazardId: string,
   causeId: string,
-  token?: string
+  token?: string,
+  idempotencyKey?: string
 ): Promise<AiRunView> {
   return api<AiRunView>("/api/v2/ai/draft-control", {
     method: "POST",
     body: JSON.stringify({ hazardId, causeId }),
-    token
+    token,
+    idempotencyKey
   });
 }
 
@@ -1479,6 +1511,7 @@ export interface OpsJobsOverview {
   activeWorkers: number;
   items: Array<{
     id: string;
+    outboxId?: string;
     type: string;
     state: string;
     attempts?: number;
@@ -1525,4 +1558,71 @@ export async function fetchAsyncJob(id: string, token?: string): Promise<AsyncJo
 
 export async function fetchOpsJobs(token?: string): Promise<OpsJobsOverview> {
   return api<OpsJobsOverview>("/api/v2/ops/jobs", { token });
+}
+
+export async function replayDeadLetter(
+  id: string,
+  reason: string,
+  token: string
+): Promise<{ deadLetterId: string; outboxId: string; replayedBy: string; reason: string; state: "PENDING" }> {
+  return api(`/api/v2/ops/dead-letters/${encodeURIComponent(id)}/replay`, {
+    method: "POST",
+    body: JSON.stringify({ reason }),
+    token
+  });
+}
+
+export interface TenantSectorProfile {
+  tenantId: string;
+  sectorKey: "GENERIC" | "LEGAL" | "ACCOUNTING";
+  hasLegalPack: boolean;
+  activePacks: string[];
+  vocabulary: {
+    workItem: string;
+    workItems: string;
+    unit: string;
+    demandWindow: string;
+    supervisor: string;
+  };
+  demandWindows: string[];
+  claimScope: string;
+  enabledSectors: string[];
+}
+
+export async function fetchTenantSectorProfile(token: string): Promise<TenantSectorProfile> {
+  return api<TenantSectorProfile>("/api/v2/tenant/sector-profile", { token });
+}
+
+export interface AiQuotaUseCaseStatus {
+  useCaseKey: string;
+  version: number;
+  modelRef: string;
+  enabled: boolean;
+  monthlyBudgetMinor: number;
+  spentMinor: number;
+  remainingMinor: number;
+  estimatedRunCostMinor: number;
+  remainingRunsEst: number;
+  windowStart: string;
+  resetAt: string;
+  killSwitchActive: boolean;
+}
+
+export interface AiQuotaStatus {
+  tenantId: string;
+  window: "CALENDAR_MONTH_UTC";
+  windowStart: string;
+  resetAt: string;
+  allAiDisabled: boolean;
+  useCases: AiQuotaUseCaseStatus[];
+}
+
+export async function fetchAiQuota(token: string): Promise<AiQuotaStatus> {
+  return api<AiQuotaStatus>("/api/v2/ai/quota", { token });
+}
+
+export async function fetchOpsAiQuota(supportToken: string, tenantId?: string): Promise<AiQuotaStatus[]> {
+  const qs = tenantId ? `?tenantId=${encodeURIComponent(tenantId)}` : "";
+  const res = await api<{ items: AiQuotaStatus[] }>(`/api/v2/ops/ai-quota${qs}`, { token: supportToken });
+  return res.items || [];
 }

@@ -6,12 +6,14 @@ import {
   requestToken,
   fetchOidcConfig,
   fetchCurrentPrincipal,
+  fetchTenantSectorProfile,
   exchangeOidcAuth,
   logoutSession,
   createPkceAuthorizationParams,
   COOKIE_SESSION_TOKEN,
   PRESET_TENANTS,
   type OidcConfig,
+  type TenantSectorProfile,
   type SystemHealth,
   type SystemInfo,
   type TenantInfo,
@@ -52,6 +54,7 @@ export default function App() {
   const [oidcJwtInput, setOidcJwtInput] = useState("");
   const [oidcLoginError, setOidcLoginError] = useState<string | null>(null);
   const [tenantInfo, setTenantInfo] = useState<TenantInfo | null>(null);
+  const [sectorProfile, setSectorProfile] = useState<TenantSectorProfile | null>(null);
   const [organizations, setOrganizations] = useState<Organization[]>([]);
   const [auditEvents, setAuditEvents] = useState<AuditEvent[]>([]);
   const [loading, setLoading] = useState(false);
@@ -115,15 +118,20 @@ export default function App() {
   }, []);
 
   const loadTenantWorkspace = useCallback(async (sessionToken: string) => {
-    const [currTenant, orgs, audits] = await Promise.all([
+    const [currTenant, orgs, audits, secProfile] = await Promise.all([
       api<TenantInfo>("/api/v2/tenants/current", { token: sessionToken }),
       api<Organization[]>("/api/v2/organizations", { token: sessionToken }),
-      api<AuditEvent[]>("/api/v2/audit-events", { token: sessionToken })
+      api<AuditEvent[]>("/api/v2/audit-events", { token: sessionToken }),
+      fetchTenantSectorProfile(sessionToken).catch(() => null)
     ]);
 
     setTenantInfo(currTenant);
     setOrganizations(orgs);
     setAuditEvents(audits);
+    setSectorProfile(secProfile);
+    if (secProfile && !secProfile.hasLegalPack) {
+      setActiveTab(prev => (prev === "legal" ? "organizations" : prev));
+    }
     setErrorMsg(null);
   }, []);
 
@@ -403,13 +411,15 @@ export default function App() {
         >
           Outcomes &amp; AI Change (Phase 7)
         </button>
-        <button
-          type="button"
-          className={`tab-button ${activeTab === "legal" ? "active" : ""}`}
-          onClick={() => setActiveTab("legal")}
-        >
-          Legal Sector Pack (SRA 2023)
-        </button>
+        {sectorProfile?.hasLegalPack && (
+          <button
+            type="button"
+            className={`tab-button ${activeTab === "legal" ? "active" : ""}`}
+            onClick={() => setActiveTab("legal")}
+          >
+            Legal Sector Pack (SRA 2023)
+          </button>
+        )}
         <button
           type="button"
           className={`tab-button ${activeTab === "operations" ? "active" : ""}`}
@@ -503,6 +513,7 @@ export default function App() {
           <HazardControlTab
             currentTenant={currentTenant}
             token={token}
+            sectorProfile={sectorProfile}
           />
         )}
 
@@ -527,7 +538,7 @@ export default function App() {
           />
         )}
 
-        {activeTab === "legal" && (
+        {activeTab === "legal" && sectorProfile?.hasLegalPack && (
           <LegalPracticeTab
             currentTenant={currentTenant}
             token={token}

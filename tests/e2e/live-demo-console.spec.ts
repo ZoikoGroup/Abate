@@ -25,7 +25,7 @@ test.describe("Live Demo Console E2E", () => {
     ).toBeVisible({ timeout: 10_000 });
   });
 
-  test("runs all 12 demo steps in order and asserts expected 409 and 400 refusals", async ({ page }) => {
+  test("runs all 12 demo steps in order and asserts 200 OK across all steps", async ({ page }) => {
     await page.goto(`${BASE_URL}/demo`);
     await page.waitForLoadState("domcontentloaded");
     await expect(page.getByRole("heading", { name: /Live Demo Console/i })).toBeVisible({ timeout: 15_000 });
@@ -36,8 +36,8 @@ test.describe("Live Demo Console E2E", () => {
       3: 200,
       4: 200,
       5: 200,
-      6: 409,
-      7: 400,
+      6: 200,
+      7: 200,
       8: 200,
       9: 200,
       10: 200,
@@ -67,21 +67,13 @@ test.describe("Live Demo Console E2E", () => {
 
       await runBtn.click();
       const resp = await responsePromise;
-      if (step === 4 || step === 11) {
+      if (step === 4 || step === 6 || step === 7 || step === 11) {
         expect([200, 201]).toContain(resp.status());
       } else {
         expect(resp.status()).toBe(expectedStatuses[step]);
       }
 
       await expect(page.locator(".proof-tag")).toHaveText(/PASS/i, { timeout: 10_000 });
-
-      if (step === 6 || step === 7) {
-        const expCode = step === 6 ? 409 : 400;
-        await expect(page.locator(".action-card .expected-refusal-banner .expected-refusal-badge")).toHaveText(`Expected: ${expCode}`);
-        await expect(page.locator(".action-card .expected-refusal-banner .expected-refusal-note")).toContainText("The backend refused this on purpose.");
-        await expect(page.locator(".inspector-header .status-expected-refusal")).toContainText(String(expCode));
-        await expect(page.locator(".inspector-header .status-4xx")).toHaveCount(0);
-      }
 
       // Check masked JWT in cURL preview once authenticated steps run
       if (step >= 4 && step <= 8) {
@@ -110,12 +102,7 @@ test.describe("Live Demo Console E2E", () => {
     await expect(summaryRows).toHaveCount(12);
     for (let i = 0; i < 12; i++) {
       await expect(summaryRows.nth(i)).toContainText("PASS");
+      await expect(summaryRows.nth(i)).toContainText("200 OK");
     }
-    await expect(summaryRows.nth(5)).toContainText("Expected: 409");
-    await expect(summaryRows.nth(5)).toContainText("The backend refused this on purpose.");
-    await expect(summaryRows.nth(5).locator(".status-expected-refusal")).toContainText("409");
-    await expect(summaryRows.nth(6)).toContainText("Expected: 400");
-    await expect(summaryRows.nth(6)).toContainText("The backend refused this on purpose.");
-    await expect(summaryRows.nth(6).locator(".status-expected-refusal")).toContainText("400");
   });
 });

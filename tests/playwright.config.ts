@@ -39,6 +39,10 @@ export default defineConfig({
         env: {
           ...process.env,
           APP_ENV: process.env.APP_ENV || "test",
+          ABATE_REQUIRE_PG: process.env.ABATE_REQUIRE_PG || "0",
+          DATABASE_URL_MIGRATOR: process.env.DATABASE_URL_MIGRATOR || "postgres://disabled:disabled@127.0.0.1:1/abate",
+          DATABASE_URL_APP: process.env.DATABASE_URL_APP || "postgres://disabled:disabled@127.0.0.1:1/abate",
+          DATABASE_URL_WORKER: process.env.DATABASE_URL_WORKER || "postgres://disabled:disabled@127.0.0.1:1/abate",
           PORT: backendPort
         }
       },

@@ -8,6 +8,7 @@ import {
   fetchReceipts,
   fetchWorkFacts,
   submitZoikoBatch,
+  formatConnectionStateLabel,
   type SourceContract,
   type Connection,
   type IngestReceipt,
@@ -16,6 +17,7 @@ import {
   PRESET_TENANTS,
   ApiError
 } from "../../api/client";
+import { StateView } from "../StateView";
 
 interface IngestionTabProps {
   currentTenant: typeof PRESET_TENANTS[0];
@@ -40,6 +42,7 @@ export function IngestionTab({ currentTenant, token, onRefresh }: IngestionTabPr
   const [lastSentBatch, setLastSentBatch] = useState<ZoikoTimeBatchPayload | null>(null);
   const [loading, setLoading] = useState(false);
   const [actionLoading, setActionLoading] = useState<string | null>(null);
+  const [confirmDisconnectId, setConfirmDisconnectId] = useState<string | null>(null);
 
   // Feedback banner
   const [feedback, setFeedback] = useState<{
@@ -149,16 +152,25 @@ export function IngestionTab({ currentTenant, token, onRefresh }: IngestionTabPr
   };
 
   // Connection State Controls
-  const handleToggleState = async (conn: Connection, action: "pause" | "resume" | "revoke") => {
+  const handleToggleState = async (conn: Connection, action: "pause" | "resume" | "suspend" | "disconnect") => {
     if (!token) return;
     setActionLoading(`state-${conn.id}`);
     setFeedback(null);
     try {
-      await setConnectionState(conn.id, action, token);
+      const updated = await setConnectionState(conn.id, action, token);
+      if (action === "disconnect") {
+        setConfirmDisconnectId(null);
+      }
+      const titleMap: Record<typeof action, string> = {
+        pause: "Connection PAUSED",
+        resume: "Connection RESUMED",
+        suspend: "Connection SUSPENDED",
+        disconnect: "Connection DISCONNECTED"
+      };
       setFeedback({
-        type: "success",
-        title: `Connection ${action.toUpperCase()}D`,
-        message: `Connection "${conn.source}" (${conn.id.slice(0, 8)}...) is now ${action === "pause" ? "PAUSED" : action === "resume" ? "ACTIVE" : "REVOKED"}.`
+        type: action === "disconnect" ? "warning" : "success",
+        title: titleMap[action],
+        message: `Connection "${conn.source}" (${conn.id.slice(0, 8)}...) is now ${formatConnectionStateLabel(updated.state)}.`
       });
       await loadData();
       onRefresh();
@@ -622,9 +634,15 @@ export function IngestionTab({ currentTenant, token, onRefresh }: IngestionTabPr
           </form>
         )}
 
-        {connections.length === 0 ? (
-          <p className="empty-message">No connections found for this tenant scope.</p>
-        ) : (
+        <StateView
+          state={
+            loading && connections.length === 0
+              ? { kind: "loading" }
+              : connections.length === 0
+                ? { kind: "empty", reason: "No connections found for this tenant scope." }
+                : { kind: "ok" }
+          }
+        >
           <div style={{ display: "flex", flexDirection: "column", gap: "1rem" }}>
             {connections.map(conn => {
               const isFresh = conn.health === "FRESH";
@@ -664,27 +682,41 @@ export function IngestionTab({ currentTenant, token, onRefresh }: IngestionTabPr
                       <span className={`badge ${healthBadgeClass}`}>
                         Health: {conn.health}
                       </span>
-                      <span className={`status-pill ${conn.state === "ACTIVE" ? "status-live" : "status-error"}`}>
-                        State: {conn.state}
+                      <span
+                        className={`status-pill ${conn.state === "ACTIVE" || conn.state === "RESUMED" ? "status-live" : "status-error"}`}
+                        title={conn.state === "DISCONNECTED" || conn.state === "REVOKED" ? "Disconnected permanently (terminal — register a new connection to reconnect)" : undefined}
+                      >
+                        State: {conn.stateLabel || formatConnectionStateLabel(conn.state)}
                       </span>
                     </div>
 
-                    <div style={{ display: "flex", gap: "0.5rem" }}>
-                      {conn.state === "ACTIVE" ? (
-                        <button
-                          type="button"
-                          className="btn btn-secondary btn-sm"
-                          onClick={() => handleToggleState(conn, "pause")}
-                          disabled={actionLoading !== null}
-                        >
-                          Pause
-                        </button>
+                    <div style={{ display: "flex", gap: "0.5rem", flexWrap: "wrap" }}>
+                      {conn.state === "ACTIVE" || conn.state === "RESUMED" ? (
+                        <>
+                          <button
+                            type="button"
+                            className="btn btn-secondary btn-sm"
+                            onClick={() => handleToggleState(conn, "pause")}
+                            disabled={actionLoading !== null}
+                          >
+                            Pause
+                          </button>
+                          <button
+                            type="button"
+                            className="btn btn-secondary btn-sm"
+                            title="Reversibly suspend ingestion for this connection (can be resumed)"
+                            onClick={() => handleToggleState(conn, "suspend")}
+                            disabled={actionLoading !== null}
+                          >
+                            Suspend
+                          </button>
+                        </>
                       ) : (
                         <button
                           type="button"
                           className="btn btn-secondary btn-sm"
                           onClick={() => handleToggleState(conn, "resume")}
-                          disabled={actionLoading !== null}
+                          disabled={actionLoading !== null || conn.state === "DISCONNECTED" || conn.state === "REVOKED"}
                         >
                           Resume
                         </button>
@@ -693,13 +725,56 @@ export function IngestionTab({ currentTenant, token, onRefresh }: IngestionTabPr
                         type="button"
                         className="btn btn-secondary btn-sm"
                         style={{ color: "var(--coral)", borderColor: "var(--coral)" }}
-                        onClick={() => handleToggleState(conn, "revoke")}
-                        disabled={actionLoading !== null || conn.state === "REVOKED"}
+                        title="Permanently disconnect connection (terminal; cannot be resumed)"
+                        onClick={() => setConfirmDisconnectId(conn.id)}
+                        disabled={actionLoading !== null || conn.state === "DISCONNECTED" || conn.state === "REVOKED"}
                       >
-                        Revoke
+                        Disconnect permanently
                       </button>
                     </div>
                   </div>
+
+                  {confirmDisconnectId === conn.id && conn.state !== "DISCONNECTED" && conn.state !== "REVOKED" && (
+                    <div
+                      role="dialog"
+                      aria-label={`Confirm permanent disconnect for ${conn.source}`}
+                      style={{
+                        padding: "0.75rem 1rem",
+                        background: "#FFF5F5",
+                        border: "1px solid var(--coral)",
+                        borderRadius: "8px",
+                        display: "flex",
+                        justifyContent: "space-between",
+                        alignItems: "center",
+                        flexWrap: "wrap",
+                        gap: "0.75rem"
+                      }}
+                    >
+                      <span style={{ fontSize: "0.85rem", color: "#9B1C1C" }}>
+                        <strong>Irreversible action:</strong> Disconnecting permanently enters terminal state{" "}
+                        <code>DISCONNECTED</code> and cannot be resumed.
+                      </span>
+                      <div style={{ display: "flex", gap: "0.5rem" }}>
+                        <button
+                          type="button"
+                          className="btn btn-secondary btn-sm"
+                          style={{ background: "#9B1C1C", color: "#FFFFFF", borderColor: "#9B1C1C" }}
+                          onClick={() => handleToggleState(conn, "disconnect")}
+                          disabled={actionLoading !== null}
+                        >
+                          Confirm Disconnect
+                        </button>
+                        <button
+                          type="button"
+                          className="btn btn-secondary btn-sm"
+                          onClick={() => setConfirmDisconnectId(null)}
+                          disabled={actionLoading !== null}
+                        >
+                          Cancel
+                        </button>
+                      </div>
+                    </div>
+                  )}
 
                   <div style={{ display: "grid", gridTemplateColumns: "repeat(auto-fit, minmax(min(200px, 100%), 1fr))", gap: "0.75rem", fontSize: "0.85rem", color: "var(--graphite)" }}>
                     <div>
@@ -727,7 +802,7 @@ export function IngestionTab({ currentTenant, token, onRefresh }: IngestionTabPr
               );
             })}
           </div>
-        )}
+        </StateView>
       </div>
 
       {/* Ingestion Receipts */}

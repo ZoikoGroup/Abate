@@ -38,11 +38,28 @@ export interface UseCaseConfig {
   evalThresholds: Record<string, number>;
 }
 
+export const ESTIMATED_AI_RUN_COST_MINOR = 10;
+
+export function secondsUntilNextMonthUtc(now: Date = new Date()): number {
+  const nextMonth = Date.UTC(now.getUTCFullYear(), now.getUTCMonth() + 1, 1, 0, 0, 0, 0);
+  return Math.max(60, Math.ceil((nextMonth - now.getTime()) / 1000));
+}
+
 // Budget is enforced per tenant from durable spend (SUM of ai_run.cost_minor for the current month, read inside the
 // caller's tenant transaction), so it survives restarts and one tenant's usage never consumes another's allowance.
-export function assertBudget(uc: UseCaseConfig, spentMinor: number, estimatedCost = 10): void {
+export function assertBudget(
+  uc: UseCaseConfig,
+  spentMinor: number,
+  estimatedCost = ESTIMATED_AI_RUN_COST_MINOR,
+  now: Date = new Date()
+): void {
   if (spentMinor + estimatedCost > uc.monthlyBudgetMinor) {
-    throw new AppError("UNAVAILABLE", `Monthly budget exceeded for AI use-case ${uc.key}.`);
+    throw new AppError(
+      "RATE_LIMITED",
+      `Monthly AI quota exceeded for use-case ${uc.key}. Continue with the manual control workflow until the next monthly window.`,
+      undefined,
+      secondsUntilNextMonthUtc(now)
+    );
   }
 }
 

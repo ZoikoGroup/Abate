@@ -106,11 +106,11 @@ export async function runCommand<T>(args: {
 
       const prev = prevRows.rows[0];
       if (!prev) {
-        throw new AppError("CONFLICT", "Concurrent request encountered key collision");
+        throw new AppError("CONFLICT", "Concurrent request encountered key collision. Reload and try again.", undefined, undefined, ["Idempotency-Key"]);
       }
 
       if (prev.request_hash !== args.requestHash) {
-        throw new AppError("CONFLICT", "Idempotency key reused with different request payload");
+        throw new AppError("CONFLICT", "Idempotency key reused with different request payload. Reload or generate a new key.", undefined, undefined, ["Idempotency-Key"]);
       }
 
       // Exact replay: return saved result without executing domain body or emitting duplicate events

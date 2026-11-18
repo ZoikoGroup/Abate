@@ -4,6 +4,7 @@
 
 import React, { useCallback, useEffect, useState } from "react";
 import { api, ApiError, PRESET_TENANTS } from "../../api/client";
+import { StateView } from "../StateView";
 
 function fmtVerifierErr(err: unknown, fallback: string): string {
   if (err instanceof ApiError) {
@@ -426,6 +427,8 @@ export function AuditVerifierTab({ currentTenant, token }: AuditVerifierTabProps
             <input type="file" accept=".json,application/json" style={{ display: "none" }} onChange={handleFileUpload} />
           </label>
         </div>
+
+        {loadingLive && <StateView state={{ kind: "loading" }} />}
 
         {packages.length > 0 && (
           <p className="text-sm" style={{ opacity: 0.8, marginBottom: "0.75rem" }}>

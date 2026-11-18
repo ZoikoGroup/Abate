@@ -32,7 +32,7 @@ export const PROTOTYPE_OUTCOME_DEFINITIONS: Array<{
     unit: "ratio",
     definition: {
       formula: "sustainable_interval_hours / total_demand_hours",
-      sourceCoverage: ["time_intervals", "matter_deadlines"]
+      sourceCoverage: ["time_intervals", "work_item_deadlines"]
     },
     qualityRules: { minCoverage: 0.8, missing: "INSUFFICIENT_DATA" },
     privacyClass: "B"
@@ -78,7 +78,7 @@ export const PROTOTYPE_OUTCOME_DEFINITIONS: Array<{
     definition: {
       numerator: "count(ai_assisted_tasks WHERE rework_flag = true)",
       denominator: "count(ai_assisted_tasks)",
-      allowedDimensions: ["team", "practiceArea"],
+      allowedDimensions: ["team", "unit"],
       releaseClass: "B"
     },
     qualityRules: { minCoverage: "per definition owner", missing: "INSUFFICIENT_DATA" },

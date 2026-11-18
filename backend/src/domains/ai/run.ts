@@ -4,11 +4,11 @@ import { Tx } from "../../platform/db/with-tenant";
 import { AppError } from "../../platform/errors";
 import { Actor } from "../../platform/command";
 import { ContextRef, AiRunView } from "../../contracts/ai";
-import { UseCaseConfig, callModel } from "./gateway";
+import { UseCaseConfig, ESTIMATED_AI_RUN_COST_MINOR, callModel } from "./gateway";
 import { retrieveContext } from "./retrieve";
 import { buildPrompt } from "./prompt";
 import { validateOutput } from "./validate";
-import { assertNoKillSwitch } from "./kill-switch";
+import { assertNoKillSwitch, getKillSwitches } from "./kill-switch";
 
 export const DEFAULT_AI_USE_CASES: Record<string, UseCaseConfig> = {
   "explain_release": {
@@ -191,6 +191,74 @@ export async function getMonthlySpendMinor(tx: Tx, useCaseKey: string, now: Date
   );
   // bigint SUM comes back as a string from Postgres
   return Number(res.rows[0]?.spent ?? 0);
+}
+
+export interface AiQuotaUseCaseStatus {
+  useCaseKey: string;
+  version: number;
+  modelRef: string;
+  enabled: boolean;
+  monthlyBudgetMinor: number;
+  spentMinor: number;
+  remainingMinor: number;
+  estimatedRunCostMinor: number;
+  remainingRunsEst: number;
+  windowStart: string;
+  resetAt: string;
+  killSwitchActive: boolean;
+}
+
+export async function getAiQuotaStatus(
+  tx: Tx,
+  now: Date = new Date()
+): Promise<{
+  tenantId: string;
+  window: "CALENDAR_MONTH_UTC";
+  windowStart: string;
+  resetAt: string;
+  allAiDisabled: boolean;
+  useCases: AiQuotaUseCaseStatus[];
+}> {
+  const windowStart = new Date(Date.UTC(now.getUTCFullYear(), now.getUTCMonth(), 1)).toISOString();
+  const resetAt = new Date(Date.UTC(now.getUTCFullYear(), now.getUTCMonth() + 1, 1)).toISOString();
+  const switches = await getKillSwitches(tx);
+  const activeScopes = new Set(switches.filter(s => s.active).map(s => s.scope));
+  const allAiDisabled = activeScopes.has("all_ai");
+
+  const useCases: AiQuotaUseCaseStatus[] = [];
+  for (const key of Object.keys(DEFAULT_AI_USE_CASES)) {
+    const uc = await loadUseCase(tx, key);
+    const spentMinor = await getMonthlySpendMinor(tx, uc.key, now);
+    const remainingMinor = Math.max(0, uc.monthlyBudgetMinor - spentMinor);
+    const killSwitchActive =
+      allAiDisabled ||
+      activeScopes.has(`use_case:${uc.key}`) ||
+      activeScopes.has(`model:${uc.modelRef}`) ||
+      activeScopes.has(`provider:${uc.providerName}`);
+    useCases.push({
+      useCaseKey: uc.key,
+      version: uc.version,
+      modelRef: uc.modelRef,
+      enabled: uc.enabled,
+      monthlyBudgetMinor: uc.monthlyBudgetMinor,
+      spentMinor,
+      remainingMinor,
+      estimatedRunCostMinor: ESTIMATED_AI_RUN_COST_MINOR,
+      remainingRunsEst: Math.floor(remainingMinor / ESTIMATED_AI_RUN_COST_MINOR),
+      windowStart,
+      resetAt,
+      killSwitchActive
+    });
+  }
+
+  return {
+    tenantId: tx.tenantId,
+    window: "CALENDAR_MONTH_UTC",
+    windowStart,
+    resetAt,
+    allAiDisabled,
+    useCases
+  };
 }
 
 export async function runAiUseCase(

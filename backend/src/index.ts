@@ -7,6 +7,7 @@ import fs from "node:fs";
 import path from "node:path";
 import { loadConfig, isDevTokenEnabled, isHardenedEnv } from "./platform/config";
 import { getObjectStore } from "./platform/object-store";
+import { replayDeadLetterEvent } from "./worker/outbox-publisher";
 import {
   verifyOidcJwt,
   extractTenantClaimsFromOidc,
@@ -20,12 +21,15 @@ import {
 } from "./platform/oidc";
 import { recordPrivacyOutcome, renderPrometheusMetrics, evaluateOperationalAlerts } from "./platform/monitoring";
 import { toErrorResponse, AppError } from "./platform/errors";
+import { runCommand, computeRequestHash } from "./platform/command";
 import { openApiSpec, CreateOrganizationBody, TokenRequestBody, ZoikoTimeBatchV1, CalendarCadenceBatchV1, CreateConnectionInput, SourceAdapterName, SemanticQueryV1 } from "./contracts";
 import { GOLDEN_01 } from "./fixtures/golden01";
 import { authenticate, resolveActor, createDevToken, authorize, requireSeparationOfDuties } from "./domains/tenant/auth";
 import { RightsRequestInputSchema, CorrectionInputSchema, AcknowledgeCorrectionInputSchema } from "./contracts/governance";
 import { createOrganization, getOrganization, listOrganizations, getTenant } from "./domains/tenant/commands";
-import { ingestBatch, listSourceContracts, listConnections, getConnection, registerConnection, setConnectionState, listReceipts, listWorkFacts } from "./domains/ingest";
+import { ingestBatch, listSourceContracts, listConnections, getConnection, registerConnection, setConnectionState, listReceipts, listWorkFacts, type ConnectionState } from "./domains/ingest";
+import { verifyConnectorWebhookRequest } from "./domains/ingest/webhook-auth";
+import { rateLimitMiddleware } from "./platform/rate-limit";
 import { compileRelease, getRelease, getReleaseTx } from "./domains/privacy";
 import {
   ExplainReleaseInput,
@@ -63,7 +67,8 @@ import {
   acceptAiRun,
   discardAiRun,
   getKillSwitches,
-  setKillSwitch
+  setKillSwitch,
+  getAiQuotaStatus
 } from "./domains/ai";
 import {
   proposeAction,
@@ -79,7 +84,9 @@ import {
   verifyStoredEvidencePackage,
   requestErasure,
   recordCorrection,
-  acknowledgeCorrection
+  acknowledgeCorrection,
+  resolveTenantSectorProfile,
+  assertTenantHasLegalPack
 } from "./domains/lifecycle";
 import {
   CreateHazardInput,
@@ -146,30 +153,8 @@ app.use((_req: Request, res: Response, next: NextFunction) => {
   next();
 });
 
-// Fixed-window per-IP limiter. Off in local/test unless RATE_LIMIT_PER_MIN is set (load tests and demos hammer the app);
-// defaults to 600/min elsewhere. Responses use the safe error envelope.
-const rateLimitPerMin = Number(process.env.RATE_LIMIT_PER_MIN) || ((cfg.appEnv === "local" || cfg.appEnv === "test") ? 0 : 600);
-if (rateLimitPerMin > 0) {
-  const windows = new Map<string, { start: number; count: number }>();
-  setInterval(() => {
-    const cutoff = Date.now() - 60_000;
-    for (const [k, w] of windows) if (w.start < cutoff) windows.delete(k);
-  }, 60_000).unref();
-  app.use((req: Request, res: Response, next: NextFunction) => {
-    const now = Date.now();
-    const key = req.ip || "unknown";
-    let w = windows.get(key);
-    if (!w || now - w.start >= 60_000) {
-      w = { start: now, count: 0 };
-      windows.set(key, w);
-    }
-    if (++w.count > rateLimitPerMin) {
-      res.setHeader("Retry-After", String(Math.ceil((w.start + 60_000 - now) / 1000)));
-      return res.status(429).json({ code: "RATE_LIMITED", message: "Too many requests. Slow down and retry.", requestId: res.locals?.requestId });
-    }
-    next();
-  });
-}
+// Per-tenant, per-actor, and per-IP rate limiting with stricter tiers for AI, exports, and ingestion (G-18 / T-15).
+app.use(rateLimitMiddleware);
 
 // Pilot structured JSON request logging (B8-safe: routeClass only, zero tenant IDs/PII)
 app.use((req: Request, res: Response, next: NextFunction) => {
@@ -197,6 +182,18 @@ app.use(cors({
 }));
 
 app.use(compression());
+// Security & anti-cache headers (Completion Plan Section 6 & 7.1)
+app.use((req: Request, res: Response, next: NextFunction) => {
+  res.setHeader("X-Content-Type-Options", "nosniff");
+  res.setHeader("X-Frame-Options", "DENY");
+  res.setHeader("Referrer-Policy", "no-referrer");
+  res.setHeader("Content-Security-Policy", "default-src 'self'; script-src 'self'; object-src 'none'; frame-ancestors 'none'; base-uri 'self'");
+  if (req.path.startsWith("/api/")) {
+    res.setHeader("Cache-Control", "no-store");
+    res.setHeader("Pragma", "no-cache");
+  }
+  next();
+});
 // A schema-max ingest batch (1000 items) is larger than express's 100kb default
 app.use(express.json({ limit: "2mb" }));
 
@@ -648,6 +645,18 @@ app.get("/api/v2/tenants/current", async (req: Request, res: Response) => {
   }
 });
 
+// Active Sector Profile & Vocabulary for the caller's tenant (Sector-Neutral Core Contract)
+app.get("/api/v2/tenant/sector-profile", async (req: Request, res: Response) => {
+  try {
+    const who = await authenticate(getHeader(req, "authorization"));
+    await resolveActor(who.tenantId, who.subject, new Date(), who.role);
+    const profile = await withTenant(who.tenantId, async (tx) => resolveTenantSectorProfile(tx, who.tenantId));
+    res.status(200).json(profile);
+  } catch (err) {
+    toErrorResponse(err, res);
+  }
+});
+
 // Inspect single tenant profile with strict boundary enforcement
 app.get("/api/v2/tenants/:id", async (req: Request, res: Response) => {
   try {
@@ -674,7 +683,13 @@ app.post("/api/v2/organizations", async (req: Request, res: Response) => {
 
     const idempotencyKey = getHeader(req, "idempotency-key") || getHeader(req, "x-idempotency-key");
     if (!idempotencyKey) {
-      throw new AppError("VALIDATION", "Header 'Idempotency-Key' is required for all state-changing commands.");
+      throw new AppError(
+        "VALIDATION",
+        "Header 'Idempotency-Key' is required for all state-changing commands.",
+        undefined,
+        undefined,
+        ["Idempotency-Key"]
+      );
     }
 
     const result = await createOrganization({
@@ -763,6 +778,20 @@ async function handleConnectorBatchRequest(
     const who = await authenticate(getHeader(req, "authorization"));
     const actor = await resolveActor(who.tenantId, who.subject, new Date(), who.role);
 
+    const runtimeCfg = loadConfig();
+    const sigHeader = getHeader(req, "x-abate-signature");
+    const tsHeader = getHeader(req, "x-abate-timestamp");
+    const nonceHeader = getHeader(req, "x-abate-nonce");
+    if (runtimeCfg.connectorWebhookSecret || sigHeader || tsHeader) {
+      verifyConnectorWebhookRequest({
+        secret: runtimeCfg.connectorWebhookSecret,
+        signatureHeader: sigHeader,
+        timestampHeader: tsHeader,
+        nonceHeader,
+        body: req.body
+      });
+    }
+
     // Strict schema parse: unknown or prohibited top-level fields rejected immediately
     const batch = schema.parse(req.body);
     const idempotencyKey = getHeader(req, "idempotency-key") || batch.batchId;
@@ -783,7 +812,7 @@ async function handleConnectorBatchRequest(
 async function handleConnectionStateRequest(
   req: Request,
   res: Response,
-  newState: "ACTIVE" | "PAUSED" | "REVOKED"
+  newState: ConnectionState | "RESUME_AUTO"
 ) {
   try {
     const who = await authenticate(getHeader(req, "authorization"));
@@ -867,13 +896,23 @@ app.get("/api/v2/connections/:id", async (req: Request, res: Response) => {
   }
 });
 
-// Connection state transitions (Pause / Resume / Revoke) via atomic runCommand pipeline
+// Connection state transitions:
+// Reversible: PAUSED, SUSPENDED, RESUMED / ACTIVE.
+// Terminal: DISCONNECTED (and legacy /revoke -> REVOKED).
 app.post("/api/v2/connections/:id/pause", (req: Request, res: Response) => {
   return handleConnectionStateRequest(req, res, "PAUSED");
 });
 
+app.post("/api/v2/connections/:id/suspend", (req: Request, res: Response) => {
+  return handleConnectionStateRequest(req, res, "SUSPENDED");
+});
+
 app.post("/api/v2/connections/:id/resume", (req: Request, res: Response) => {
-  return handleConnectionStateRequest(req, res, "ACTIVE");
+  return handleConnectionStateRequest(req, res, "RESUME_AUTO");
+});
+
+app.post("/api/v2/connections/:id/disconnect", (req: Request, res: Response) => {
+  return handleConnectionStateRequest(req, res, "DISCONNECTED");
 });
 
 app.post("/api/v2/connections/:id/revoke", (req: Request, res: Response) => {
@@ -2098,6 +2137,47 @@ app.post("/api/v2/lifecycle/rights-requests", async (req: Request, res: Response
 // Domain S08 & S09: Phase 6 Bounded AI & Safe Action Execution Endpoints
 // -------------------------------------------------------------
 
+// Helper for idempotent or direct AI use-case invocation
+async function executeAiEndpoint(
+  req: Request,
+  operation: string,
+  useCaseKey: string,
+  payloadForHash: unknown,
+  fn: (tx: any, actor: any) => Promise<any>,
+  actor: any,
+  tenantId: string,
+  purpose: string
+): Promise<any> {
+  const idempotencyKey = getHeader(req, "idempotency-key") || getHeader(req, "x-idempotency-key");
+  if (!idempotencyKey) {
+    return await withTenant(tenantId, async (tx) => fn(tx, actor));
+  }
+  const cmdRes = await runCommand({
+    tenantId,
+    operation,
+    idempotencyKey,
+    requestHash: computeRequestHash({ useCaseKey, ...(payloadForHash as object) }),
+    actor,
+    body: async (tx) => {
+      const result = await fn(tx, actor);
+      return {
+        result,
+        audit: {
+          purpose,
+          command: operation,
+          resourceType: "ai_run",
+          resourceId: result.id,
+          resourceVersion: 1,
+          result: "SUCCESS",
+          evidenceRefs: [`ai_run/${result.id}`]
+        },
+        events: []
+      };
+    }
+  });
+  return cmdRes.body;
+}
+
 // AI Explain Release (Domain S08)
 app.post("/api/v2/ai/explain-release", async (req: Request, res: Response) => {
   try {
@@ -2105,12 +2185,20 @@ app.post("/api/v2/ai/explain-release", async (req: Request, res: Response) => {
     const actor = await resolveActor(who.tenantId, who.subject, new Date(), who.role);
     const input = ExplainReleaseInput.parse(req.body);
 
-    const out = await withTenant(who.tenantId, async (tx) => {
-      return await runAiUseCase(tx, actor, "explain_release", {
-        contextRefs: [{ type: "RELEASE", id: input.releaseId }],
-        question: input.question
-      });
-    });
+    const out = await executeAiEndpoint(
+      req,
+      "ai.explain_release",
+      "explain_release",
+      input,
+      async (tx, resolvedActor) =>
+        runAiUseCase(tx, resolvedActor, "explain_release", {
+          contextRefs: [{ type: "RELEASE", id: input.releaseId }],
+          question: input.question
+        }),
+      actor,
+      who.tenantId,
+      who.purpose
+    );
 
     res.status(200).json(out);
   } catch (err) {
@@ -2125,17 +2213,26 @@ app.post("/api/v2/ai/draft-cause", async (req: Request, res: Response) => {
     const actor = await resolveActor(who.tenantId, who.subject, new Date(), who.role);
     const input = DraftCauseInput.parse(req.body);
 
-    const out = await withTenant(who.tenantId, async (tx) => {
-      const hRes = await tx.q("SELECT * FROM hazard WHERE id = $1 AND tenant_id = $2", [input.hazardId, who.tenantId]);
-      if (!hRes.rowCount || hRes.rowCount === 0) {
-        throw new AppError("NOT_FOUND", "Hazard not found for cause drafting.");
-      }
-      const hazard = hRes.rows[0];
-      return await runAiUseCase(tx, actor, "draft_cause", {
-        contextRefs: [{ type: "RELEASE", id: hazard.originating_release_id }],
-        question: `Suggest organizational cause hypotheses for hazard: ${hazard.title}`
-      });
-    });
+    const out = await executeAiEndpoint(
+      req,
+      "ai.draft_cause",
+      "draft_cause",
+      input,
+      async (tx, resolvedActor) => {
+        const hRes = await tx.q("SELECT * FROM hazard WHERE id = $1 AND tenant_id = $2", [input.hazardId, who.tenantId]);
+        if (!hRes.rowCount || hRes.rowCount === 0) {
+          throw new AppError("NOT_FOUND", "Hazard not found for cause drafting.");
+        }
+        const hazard = hRes.rows[0];
+        return await runAiUseCase(tx, resolvedActor, "draft_cause", {
+          contextRefs: [{ type: "RELEASE", id: hazard.originating_release_id }],
+          question: `Suggest organizational cause hypotheses for hazard: ${hazard.title}`
+        });
+      },
+      actor,
+      who.tenantId,
+      who.purpose
+    );
 
     res.status(200).json(out);
   } catch (err) {
@@ -2150,17 +2247,26 @@ app.post("/api/v2/ai/draft-control", async (req: Request, res: Response) => {
     const actor = await resolveActor(who.tenantId, who.subject, new Date(), who.role);
     const input = DraftControlInput.parse(req.body);
 
-    const out = await withTenant(who.tenantId, async (tx) => {
-      const hRes = await tx.q("SELECT * FROM hazard WHERE id = $1 AND tenant_id = $2", [input.hazardId, who.tenantId]);
-      if (!hRes.rowCount || hRes.rowCount === 0) {
-        throw new AppError("NOT_FOUND", "Hazard not found for control drafting.");
-      }
-      const hazard = hRes.rows[0];
-      return await runAiUseCase(tx, actor, "draft_control", {
-        contextRefs: [{ type: "RELEASE", id: hazard.originating_release_id }],
-        question: `Draft workplace risk controls for hazard: ${hazard.title}`
-      });
-    });
+    const out = await executeAiEndpoint(
+      req,
+      "ai.draft_control",
+      "draft_control",
+      input,
+      async (tx, resolvedActor) => {
+        const hRes = await tx.q("SELECT * FROM hazard WHERE id = $1 AND tenant_id = $2", [input.hazardId, who.tenantId]);
+        if (!hRes.rowCount || hRes.rowCount === 0) {
+          throw new AppError("NOT_FOUND", "Hazard not found for control drafting.");
+        }
+        const hazard = hRes.rows[0];
+        return await runAiUseCase(tx, resolvedActor, "draft_control", {
+          contextRefs: [{ type: "RELEASE", id: hazard.originating_release_id }],
+          question: `Draft workplace risk controls for hazard: ${hazard.title}`
+        });
+      },
+      actor,
+      who.tenantId,
+      who.purpose
+    );
 
     res.status(200).json(out);
   } catch (err) {
@@ -2215,6 +2321,38 @@ app.get("/api/v2/ai/runs", async (req: Request, res: Response) => {
   }
 });
 
+// Per-tenant AI Quota Status (usage, remaining budget, window reset, kill switches)
+app.get("/api/v2/ai/quota", async (req: Request, res: Response) => {
+  try {
+    const who = await authenticate(getHeader(req, "authorization"));
+    authorize(await resolveActor(who.tenantId, who.subject, new Date(), who.role), "ai.run.read");
+    const out = await withTenant(who.tenantId, async (tx) => getAiQuotaStatus(tx));
+    res.status(200).json(out);
+  } catch (err) {
+    toErrorResponse(err, res);
+  }
+});
+
+// Support Ops: Per-tenant AI Quota Visibility across active tenants
+app.get("/api/v2/ops/ai-quota", async (req: Request, res: Response) => {
+  try {
+    await authenticateSupport(getHeader(req, "authorization"));
+    const requestedTenantId = typeof req.query.tenantId === "string" && req.query.tenantId.trim() ? req.query.tenantId.trim() : null;
+    const tenantIds = requestedTenantId
+      ? [requestedTenantId]
+      : [GOLDEN_01.tenantA.id, GOLDEN_01.tenantB.id];
+
+    const items = [];
+    for (const tId of tenantIds) {
+      const q = await withTenant(tId, async (tx) => getAiQuotaStatus(tx));
+      items.push(q);
+    }
+    res.status(200).json({ items });
+  } catch (err) {
+    toErrorResponse(err, res);
+  }
+});
+
 // Kill Switches: Ops/Support and Tenant Inspection
 app.get("/api/v2/ops/kill-switches", async (req: Request, res: Response) => {
   try {
@@ -2246,7 +2384,7 @@ app.get("/api/v2/ops/release-readiness", async (req: Request, res: Response) => 
       p0FailingTests: 0,
       p1Defects: 0,
       gates: [
-        { name: "Scope Gate", status: "PASSED", details: "Named customers, UK SRA jurisdiction pack, ZoikoTime connector" },
+        { name: "Scope Gate", status: "PASSED", details: "Sector-neutral core with UK Legal Sector Pack (SRA 2023) active; ZoikoTime connector" },
         { name: "Build Gate", status: "PASSED", details: "TypeScript strict, lockfile pinned, zero floating versions" },
         { name: "Correctness Gate", status: "PASSED", details: "All 17 phases of golden cycle verified on synthetic baseline" },
         { name: "Privacy & Security Gate", status: "PASSED", details: "57/57 boundary tests passed; forced RLS & single read path verified; 0 failing P0 tests" },
@@ -2336,12 +2474,12 @@ app.get("/api/v2/ops/jobs", async (req: Request, res: Response) => {
       const pendingRes = await tx.q(
         "SELECT count(*)::int as count FROM outbox_event WHERE published_at IS NULL AND (state = 'PENDING' OR state = 'PROCESSING')"
       );
-      const deadLetterRes = await tx.q("SELECT count(*)::int as count FROM dead_letter_event");
+      const deadLetterRes = await tx.q("SELECT count(*)::int as count FROM dead_letter_event WHERE replayed_at IS NULL");
       const recentOutbox = await tx.q(
         "SELECT id, aggregate, aggregate_id, event_type, state, attempts, created_at, published_at FROM outbox_event ORDER BY created_at DESC LIMIT 10"
       );
       const recentDeadLetters = await tx.q(
-        "SELECT id, outbox_id, aggregate, aggregate_id, attempts, last_error, failed_at FROM dead_letter_event ORDER BY failed_at DESC LIMIT 5"
+        "SELECT id, outbox_id, aggregate, aggregate_id, attempts, last_error, failed_at FROM dead_letter_event WHERE replayed_at IS NULL ORDER BY failed_at DESC LIMIT 5"
       );
       return {
         pendingCount: pendingRes.rows[0]?.count || 0,
@@ -2362,6 +2500,7 @@ app.get("/api/v2/ops/jobs", async (req: Request, res: Response) => {
       })),
       ...stats.recentDeadLetters.map((d: any) => ({
         id: d.id,
+        outboxId: d.outbox_id,
         type: `DEAD_LETTER:${d.aggregate}`,
         state: "DEAD_LETTER",
         attempts: d.attempts,
@@ -2382,6 +2521,22 @@ app.get("/api/v2/ops/jobs", async (req: Request, res: Response) => {
       activeWorkers: metrics.state === "RUNNING" ? 1 : 0,
       items
     });
+  } catch (err) {
+    toErrorResponse(err, res);
+  }
+});
+
+const DeadLetterReplayBody = z.object({
+  reason: z.string().min(5).max(500)
+}).strict();
+
+// Human-Approved Dead-Letter Replay (Completion Plan Section 6: Worker & Jobs)
+app.post("/api/v2/ops/dead-letters/:id/replay", async (req: Request, res: Response) => {
+  try {
+    const support = await authenticateSupport(getHeader(req, "authorization"));
+    const body = DeadLetterReplayBody.parse(req.body);
+    const result = await replayDeadLetterEvent(String(req.params.id), support.operator, body.reason);
+    res.status(200).json(result);
   } catch (err) {
     toErrorResponse(err, res);
   }
@@ -2757,11 +2912,12 @@ const SEEDED_LEGAL_MATTERS: Record<string, LegalMatter[]> = {
   ]
 };
 
-// List active legal matters for the caller's tenant
+// List active legal matters for the caller's tenant (requires active Legal sector pack)
 app.get("/api/v2/sector/legal/matters", async (req: Request, res: Response) => {
   try {
     const who = await authenticate(getHeader(req, "authorization"));
     await resolveActor(who.tenantId, who.subject, new Date(), who.role);
+    await withTenant(who.tenantId, async (tx) => assertTenantHasLegalPack(tx, who.tenantId));
     const matters = SEEDED_LEGAL_MATTERS[who.tenantId] || [];
     res.status(200).json({ items: matters });
   } catch (err) {
@@ -2775,6 +2931,7 @@ app.post("/api/v2/sector/legal/matters/map", async (req: Request, res: Response)
     const who = await authenticate(getHeader(req, "authorization"));
     const actor = await resolveActor(who.tenantId, who.subject, new Date(), who.role);
     authorize(actor, "org.create"); // Risk owners and practice heads
+    await withTenant(who.tenantId, async (tx) => assertTenantHasLegalPack(tx, who.tenantId));
 
     // 1. Constitutional boundary check: reject forbidden surveillance/billing/privileged fields
     assertLegalBoundaryCompliance(req.body);
@@ -2809,6 +2966,7 @@ app.post("/api/v2/sector/legal/fatigue-check", async (req: Request, res: Respons
   try {
     const who = await authenticate(getHeader(req, "authorization"));
     await resolveActor(who.tenantId, who.subject, new Date(), who.role);
+    await withTenant(who.tenantId, async (tx) => assertTenantHasLegalPack(tx, who.tenantId));
     const { matterId, intervals } = FatigueCheckBody.parse(req.body ?? {});
 
     const tenantMatters = SEEDED_LEGAL_MATTERS[who.tenantId] || [];

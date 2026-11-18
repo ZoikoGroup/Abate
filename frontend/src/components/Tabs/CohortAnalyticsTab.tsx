@@ -12,6 +12,7 @@ import {
   downloadReleaseCsv,
   PRESET_TENANTS
 } from "../../api/client";
+import { StateView } from "../StateView";
 
 interface CohortAnalyticsTabProps {
   currentTenant: typeof PRESET_TENANTS[0];
@@ -530,13 +531,12 @@ export function CohortAnalyticsTab({ currentTenant, token }: CohortAnalyticsTabP
             </div>
             <div style={{ display: "flex", gap: "0.5rem", alignItems: "center" }}>
               <span
-                className={`badge ${
-                  activeRelease.status === "RELEASED"
+                className={`badge ${activeRelease.status === "RELEASED"
                     ? "badge-success"
                     : activeRelease.status === "STALE"
-                    ? "badge-warning"
-                    : "badge-coral"
-                }`}
+                      ? "badge-warning"
+                      : "badge-coral"
+                  }`}
               >
                 STATUS: {activeRelease.status}
               </span>
@@ -620,25 +620,16 @@ export function CohortAnalyticsTab({ currentTenant, token }: CohortAnalyticsTabP
               </div>
             </div>
           ) : activeRelease.status === "STALE" ? (
-            <div className="callout-alert">
-              <strong>Release Superseded:</strong> {activeRelease.reason}
-              <div className="monospace" style={{ marginTop: "0.25rem", fontSize: "0.8rem" }}>
-                Superseded At: {activeRelease.supersededAt}
+            <StateView state={{ kind: "stale", asOf: activeRelease.supersededAt || activeRelease.asOf || "prior window" }}>
+              <div className="callout-alert">
+                <strong>Release Superseded:</strong> {activeRelease.reason}
+                <div className="monospace" style={{ marginTop: "0.25rem", fontSize: "0.8rem" }}>
+                  Superseded At: {activeRelease.supersededAt}
+                </div>
               </div>
-            </div>
+            </StateView>
           ) : (
-            <div className="callout-info">
-              <strong style={{ color: "var(--aubergine)" }}>Metric Suppressed: Safe Non-Disclosing Output</strong>
-              <p style={{ marginTop: "0.4rem", lineHeight: 1.5 }}>
-                The requested cohort did not meet the mandatory privacy release constraints (e.g. contributor
-                floor n ≥ 10, observation window ≥ 28 days, symmetric difference ≥ 5, or
-                residual threshold). To protect individual anonymity, the system returns uniform{" "}
-                <code className="monospace-badge" style={{ color: "var(--aubergine)", background: "#E5E7EB" }}>
-                  NOT_AVAILABLE
-                </code>{" "}
-                with zero diagnostic leakage.
-              </p>
-            </div>
+            <StateView state={{ kind: "suppressed" }} />
           )}
         </div>
       )}

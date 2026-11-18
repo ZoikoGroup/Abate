@@ -24,9 +24,12 @@ import {
   checkLegalFatigue,
   type LegalMatterView,
   type LegalFatigueAssessmentView,
+  type TenantSectorProfile,
   PRESET_TENANTS,
   BASELINE_RELEASE_ID
 } from "../../api/client";
+import { getSectorVocabulary } from "../../utils/vocabulary";
+import { StateView } from "../StateView";
 
 function fmtHazardErr(err: unknown): string {
   if (err instanceof ApiError) {
@@ -38,9 +41,10 @@ function fmtHazardErr(err: unknown): string {
 interface HazardControlTabProps {
   currentTenant: typeof PRESET_TENANTS[0];
   token: string | null;
+  sectorProfile?: TenantSectorProfile | null;
 }
 
-export function HazardControlTab({ currentTenant, token }: HazardControlTabProps) {
+export function HazardControlTab({ currentTenant, token, sectorProfile }: HazardControlTabProps) {
   const [hazards, setHazards] = useState<Hazard[]>([]);
   const [selectedHazardId, setSelectedHazardId] = useState<string | null>(null);
   const [hazardDetail, setHazardDetail] = useState<HazardDetail | null>(null);
@@ -51,8 +55,8 @@ export function HazardControlTab({ currentTenant, token }: HazardControlTabProps
   // Form states
   const [newHazardTitle, setNewHazardTitle] = useState("Chronic After-Hours Boundary Intrusion");
   const [newOriginatingReleaseId, setNewOriginatingReleaseId] = useState(BASELINE_RELEASE_ID);
-  const [newCauseStatement, setNewCauseStatement] = useState("Unpredictable late-night cross-border partner filing demands");
-  const [newControlScope, setNewControlScope] = useState("Corporate Litigation practice group");
+  const [newCauseStatement, setNewCauseStatement] = useState("Unbuffered late-evening escalations during high-demand periods");
+  const [newControlScope, setNewControlScope] = useState("Affected Delivery Unit / Cohort");
   const [newControlObjective, setNewControlObjective] = useState("Enforce scheduled delivery windows and silent night servers");
   const [newControlDueDate, setNewControlDueDate] = useState("2026-05-15");
   const [newImplementationKind, setNewImplementationKind] = useState("MANUAL");
@@ -139,32 +143,41 @@ export function HazardControlTab({ currentTenant, token }: HazardControlTabProps
           details: fmtHazardErr(err)
         });
       });
-    void fetchLegalMatters(token)
-      .then(async (matters) => {
-        if (cancelled) return;
-        setLegalMatters(matters);
-        if (matters.length > 0) {
-          const first = matters[0];
-          setSelectedMatterId(first.matterId);
-          const assessment = await checkLegalFatigue(first.matterId, token);
-          if (!cancelled) setFatigueAssessment(assessment);
-        } else {
-          setSelectedMatterId(null);
-          setFatigueAssessment(null);
-        }
-      })
-      .catch((err: unknown) => {
-        if (cancelled) return;
-        setFeedback({
-          type: "error",
-          title: "✖ FAILED TO LOAD LEGAL MATTERS",
-          details: fmtHazardErr(err)
+    if (sectorProfile?.hasLegalPack) {
+      void fetchLegalMatters(token)
+        .then(async (matters) => {
+          if (cancelled) return;
+          setLegalMatters(matters);
+          if (matters.length > 0) {
+            const first = matters[0];
+            setSelectedMatterId(first.matterId);
+            const assessment = await checkLegalFatigue(first.matterId, token);
+            if (!cancelled) setFatigueAssessment(assessment);
+          } else {
+            setSelectedMatterId(null);
+            setFatigueAssessment(null);
+          }
+        })
+        .catch((err: unknown) => {
+          if (cancelled) return;
+          setFeedback({
+            type: "error",
+            title: "✖ FAILED TO LOAD LEGAL MATTERS",
+            details: fmtHazardErr(err)
+          });
         });
+    } else {
+      void Promise.resolve().then(() => {
+        if (cancelled) return;
+        setLegalMatters([]);
+        setSelectedMatterId(null);
+        setFatigueAssessment(null);
       });
+    }
     return () => {
       cancelled = true;
     };
-  }, [token, currentTenant.id]);
+  }, [token, currentTenant.id, sectorProfile?.hasLegalPack]);
 
   // Load Hazard Detail when selection changes
   useEffect(() => {
@@ -678,6 +691,7 @@ export function HazardControlTab({ currentTenant, token }: HazardControlTabProps
   };
 
   const acceptedCauses = hazardDetail?.causes.filter(c => c.status === "REVIEWED_ACCEPTED") || [];
+  const vocab = getSectorVocabulary(sectorProfile);
 
   return (
     <div className="tab-container">
@@ -695,9 +709,12 @@ export function HazardControlTab({ currentTenant, token }: HazardControlTabProps
           <p className="card-desc">
             Plane A chain of accountability: Hazard &rarr; Cause &rarr; Control &rarr; Owner &rarr; Action &rarr; Outcome &rarr; Review.
             An implemented task is <strong>NOT</strong> an effective control until independently verified.
+            {" "}Active vocabulary: <strong>{vocab.workItem}</strong> &bull; <strong>{vocab.unit}</strong> &bull; <strong>{vocab.supervisor}</strong>.
           </p>
         </div>
       </div>
+
+      {loading && hazards.length === 0 && <StateView state={{ kind: "loading" }} />}
 
       {/* Feedback Banner */}
       {feedback && (
@@ -757,7 +774,8 @@ export function HazardControlTab({ currentTenant, token }: HazardControlTabProps
         </div>
       </div>
 
-      {/* UK Legal Sector Pack & Matter Surge Panel */}
+      {/* UK Legal Sector Pack & Matter Surge Panel (rendered only when Legal Pack is active for tenant) */}
+      {sectorProfile?.hasLegalPack && (
       <div className="card" style={{ marginBottom: "1.5rem", borderLeft: "4px solid var(--aubergine)" }}>
         <div className="card-header" style={{ marginBottom: "0.75rem" }}>
           <div>
@@ -841,6 +859,7 @@ export function HazardControlTab({ currentTenant, token }: HazardControlTabProps
           </div>
         )}
       </div>
+      )}
 
       {/* Grid: Left Column (Hazard & Causes) / Right Column (Controls & Verification) */}
       <div style={{ display: "grid", gridTemplateColumns: "1fr 1fr", gap: "1.5rem", marginBottom: "1.5rem" }}>

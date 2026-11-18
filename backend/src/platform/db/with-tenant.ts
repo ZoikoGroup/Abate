@@ -8,37 +8,37 @@ const cfg = loadConfig();
 export type QueryFn = (text: string, params?: any[]) => Promise<QueryResult<any>>;
 export type Tx = { q: QueryFn; tenantId: string };
 
-// Production PostgreSQL Pools
+// Production PostgreSQL Pools (Section 5.1 & 5.5: separate pools per role with explicit maximums)
 export let appPool: Pool | null = null;
 export let migratorPool: Pool | null = null;
 export let workerPool: Pool | null = null;
+export let identityPool: Pool | null = null;
+export let protectedComputePool: Pool | null = null;
+export let releaseCompilerPool: Pool | null = null;
+export let performancePool: Pool | null = null;
+export let opsPool: Pool | null = null;
 
-try {
-  appPool = new Pool({
-    connectionString: cfg.databaseUrlApp,
-    max: 20,
-    // 1s was too tight: a burst that queues for a connection turned into 500s instead of waiting briefly
-    connectionTimeoutMillis: 5000,
-    // Bound runaway queries and abandoned transactions so one bad request cannot pin a pooled connection
+function createRolePool(connectionString: string, max: number, connectionTimeoutMillis = 5000): Pool {
+  const p = new Pool({
+    connectionString,
+    max,
+    connectionTimeoutMillis,
     statement_timeout: 30000,
     idle_in_transaction_session_timeout: 30000
   });
-  // Prevent unhandled errors on idle clients
-  appPool.on("error", () => { });
+  p.on("error", () => { });
+  return p;
+}
 
-  workerPool = new Pool({
-    connectionString: cfg.databaseUrlWorker,
-    max: 2,
-    connectionTimeoutMillis: 1000
-  });
-  workerPool.on("error", () => { });
-
-  migratorPool = new Pool({
-    connectionString: cfg.databaseUrlMigrator,
-    max: 5,
-    connectionTimeoutMillis: 1000
-  });
-  migratorPool.on("error", () => { });
+try {
+  appPool = createRolePool(cfg.databaseUrlApp, 20, 5000);
+  workerPool = createRolePool(cfg.databaseUrlWorker, 2, 1000);
+  migratorPool = createRolePool(cfg.databaseUrlMigrator, 5, 1000);
+  identityPool = createRolePool(cfg.databaseUrlIdentity, 5, 3000);
+  protectedComputePool = createRolePool(cfg.databaseUrlProtectedCompute, 5, 3000);
+  releaseCompilerPool = createRolePool(cfg.databaseUrlReleaseCompiler, 5, 3000);
+  performancePool = createRolePool(cfg.databaseUrlPerformance, 5, 3000);
+  opsPool = createRolePool(cfg.databaseUrlOps, 3, 2000);
 } catch {
   // Graceful fallback to embedded store if Postgres is not available
 }
@@ -129,6 +129,9 @@ class MemoryDatabase {
   public aiChangeProfiles: Map<string, any> = new Map();
   public aiWorkDesignAssessments: Map<string, any> = new Map();
 
+  // Sector Neutrality per-tenant pack setting (0084_completion_roles_rls_constraints.sql)
+  public tenantSectorSettings: Map<string, any> = new Map();
+
   constructor() {
     this.seedDefaults();
   }
@@ -148,7 +151,7 @@ class MemoryDatabase {
         definition: {
           purpose: "Cohort work-pattern condition. NOT an individual risk score, NOT a legal threshold.",
           formula: "outside_schedule_minutes / total_work_minutes; percent; 1 decimal",
-          allowedDimensions: ["practice_area", "team"],
+          allowedDimensions: ["unit", "team"],
           qualityFloor: 0.8,
           releaseClass: "CLASS_B",
           contributorFloor: 10
@@ -217,7 +220,7 @@ class MemoryDatabase {
         definition: {
           numerator: "count(ai_assisted_tasks WHERE rework_flag = true)",
           denominator: "count(ai_assisted_tasks)",
-          allowedDimensions: ["team", "practiceArea"],
+          allowedDimensions: ["team", "unit"],
           releaseClass: "B"
         },
         quality_rules: { minCoverage: "per definition owner", missing: "INSUFFICIENT_DATA" },
@@ -459,7 +462,7 @@ class MemoryClient {
     }
 
     // Fail-Closed RLS Enforcement: If querying tenant-isolated tables without tenant context, return 0 rows
-    const isTenantTable = /FROM\s+(principal|organization|effective_membership|idempotency_record|audit_event|outbox_event|dead_letter_event|source_contract|connection|watermark|ingest_receipt|work_fact_revision|identity_map|metric_snapshot|privacy_decision|privacy_release|released_artifact|disclosure_ledger|hazard|cause|intervention|approval|implementation_receipt|evaluation|retention_class|legal_hold|retention_run|deletion_tombstone|tenant_policy_binding|decision_envelope|evidence_package|evidence_item|rights_request|ai_run|action_attempt|outcome_evaluation|ai_change_profile|ai_workdesign_assessment)/i.test(trimmed);
+    const isTenantTable = /FROM\s+(principal|organization|effective_membership|idempotency_record|audit_event|outbox_event|dead_letter_event|source_contract|connection|watermark|ingest_receipt|work_fact_revision|identity_map|metric_snapshot|privacy_decision|privacy_release|released_artifact|disclosure_ledger|hazard|cause|intervention|approval|implementation_receipt|evaluation|retention_class|legal_hold|retention_run|deletion_tombstone|tenant_policy_binding|tenant_sector_setting|decision_envelope|evidence_package|evidence_item|rights_request|ai_run|action_attempt|outcome_evaluation|ai_change_profile|ai_workdesign_assessment)/i.test(trimmed);
     const workerTable = this.workerMode && /FROM\s+(outbox_event|inbox_event|dead_letter_event)\b/i.test(trimmed);
     if (isTenantTable && !this.tenantContext && !workerTable) {
       return { rows: [], rowCount: 0, command: "SELECT", oid: 0, fields: [] };
@@ -693,7 +696,10 @@ class MemoryClient {
 
     // Dead-letter count
     if (upper.includes("FROM DEAD_LETTER_EVENT") && upper.includes("COUNT(")) {
-      const matching = memDb.deadLetterEvents.filter(d => this.workerMode || d.tenant_id === this.tenantContext);
+      const matching = memDb.deadLetterEvents.filter(d => {
+        if (upper.includes("REPLAYED_AT IS NULL") && d.replayed_at) return false;
+        return this.workerMode || d.tenant_id === this.tenantContext;
+      });
       return { rows: [{ count: matching.length }], rowCount: 1, command: "SELECT", oid: 0, fields: [] };
     }
 
@@ -752,10 +758,18 @@ class MemoryClient {
           } else if (params.length === 2) {
             ev.state = params[0];
           } else if (params.length === 1) {
+            if (upper.includes("STATE = 'DEAD_LETTER'") && upper.includes("WHERE ID = $1 AND STATE = 'DEAD_LETTER'")) {
+              if (ev.state !== "DEAD_LETTER") {
+                return { rows: [], rowCount: 0, command: "UPDATE", oid: 0, fields: [] };
+              }
+            }
             if (upper.includes("STATE = 'PENDING'")) ev.state = "PENDING";
             if (upper.includes("STATE = 'PROCESSING'")) ev.state = "PROCESSING";
             if (upper.includes("STATE = 'PUBLISHED'")) ev.state = "PUBLISHED";
-            if (upper.includes("STATE = 'DEAD_LETTER'")) ev.state = "DEAD_LETTER";
+            if (upper.includes("STATE = 'DEAD_LETTER'") && !upper.includes("WHERE ID = $1 AND STATE = 'DEAD_LETTER'")) ev.state = "DEAD_LETTER";
+            if (upper.includes("ATTEMPTS = 0")) ev.attempts = 0;
+            if (upper.includes("LAST_ERROR = NULL")) ev.last_error = null;
+            if (upper.includes("NEXT_RETRY_AT = NOW()")) ev.next_retry_at = new Date().toISOString();
           }
         }
         return { rows: ev ? [ev] : [], rowCount: ev ? 1 : 0, command: "UPDATE", oid: 0, fields: [] };
@@ -779,15 +793,37 @@ class MemoryClient {
         refs: typeof refs === "string" ? JSON.parse(refs) : (refs || []),
         attempts: Number(attempts),
         last_error: lastError,
-        failed_at: new Date().toISOString()
+        failed_at: new Date().toISOString(),
+        replayed_at: null,
+        replayed_by: null,
+        replay_reason: null
       };
       memDb.deadLetterEvents.push(dle);
       return { rows: [dle], rowCount: 1, command: "INSERT", oid: 0, fields: [] };
     }
 
+    // Dead-Letter Event Replay Update
+    if (upper.includes("UPDATE DEAD_LETTER_EVENT")) {
+      const [replayedBy, replayReason, id] = params;
+      const dle = memDb.deadLetterEvents.find(d => d.id === id && !d.replayed_at);
+      if (!dle) {
+        return { rows: [], rowCount: 0, command: "UPDATE", oid: 0, fields: [] };
+      }
+      dle.replayed_at = new Date().toISOString();
+      dle.replayed_by = replayedBy;
+      dle.replay_reason = replayReason;
+      return { rows: [dle], rowCount: 1, command: "UPDATE", oid: 0, fields: [] };
+    }
+
     // Dead-Letter Event Select
     if (upper.includes("FROM DEAD_LETTER_EVENT")) {
-      const rows = memDb.deadLetterEvents.filter(d => this.workerMode || d.tenant_id === this.tenantContext);
+      let rows = memDb.deadLetterEvents.filter(d => {
+        if (upper.includes("REPLAYED_AT IS NULL") && d.replayed_at) return false;
+        return this.workerMode || d.tenant_id === this.tenantContext;
+      });
+      if ((upper.includes("WHERE ID = $1") || upper.includes("WHERE (ID = $1") || upper.includes("ID = $1 OR OUTBOX_ID = $1")) && params[0]) {
+        rows = rows.filter(d => d.id === params[0] || d.outbox_id === params[0]);
+      }
       return { rows, rowCount: rows.length, command: "SELECT", oid: 0, fields: [] };
     }
 
@@ -2537,6 +2573,28 @@ class MemoryClient {
       return { rows, rowCount: rows.length, command: "SELECT", oid: 0, fields: [] };
     }
 
+    // Tenant Sector Setting Upsert / Select
+    if (upper.includes("INSERT INTO TENANT_SECTOR_SETTING")) {
+      const [tId, sectorKey, packKey, updatedBy] = params;
+      if (this.tenantContext && tId !== this.tenantContext) {
+        throw new Error("RLS WITH CHECK violation: cross-tenant tenant_sector_setting write rejected");
+      }
+      const rec = {
+        tenant_id: tId,
+        sector_key: sectorKey,
+        pack_key: packKey,
+        updated_by: updatedBy ?? null,
+        updated_at: new Date().toISOString()
+      };
+      memDb.tenantSectorSettings.set(tId, rec);
+      return { rows: [rec], rowCount: 1, command: "INSERT", oid: 0, fields: [] };
+    }
+
+    if (upper.includes("FROM TENANT_SECTOR_SETTING")) {
+      const rec = this.tenantContext ? memDb.tenantSectorSettings.get(this.tenantContext) : null;
+      return { rows: rec ? [rec] : [], rowCount: rec ? 1 : 0, command: "SELECT", oid: 0, fields: [] };
+    }
+
     return { rows: [], rowCount: 0, command: "SELECT", oid: 0, fields: [] };
   }
 
@@ -2597,10 +2655,11 @@ export async function checkPgHealth(): Promise<boolean> {
 }
 
 /**
- * withTenant: Transaction-local tenant context helper.
- * Enforces fail-closed isolation and prevents pooled connection leakage.
+ * Internal helper: runs a tenant-scoped transaction on a specific least-privilege Pool,
+ * setting transaction-local tenant context, write plane, statement_timeout, and lock_timeout.
  */
-export async function withTenant<T>(
+async function withTenantPool<T>(
+  pool: Pool | null,
   tenantId: string,
   fn: (tx: Tx) => Promise<T>,
   options?: { writePlane?: "A" | "B" }
@@ -2612,12 +2671,12 @@ export async function withTenant<T>(
   const writePlane = options?.writePlane || "A";
   const usePg = await checkPgHealth();
 
-  if (usePg && appPool) {
-    const client: PoolClient = await appPool.connect();
+  if (usePg && pool) {
+    const client: PoolClient = await pool.connect();
     try {
       await client.query("BEGIN");
-      // Set transaction-local setting; third parameter 'true' means local to this transaction only
-      // One round trip for both settings (was two)
+      await client.query("SET LOCAL statement_timeout = '30000ms'");
+      await client.query("SET LOCAL lock_timeout = '10000ms'");
       await client.query("SELECT set_config('app.tenant_id', $1, true), set_config('app.write_plane', $2, true)", [tenantId, writePlane]);
       const out = await fn({ q: client.query.bind(client) as QueryFn, tenantId });
       await client.query("COMMIT");
@@ -2645,6 +2704,58 @@ export async function withTenant<T>(
   } finally {
     memClient.release();
   }
+}
+
+/**
+ * withTenant: Transaction-local tenant context helper (abate_app role).
+ * Enforces fail-closed isolation and prevents pooled connection leakage.
+ */
+export async function withTenant<T>(
+  tenantId: string,
+  fn: (tx: Tx) => Promise<T>,
+  options?: { writePlane?: "A" | "B" }
+): Promise<T> {
+  return withTenantPool(appPool, tenantId, fn, options);
+}
+
+/**
+ * Role-separated tenant helpers (Completion Plan Section 5.1):
+ * Each role uses its own connection pool and least-privilege DB credential.
+ */
+export async function withIdentity<T>(tenantId: string, fn: (tx: Tx) => Promise<T>): Promise<T> {
+  return withTenantPool(identityPool, tenantId, fn, { writePlane: "A" });
+}
+
+export async function withProtectedCompute<T>(tenantId: string, fn: (tx: Tx) => Promise<T>): Promise<T> {
+  return withTenantPool(protectedComputePool, tenantId, fn, { writePlane: "A" });
+}
+
+export async function withReleaseCompiler<T>(tenantId: string, fn: (tx: Tx) => Promise<T>): Promise<T> {
+  return withTenantPool(releaseCompilerPool, tenantId, fn, { writePlane: "A" });
+}
+
+export async function withPerformance<T>(tenantId: string, fn: (tx: Tx) => Promise<T>): Promise<T> {
+  return withTenantPool(performancePool, tenantId, fn, { writePlane: "B" });
+}
+
+export async function withOps<T>(fn: (tx: Tx) => Promise<T>): Promise<T> {
+  const usePg = await checkPgHealth();
+  if (usePg && opsPool) {
+    const client: PoolClient = await opsPool.connect();
+    try {
+      await client.query("BEGIN");
+      await client.query("SET LOCAL statement_timeout = '15000ms'");
+      const out = await fn({ q: client.query.bind(client) as QueryFn, tenantId: "" });
+      await client.query("COMMIT");
+      return out;
+    } catch (e) {
+      await client.query("ROLLBACK").catch(() => { });
+      throw e;
+    } finally {
+      client.release();
+    }
+  }
+  return withPlatform(fn);
 }
 
 /**

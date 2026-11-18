@@ -260,33 +260,62 @@ export const openApiSpec = {
         }
       }
     },
+    "/tenant/sector-profile": {
+      get: {
+        tags: ["Tenants & Organizations"],
+        summary: "Resolve active sector pack, neutral/pack vocabulary, demand windows, and enabled claim scope for caller's tenant",
+        responses: {
+          "200": { description: "TenantSectorProfile" }
+        }
+      }
+    },
     "/connections/{id}/pause": {
       post: {
         tags: ["Ingest & Work Ledger"],
         summary: "Pause connection via idempotent command pipeline with audit and outbox event",
         responses: {
           "200": { description: "Connection paused" },
-          "409": { description: "REVOKED connection cannot transition" }
+          "409": { description: "Suspended (REVOKED) connection cannot transition" }
         }
       }
     },
     "/connections/{id}/resume": {
       post: {
         tags: ["Ingest & Work Ledger"],
-        summary: "Resume paused connection via idempotent command pipeline",
+        summary: "Resume paused or suspended connection via idempotent command pipeline",
         responses: {
-          "200": { description: "Connection resumed" },
-          "409": { description: "REVOKED connection cannot transition" }
+          "200": { description: "Connection resumed (ACTIVE or RESUMED)" },
+          "409": { description: "Disconnected/revoked terminal connection cannot transition" }
+        }
+      }
+    },
+    "/connections/{id}/suspend": {
+      post: {
+        tags: ["Ingest & Work Ledger"],
+        summary: "Reversibly suspend connection (SUSPENDED) via idempotent command pipeline",
+        responses: {
+          "200": { description: "Connection suspended (SUSPENDED)" },
+          "409": { description: "Connection is in a terminal state" }
+        }
+      }
+    },
+    "/connections/{id}/disconnect": {
+      post: {
+        tags: ["Ingest & Work Ledger"],
+        summary: "Permanently disconnect connection (terminal DISCONNECTED) via idempotent command pipeline",
+        responses: {
+          "200": { description: "Connection permanently disconnected (DISCONNECTED)" },
+          "409": { description: "Connection already disconnected" }
         }
       }
     },
     "/connections/{id}/revoke": {
       post: {
         tags: ["Ingest & Work Ledger"],
-        summary: "Terminally revoke connection via idempotent command pipeline",
+        summary: "Legacy terminal revoke connection (REVOKED) via idempotent command pipeline",
         responses: {
-          "200": { description: "Connection revoked" },
-          "409": { description: "Already revoked terminal connection" }
+          "200": { description: "Connection revoked (REVOKED)" },
+          "409": { description: "Already in terminal connection state" }
         }
       }
     },
@@ -921,6 +950,20 @@ export const openApiSpec = {
         }
       }
     },
+    "/ops/dead-letters/{id}/replay": {
+      post: {
+        tags: ["Operations & Jobs"],
+        summary: "Human-approved replay of a dead-lettered outbox event (requires support token & reason)",
+        parameters: [{ name: "id", in: "path", required: true, schema: { type: "string", format: "uuid" } }],
+        responses: {
+          "200": { description: "Dead-letter row marked replayed and outbox event restored to PENDING" },
+          "400": { description: "Missing/invalid approval reason" },
+          "401": { description: "Unauthenticated or non-support credential" },
+          "404": { description: "Dead-letter event not found" },
+          "409": { description: "Dead-letter event already replayed" }
+        }
+      }
+    },
     "/auth/oidc/config": {
       get: {
         tags: ["Authentication & Tenancy"],
@@ -1472,10 +1515,12 @@ export const openApiSpec = {
     "/ai/explain-release": {
       post: {
         tags: ["Bounded AI & Actions (Phase 6)"],
-        summary: "Generate grounded explanation draft for a released privacy artifact",
+        summary: "Generate grounded explanation draft for a released privacy artifact (supports Idempotency-Key deduplication)",
         responses: {
           "200": { description: "AiRunView with validatorReport" },
           "400": { description: "Individual-inference or unsafe question refused" },
+          "409": { description: "Idempotency-Key reused with different request payload" },
+          "429": { description: "Monthly AI quota exceeded (RATE_LIMITED, sets Retry-After header)" },
           "503": { description: "Disabled by kill-switch" }
         }
       }
@@ -1483,18 +1528,42 @@ export const openApiSpec = {
     "/ai/draft-cause": {
       post: {
         tags: ["Bounded AI & Actions (Phase 6)"],
-        summary: "Draft candidate organizational cause proposal (requires human accept)",
+        summary: "Draft candidate organizational cause proposal (requires human accept; supports Idempotency-Key)",
         responses: {
-          "200": { description: "AiRunView draft" }
+          "200": { description: "AiRunView draft" },
+          "409": { description: "Idempotency-Key reused with different request payload" },
+          "429": { description: "Monthly AI quota exceeded (RATE_LIMITED, sets Retry-After header)" },
+          "503": { description: "Disabled by kill-switch" }
         }
       }
     },
     "/ai/draft-control": {
       post: {
         tags: ["Bounded AI & Actions (Phase 6)"],
-        summary: "Draft candidate control intervention proposal (requires human accept)",
+        summary: "Draft candidate control intervention proposal (requires human accept; supports Idempotency-Key)",
         responses: {
-          "200": { description: "AiRunView draft" }
+          "200": { description: "AiRunView draft" },
+          "409": { description: "Idempotency-Key reused with different request payload" },
+          "429": { description: "Monthly AI quota exceeded (RATE_LIMITED, sets Retry-After header)" },
+          "503": { description: "Disabled by kill-switch" }
+        }
+      }
+    },
+    "/ai/quota": {
+      get: {
+        tags: ["Bounded AI & Actions (Phase 6)"],
+        summary: "Inspect current tenant monthly AI quota usage, remaining allowance, and active kill switches",
+        responses: {
+          "200": { description: "Tenant AI quota status per use case" }
+        }
+      }
+    },
+    "/ops/ai-quota": {
+      get: {
+        tags: ["Operations & Support"],
+        summary: "Support ops visibility into per-tenant monthly AI quota usage and kill-switch state",
+        responses: {
+          "200": { description: "Array of tenant AI quota summaries" }
         }
       }
     },
