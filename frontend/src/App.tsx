@@ -30,7 +30,8 @@ import { HazardControlTab } from "./components/Tabs/HazardControlTab";
 import { RetentionTab } from "./components/Tabs/RetentionTab";
 import { BoundedAiTab } from "./components/Tabs/BoundedAiTab";
 import { OutcomesAiChangeTab } from "./components/Tabs/OutcomesAiChangeTab";
-import { LegalPracticeTab } from "./components/Tabs/LegalPracticeTab";
+import { SectorPackTab } from "./components/Tabs/SectorPackTab";
+import { getSectorUi, isSectorPackActive } from "./utils/vocabulary";
 import { OperationsTab } from "./components/Tabs/OperationsTab";
 import { OutboxTab } from "./components/Tabs/OutboxTab";
 import { AuditTab } from "./components/Tabs/AuditTab";
@@ -38,7 +39,7 @@ import { AuditVerifierTab } from "./components/Tabs/AuditVerifierTab";
 import { LiveDemoConsole } from "./components/Demo/LiveDemoConsole";
 import "./index.css";
 
-type TabKey = "constitutional" | "isolation" | "organizations" | "ingestion" | "analytics" | "hazards" | "retention" | "ai" | "outcomes" | "legal" | "operations" | "outbox" | "audit" | "verifier";
+type TabKey = "constitutional" | "isolation" | "organizations" | "ingestion" | "analytics" | "hazards" | "retention" | "ai" | "outcomes" | "sector" | "operations" | "outbox" | "audit" | "verifier";
 
 export default function App() {
   const [activeTenantId, setActiveTenantId] = useState(PRESET_TENANTS[0].id);
@@ -132,8 +133,8 @@ export default function App() {
     setAuditEvents(audits);
     setSectorProfile(secProfile);
     setAllowedNav(Array.isArray(me?.allowedNav) ? me.allowedNav : null);
-    if (secProfile && !secProfile.hasLegalPack) {
-      setActiveTab(prev => (prev === "legal" ? "organizations" : prev));
+    if (secProfile && !isSectorPackActive(secProfile)) {
+      setActiveTab(prev => (prev === "sector" ? "organizations" : prev));
     }
     setErrorMsg(null);
   }, []);
@@ -414,13 +415,13 @@ export default function App() {
         >
           Outcomes &amp; AI Change (Phase 7)
         </button>
-        {sectorProfile?.hasLegalPack && (!allowedNav || allowedNav.includes("LEGAL_PRACTICE")) && (
+        {isSectorPackActive(sectorProfile) && (!allowedNav || allowedNav.includes("SECTOR_PACK") || allowedNav.includes("LEGAL_PRACTICE")) && (
           <button
             type="button"
-            className={`tab-button ${activeTab === "legal" ? "active" : ""}`}
-            onClick={() => setActiveTab("legal")}
+            className={`tab-button ${activeTab === "sector" ? "active" : ""}`}
+            onClick={() => setActiveTab("sector")}
           >
-            Legal Sector Pack (SRA 2023)
+            {getSectorUi(sectorProfile).navLabel}
           </button>
         )}
         <button
@@ -494,6 +495,7 @@ export default function App() {
             token={token}
             organizations={organizations}
             sectorProfile={sectorProfile}
+            onSectorProfileChange={setSectorProfile}
             onRefresh={() => fetchTenantData(activeTenantId, activeRole)}
           />
         )}
@@ -544,10 +546,12 @@ export default function App() {
           />
         )}
 
-        {activeTab === "legal" && sectorProfile?.hasLegalPack && (
-          <LegalPracticeTab
+        {activeTab === "sector" && sectorProfile && isSectorPackActive(sectorProfile) && (
+          <SectorPackTab
+            key={sectorProfile.sectorKey}
             currentTenant={currentTenant}
             token={token}
+            sectorProfile={sectorProfile}
           />
         )}
 

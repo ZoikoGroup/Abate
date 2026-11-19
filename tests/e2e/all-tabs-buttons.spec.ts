@@ -191,10 +191,10 @@ test.describe("All Tabs & Buttons Full Real Verification", () => {
     await openTab(page, "Hazards & Controls (Phase 4)");
     await expect(page.getByRole("heading", { name: /Hazard Workspace/i })).toBeVisible();
 
-    // Select a Legal Matter via interactive button
+    // Select a sector work item via interactive button
     const matterBtns = page.locator("button").filter({ hasText: /MA-2026|LIT-|REG-|ARB-/ });
     if ((await matterBtns.count()) > 0) {
-      const fatRes = page.waitForResponse(r => r.url().includes("/api/v2/sector/legal/fatigue-check"));
+      const fatRes = page.waitForResponse(r => r.url().includes("/api/v2/sector/work-items/fatigue-check"));
       await matterBtns.first().click();
       expect((await fatRes).status()).toBe(200);
     }
@@ -446,30 +446,31 @@ test.describe("All Tabs & Buttons Full Real Verification", () => {
     await page.getByLabel(/Filter Practice Area/i).selectOption("COMMERCIAL_LITIGATION");
     await page.getByLabel(/Filter Practice Area/i).selectOption("ALL");
 
-    const refRes = page.waitForResponse(r => r.url().includes("/api/v2/sector/legal/matters"));
-    await page.locator("#legal-practice-tab").getByRole("button", { name: /Refresh/i }).click();
+    const refRes = page.waitForResponse(r => r.url().endsWith("/api/v2/sector/work-items"));
+    await page.locator("#sector-pack-tab").getByRole("button", { name: /Refresh/i }).click();
     expect((await refRes).status()).toBe(200);
 
-    const fatRes = page.waitForResponse(r => r.url().includes("/api/v2/sector/legal/fatigue-check"));
+    const fatRes = page.waitForResponse(r => r.url().includes("/api/v2/sector/work-items/fatigue-check"));
     await page.getByRole("button", { name: /SRA Fatigue Check/i }).first().click();
     expect((await fatRes).status()).toBe(200);
 
-    const signBtn = page.getByRole("button", { name: /Sign Supervisory Consultation Gate \(Simulation\)/i });
+    const signBtn = page.getByRole("button", { name: /Sign Supervisory Partner Consultation Gate \(Simulation\)/i });
     if (await signBtn.isVisible()) {
+      await page.getByLabel(/^Supervisory Partner:/i).fill("E2E Reviewer");
       await signBtn.click();
       await expect(page.getByText(/Simulation: Client-side Supervisory Partner consultation preview signed/i)).toBeVisible();
     }
 
     // Decoy blocked with 400
     await page.getByLabel(/Inject Privileged Legal Advice/i).check();
-    const mapDecoy = page.waitForResponse(r => r.url().includes("/api/v2/sector/legal/matters/map"));
+    const mapDecoy = page.waitForResponse(r => r.url().includes("/api/v2/sector/work-items/map"));
     await page.getByRole("button", { name: /Execute Translation & Boundary Gate/i }).click();
     expect((await mapDecoy).status()).toBe(400);
     await expect(page.getByText(/Constitutional Boundary Defended/i)).toBeVisible();
 
     // Clean map succeeds 200
     await page.getByLabel(/Inject Privileged Legal Advice/i).uncheck();
-    const mapClean = page.waitForResponse(r => r.url().includes("/api/v2/sector/legal/matters/map"));
+    const mapClean = page.waitForResponse(r => r.url().includes("/api/v2/sector/work-items/map"));
     await page.getByRole("button", { name: /Execute Translation & Boundary Gate/i }).click();
     expect((await mapClean).status()).toBe(200);
     await expect(page.getByText(/Mapped Neutral Representation/i)).toBeVisible();

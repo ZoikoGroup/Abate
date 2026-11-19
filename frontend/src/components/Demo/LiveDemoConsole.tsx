@@ -150,7 +150,7 @@ export const LiveDemoConsole: React.FC<LiveDemoConsoleProps> = ({ onClose }) => 
   // Dynamic state for demo steps
   const [tenantAToken, setTenantAToken] = useState<string | null>(null);
   const [tenantBToken, setTenantBToken] = useState<string | null>(null);
-  const [activeOrgName, setActiveOrgName] = useState<string>(() => "Apex Litigation Practice " + Math.random().toString(36).substring(2, 6).toUpperCase());
+  const [activeOrgName, setActiveOrgName] = useState<string>(() => "Apex Operations Unit " + Math.random().toString(36).substring(2, 6).toUpperCase());
   const [activeIdempotencyKey, setActiveIdempotencyKey] = useState<string>(() => crypto.randomUUID());
   const [secondaryIdempotencyKey, setSecondaryIdempotencyKey] = useState<string>(() => `idem-sec-${crypto.randomUUID().slice(0, 8)}`);
   const [createdOrgRecord, setCreatedOrgRecord] = useState<any>(null);
@@ -238,7 +238,7 @@ export const LiveDemoConsole: React.FC<LiveDemoConsoleProps> = ({ onClose }) => 
     setTenantAOrgs([]);
     setTenantBOrgs([]);
     setDossierData(null);
-    const freshOrg = "Apex Litigation Practice " + Math.random().toString(36).substring(2, 6).toUpperCase();
+    const freshOrg = "Apex Operations Unit " + Math.random().toString(36).substring(2, 6).toUpperCase();
     const freshKey = crypto.randomUUID();
     const freshSecKey = `idem-sec-${crypto.randomUUID().slice(0, 8)}`;
     setActiveOrgName(freshOrg);
@@ -1348,10 +1348,10 @@ export const LiveDemoConsole: React.FC<LiveDemoConsoleProps> = ({ onClose }) => 
 
                 <div className="roadmap-item verified">
                   <div className="r-head">
-                    <span className="r-phase">Sector Pack &bull; UK Legal Practice (SRA 2023)</span>
+                    <span className="r-phase">Sector Packs &bull; Pluggable Registry</span>
                     <span className="r-status-badge live">LIVE &amp; VERIFIED</span>
                   </div>
-                  <p>Matter work-item mapping, trial window fatigue detection, and mandatory supervisory partner consultation gates.</p>
+                  <p>Pack-driven work-item mapping, demand-window fatigue detection, and consultation gates for any sector. The legal pack is live; Healthcare and Software &amp; IT are previews pending policy review.</p>
                 </div>
               </div>
             </section>

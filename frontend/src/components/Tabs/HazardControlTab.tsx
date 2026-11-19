@@ -20,15 +20,15 @@ import {
   concludeVerification,
   setHazardDisposition,
   exportEvidencePackage,
-  fetchLegalMatters,
-  checkLegalFatigue,
-  type LegalMatterView,
-  type LegalFatigueAssessmentView,
+  fetchSectorWorkItems,
+  checkSectorFatigue,
+  type SectorWorkItemView,
+  type SectorFatigueAssessmentView,
   type TenantSectorProfile,
   PRESET_TENANTS,
   BASELINE_RELEASE_ID
 } from "../../api/client";
-import { getSectorVocabulary } from "../../utils/vocabulary";
+import { getSectorUi, getSectorVocabulary, isSectorPackActive, labelFor } from "../../utils/vocabulary";
 import { StateView } from "../StateView";
 
 function fmtHazardErr(err: unknown): string {
@@ -45,6 +45,9 @@ interface HazardControlTabProps {
 }
 
 export function HazardControlTab({ currentTenant, token, sectorProfile }: HazardControlTabProps) {
+  const sectorPackActive = isSectorPackActive(sectorProfile);
+  const sectorUi = getSectorUi(sectorProfile);
+  const sectorWorkItemsUpper = getSectorVocabulary(sectorProfile).workItems.toUpperCase();
   const [hazards, setHazards] = useState<Hazard[]>([]);
   const [selectedHazardId, setSelectedHazardId] = useState<string | null>(null);
   const [hazardDetail, setHazardDetail] = useState<HazardDetail | null>(null);
@@ -74,10 +77,10 @@ export function HazardControlTab({ currentTenant, token, sectorProfile }: Hazard
   const [editScope, setEditScope] = useState("");
   const [editObjective, setEditObjective] = useState("");
 
-  // Legal Sector States (SRA Workplace Culture & Trial Windows)
-  const [legalMatters, setLegalMatters] = useState<LegalMatterView[]>([]);
-  const [selectedMatterId, setSelectedMatterId] = useState<string | null>(null);
-  const [fatigueAssessment, setFatigueAssessment] = useState<LegalFatigueAssessmentView | null>(null);
+  // Sector pack state: work items and the fatigue assessment for the active sector
+  const [sectorItems, setSectorItems] = useState<SectorWorkItemView[]>([]);
+  const [selectedItemRef, setSelectedItemRef] = useState<string | null>(null);
+  const [fatigueAssessment, setFatigueAssessment] = useState<SectorFatigueAssessmentView | null>(null);
 
   const [feedback, setFeedback] = useState<{
     type: "success" | "warning" | "error" | "conflict";
@@ -85,12 +88,12 @@ export function HazardControlTab({ currentTenant, token, sectorProfile }: Hazard
     details: string;
   } | null>(null);
 
-  const handleSelectMatter = async (matterId: string) => {
-    setSelectedMatterId(matterId);
+  const handleSelectItem = async (externalRef: string) => {
+    setSelectedItemRef(externalRef);
     if (!token) return;
     try {
       setLoading(true);
-      const assessment = await checkLegalFatigue(matterId, token);
+      const assessment = await checkSectorFatigue(externalRef, token);
       setFatigueAssessment(assessment);
     } catch (err: unknown) {
       setFeedback({
@@ -143,18 +146,18 @@ export function HazardControlTab({ currentTenant, token, sectorProfile }: Hazard
           details: fmtHazardErr(err)
         });
       });
-    if (sectorProfile?.hasLegalPack) {
-      void fetchLegalMatters(token)
-        .then(async (matters) => {
+    if (sectorPackActive) {
+      void fetchSectorWorkItems(token)
+        .then(async (items) => {
           if (cancelled) return;
-          setLegalMatters(matters);
-          if (matters.length > 0) {
-            const first = matters[0];
-            setSelectedMatterId(first.matterId);
-            const assessment = await checkLegalFatigue(first.matterId, token);
+          setSectorItems(items);
+          if (items.length > 0) {
+            const first = items[0];
+            setSelectedItemRef(first.externalRef);
+            const assessment = await checkSectorFatigue(first.externalRef, token);
             if (!cancelled) setFatigueAssessment(assessment);
           } else {
-            setSelectedMatterId(null);
+            setSelectedItemRef(null);
             setFatigueAssessment(null);
           }
         })
@@ -162,22 +165,22 @@ export function HazardControlTab({ currentTenant, token, sectorProfile }: Hazard
           if (cancelled) return;
           setFeedback({
             type: "error",
-            title: "✖ FAILED TO LOAD LEGAL MATTERS",
+            title: `✖ FAILED TO LOAD ${sectorWorkItemsUpper}`,
             details: fmtHazardErr(err)
           });
         });
     } else {
       void Promise.resolve().then(() => {
         if (cancelled) return;
-        setLegalMatters([]);
-        setSelectedMatterId(null);
+        setSectorItems([]);
+        setSelectedItemRef(null);
         setFatigueAssessment(null);
       });
     }
     return () => {
       cancelled = true;
     };
-  }, [token, currentTenant.id, sectorProfile?.hasLegalPack]);
+  }, [token, currentTenant.id, sectorPackActive, sectorProfile?.sectorKey, sectorWorkItemsUpper]);
 
   // Load Hazard Detail when selection changes
   useEffect(() => {
@@ -774,34 +777,34 @@ export function HazardControlTab({ currentTenant, token, sectorProfile }: Hazard
         </div>
       </div>
 
-      {/* UK Legal Sector Pack & Matter Surge Panel (rendered only when Legal Pack is active for tenant) */}
-      {sectorProfile?.hasLegalPack && (
+      {/* Sector pack work-item surge panel (rendered only when a sector pack is active for the tenant) */}
+      {sectorPackActive && (
       <div className="card" style={{ marginBottom: "1.5rem", borderLeft: "4px solid var(--aubergine)" }}>
         <div className="card-header" style={{ marginBottom: "0.75rem" }}>
           <div>
-            <div style={{ display: "flex", alignItems: "center", gap: "0.5rem", marginBottom: "0.25rem" }}>
-              <span className="badge badge-aubergine">SECTOR: LEGAL SERVICES</span>
-              <span className="badge badge-coral">SRA 2023 &bull; ISO 45003</span>
+            <div style={{ display: "flex", alignItems: "center", gap: "0.5rem", marginBottom: "0.25rem", flexWrap: "wrap" }}>
+              <span className="badge badge-aubergine">{sectorUi.sectorBadge}</span>
+              {sectorUi.badges.map(b => (
+                <span key={b} className="badge badge-coral">{b}</span>
+              ))}
             </div>
-            <h3 style={{ margin: 0 }}>UK Legal Practice: Matters, Demand Windows &amp; Fatigue Triggers</h3>
-            <p className="card-desc" style={{ marginTop: "0.25rem" }}>
-              Maps legal matters to neutral work items. Detects unbuffered evening drafting during critical trial prep windows under SRA Workplace Culture guidance.
-            </p>
+            <h3 style={{ margin: 0 }}>{sectorUi.panelTitle}</h3>
+            <p className="card-desc" style={{ marginTop: "0.25rem" }}>{sectorUi.panelDescription}</p>
           </div>
         </div>
 
-        {legalMatters.length === 0 ? (
-          <p className="text-muted" style={{ fontStyle: "italic" }}>No active legal matters registered for this tenant.</p>
+        {sectorItems.length === 0 ? (
+          <p className="text-muted" style={{ fontStyle: "italic" }}>No active {vocab.workItems.toLowerCase()} registered for this tenant.</p>
         ) : (
           <div>
             <div style={{ display: "grid", gridTemplateColumns: "repeat(auto-fit, minmax(min(280px, 100%), 1fr))", gap: "1rem", marginBottom: "1rem" }}>
-              {legalMatters.map(m => {
-                const isSelected = m.matterId === selectedMatterId;
+              {sectorItems.map(m => {
+                const isSelected = m.externalRef === selectedItemRef;
                 return (
                   <button
-                    key={m.matterId}
+                    key={m.externalRef}
                     type="button"
-                    onClick={() => handleSelectMatter(m.matterId)}
+                    onClick={() => handleSelectItem(m.externalRef)}
                     style={{
                       textAlign: "left",
                       padding: "0.85rem",
@@ -813,12 +816,13 @@ export function HazardControlTab({ currentTenant, token, sectorProfile }: Hazard
                     }}
                   >
                     <div style={{ display: "flex", justifyContent: "space-between", alignItems: "center", marginBottom: "0.35rem" }}>
-                      <span className="monospace font-bold" style={{ fontSize: "0.85rem", color: "var(--aubergine)" }}>{m.matterId}</span>
-                      <span className="badge badge-sm badge-secondary">{m.currentPhase}</span>
+                      <span className="monospace font-bold" style={{ fontSize: "0.85rem", color: "var(--aubergine)" }}>{m.externalRef}</span>
+                      <span className="badge badge-sm badge-secondary">{m.demandWindow}</span>
                     </div>
-                    <div style={{ fontWeight: 600, fontSize: "0.9rem", marginBottom: "0.25rem" }}>{m.matterTitle}</div>
+                    <div style={{ fontWeight: 600, fontSize: "0.9rem", marginBottom: "0.25rem" }}>{m.title}</div>
                     <div style={{ fontSize: "0.75rem", color: "var(--muted-text)" }}>
-                      Area: <strong>{m.practiceArea.replace("_", " ")}</strong> &bull; Court: <strong>{m.jurisdiction}</strong>
+                      {vocab.unit}: <strong>{labelFor(m.unit, sectorUi.unitLabels)}</strong>
+                      {m.jurisdiction && <> &bull; Jurisdiction: <strong>{m.jurisdiction}</strong></>}
                     </div>
                   </button>
                 );
@@ -837,7 +841,7 @@ export function HazardControlTab({ currentTenant, token, sectorProfile }: Hazard
                 <div style={{ display: "flex", alignItems: "center", justifyContent: "space-between", marginBottom: "0.35rem" }}>
                   <div style={{ display: "flex", alignItems: "center", gap: "0.5rem" }}>
                     <span className={`badge ${fatigueAssessment.hasFatigueSurge ? "badge-coral" : "badge-success"}`}>
-                      {fatigueAssessment.hasFatigueSurge ? "⚠ SRA FATIGUE SURGE DETECTED" : "✔ WITHIN SRA BOUNDARIES"}
+                      {fatigueAssessment.hasFatigueSurge ? `⚠ ${sectorUi.surgeBadge}` : `✔ ${sectorUi.compliantBadge}`}
                     </span>
                     <span className="text-sm font-bold">{fatigueAssessment.statutoryReference}</span>
                   </div>
@@ -847,10 +851,10 @@ export function HazardControlTab({ currentTenant, token, sectorProfile }: Hazard
                   {fatigueAssessment.regulatoryNotice}
                 </div>
                 <div style={{ fontSize: "0.8rem", color: "var(--muted-text)" }}>
-                  Consecutive late-night sessions (&gt;20:00 UTC): <strong>{fatigueAssessment.consecutiveLateNightsCount} days</strong>.
+                  Consecutive late-night sessions: <strong>{fatigueAssessment.consecutiveLateNightsCount} days</strong>.
                   {fatigueAssessment.hasFatigueSurge && (
                     <span style={{ marginLeft: "0.5rem", color: "var(--coral)", fontWeight: 600 }}>
-                      Mandatory: Supervisory Partner Consultation required prior to hazard disposition closure.
+                      {sectorUi.mandatoryNote}
                     </span>
                   )}
                 </div>

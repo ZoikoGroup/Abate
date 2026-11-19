@@ -88,8 +88,10 @@ import {
   acknowledgeCorrection,
   resolveTenantSectorProfile,
   setTenantSectorSetting,
-  assertTenantHasLegalPack
+  describeSectorScope
 } from "./domains/lifecycle";
+import { SECTOR_KEY_PATTERN } from "./domains/lifecycle/sector-pack";
+import { registerSectorWorkRoutes } from "./routes/sector-work";
 import {
   CreateHazardInput,
   ProposeCauseInput,
@@ -587,7 +589,8 @@ app.get("/api/v2/me", async (req: Request, res: Response) => {
         "DASHBOARD",
         "ORGANIZATIONS",
         "COHORT_ANALYTICS",
-        "LEGAL_PRACTICE",
+        "SECTOR_PACK",
+        "LEGAL_PRACTICE", // deprecated alias of SECTOR_PACK, kept for one release for older clients
         "HAZARD_CONTROL",
         "BOUNDED_AI",
         "AUDIT",
@@ -661,7 +664,8 @@ app.get("/api/v2/tenant/sector-profile", async (req: Request, res: Response) => 
 });
 
 const SetTenantSectorProfileBody = z.object({
-  sectorKey: z.enum(["GENERIC", "LEGAL", "ACCOUNTING"]),
+  // Validated against the sector pack registry in setTenantSectorSetting.
+  sectorKey: z.string().regex(SECTOR_KEY_PATTERN, "sectorKey must be an upper-case sector key such as LEGAL."),
   packKey: z.string().min(2).max(120)
 }).strict();
 
@@ -2529,7 +2533,7 @@ app.get("/api/v2/ops/release-readiness", async (req: Request, res: Response) => 
       p0FailingTests: 0,
       p1Defects: 0,
       gates: [
-        { name: "Scope Gate", status: "PASSED", details: "Sector-neutral core with UK Legal Sector Pack (SRA 2023) active; ZoikoTime connector" },
+        { name: "Scope Gate", status: "PASSED", details: `${describeSectorScope()}; ZoikoTime connector` },
         { name: "Build Gate", status: "PASSED", details: "TypeScript strict, lockfile pinned, zero floating versions" },
         { name: "Correctness Gate", status: "PASSED", details: "All 17 phases of golden cycle verified on synthetic baseline" },
         { name: "Privacy & Security Gate", status: "PASSED", details: "57/57 boundary tests passed; forced RLS & single read path verified; 0 failing P0 tests" },
@@ -3008,133 +3012,10 @@ app.post("/api/v2/ai-changes/:id/advance", async (req: Request, res: Response) =
   }
 });
 
-import {
-  LegalMatterSchema,
-  mapMatterToWorkItem,
-  assertLegalBoundaryCompliance,
-  evaluateLegalFatigueSurge,
-  LegalMatter
-} from "./domains/sector-legal";
-
 // -------------------------------------------------------------
-// Domain S13: Legal Sector Pack & Matter Ingestion Endpoints
+// Domain S13: Sector work-item endpoints (generic + legal aliases)
 // -------------------------------------------------------------
-
-const SEEDED_LEGAL_MATTERS: Record<string, LegalMatter[]> = {
-  [GOLDEN_01.tenantA.id]: [
-    {
-      matterId: "MAT-2026-LON-001",
-      matterTitle: "High Court Commercial Injunction Proceedings",
-      practiceArea: "COMMERCIAL_LITIGATION",
-      currentPhase: "TRIAL_PREP",
-      jurisdiction: "EWHC",
-      leadPartnerId: "00000000-0000-4000-a000-000000000001",
-      activeWindowStart: "2026-03-01T08:00:00Z",
-      activeWindowEnd: "2026-03-31T18:00:00Z"
-    },
-    {
-      matterId: "MAT-2026-LON-002",
-      matterTitle: "Cross-Border FinTech M&A Closing",
-      practiceArea: "CORPORATE_MA",
-      currentPhase: "CLOSING_TRANSACTION",
-      jurisdiction: "EWHC",
-      leadPartnerId: "00000000-0000-4000-a000-000000000001",
-      activeWindowStart: "2026-02-15T08:00:00Z",
-      activeWindowEnd: "2026-03-15T22:00:00Z"
-    }
-  ],
-  [GOLDEN_01.tenantB.id]: [
-    {
-      matterId: "MAT-2026-ARB-009",
-      matterTitle: "London Maritime LCIA Multi-Jurisdictional Arbitration",
-      practiceArea: "ARBITRATION",
-      currentPhase: "TRIAL",
-      jurisdiction: "LCIA_ARBITRATION",
-      leadPartnerId: "00000000-0000-4000-b000-000000000001",
-      activeWindowStart: "2026-03-01T09:00:00Z",
-      activeWindowEnd: "2026-03-25T17:00:00Z"
-    }
-  ]
-};
-
-// List active legal matters for the caller's tenant (requires active Legal sector pack)
-app.get("/api/v2/sector/legal/matters", async (req: Request, res: Response) => {
-  try {
-    const who = await authenticate(getHeader(req, "authorization"));
-    await resolveActor(who.tenantId, who.subject, new Date(), who.role);
-    await withTenant(who.tenantId, async (tx) => assertTenantHasLegalPack(tx, who.tenantId));
-    const matters = SEEDED_LEGAL_MATTERS[who.tenantId] || [];
-    res.status(200).json({ items: matters });
-  } catch (err) {
-    toErrorResponse(err, res);
-  }
-});
-
-// Map incoming legal matter to neutral work-item, defending constitutional boundaries
-app.post("/api/v2/sector/legal/matters/map", async (req: Request, res: Response) => {
-  try {
-    const who = await authenticate(getHeader(req, "authorization"));
-    const actor = await resolveActor(who.tenantId, who.subject, new Date(), who.role);
-    authorize(actor, "org.create"); // Risk owners and practice heads
-    await withTenant(who.tenantId, async (tx) => assertTenantHasLegalPack(tx, who.tenantId));
-
-    // 1. Constitutional boundary check: reject forbidden surveillance/billing/privileged fields
-    assertLegalBoundaryCompliance(req.body);
-
-    // 2. Strict schema parsing
-    const matter = LegalMatterSchema.parse(req.body);
-
-    // 3. Transform to neutral work-item
-    const workItem = mapMatterToWorkItem(matter);
-
-    res.status(200).json({
-      matter,
-      workItem,
-      sectorPack: "sector-legal@v1",
-      complianceStatus: "VALIDATED"
-    });
-  } catch (err) {
-    toErrorResponse(err, res);
-  }
-});
-
-// Evaluate fatigue & unbuffered evening drafting against SRA 2023 & ISO 45003 thresholds
-const FatigueCheckBody = z.object({
-  matterId: z.string().min(1).max(128),
-  intervals: z.array(
-    z.object({ startUtc: z.string().datetime(), endUtc: z.string().datetime() })
-      .refine(i => Date.parse(i.endUtc) > Date.parse(i.startUtc), { message: "endUtc must be after startUtc" })
-  ).max(500).optional()
-}).strict();
-
-app.post("/api/v2/sector/legal/fatigue-check", async (req: Request, res: Response) => {
-  try {
-    const who = await authenticate(getHeader(req, "authorization"));
-    await resolveActor(who.tenantId, who.subject, new Date(), who.role);
-    await withTenant(who.tenantId, async (tx) => assertTenantHasLegalPack(tx, who.tenantId));
-    const { matterId, intervals } = FatigueCheckBody.parse(req.body ?? {});
-
-    const tenantMatters = SEEDED_LEGAL_MATTERS[who.tenantId] || [];
-    const matter = tenantMatters.find(m => m.matterId === matterId);
-    if (!matter) {
-      throw new AppError("NOT_FOUND", "Matter not found for this tenant.");
-    }
-
-    const testIntervals = Array.isArray(intervals) && intervals.length > 0
-      ? intervals
-      : [
-        // Default synthetic fixture: 3 consecutive days with late-night drafting past 20:00
-        { startUtc: "2026-03-02T09:00:00Z", endUtc: "2026-03-02T22:30:00Z" },
-        { startUtc: "2026-03-03T09:00:00Z", endUtc: "2026-03-03T23:15:00Z" },
-        { startUtc: "2026-03-04T09:00:00Z", endUtc: "2026-03-04T22:00:00Z" }
-      ];
-
-    const assessment = evaluateLegalFatigueSurge(matter, testIntervals);
-    res.status(200).json(assessment);
-  } catch (err) {
-    toErrorResponse(err, res);
-  }
-});
+registerSectorWorkRoutes(app, { getHeader });
 
 // Final handler: body-parser and any unrouted error get the safe envelope, never Express's HTML/stack page
 app.use((err: any, _req: Request, res: Response, _next: NextFunction) => {

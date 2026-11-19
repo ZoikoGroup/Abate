@@ -113,7 +113,27 @@ function normaliseQuestion(question: string): string {
     .trim();
 }
 
-const PERSON_NOUN = "(?:employee|worker|lawyer|solicitor|associate|partner|paralegal|staff|person|people|individual|member|colleague|trainee|intern|manager|user|banda|bande|log|karmchari)s?";
+// People nouns the screen treats as an individual target. Covers every sector pack, not only legal:
+// a request to rank or single out a nurse, an engineer or an accountant is refused like one about a lawyer.
+const PERSON_NOUNS = [
+  // general
+  "employee", "worker", "staff", "person", "people", "individual", "member", "colleague", "trainee", "intern",
+  "manager", "supervisor", "director", "executive", "specialist", "contractor", "freelancer", "officer",
+  "technician", "operator", "agent", "user",
+  // legal
+  "lawyer", "solicitor", "associate", "partner", "paralegal", "barrister", "attorney", "counsel", "clerk",
+  // healthcare
+  "nurse", "doctor", "physician", "clinician", "surgeon", "midwife", "therapist", "pharmacist", "carer",
+  // accounting and finance
+  "accountant", "auditor", "bookkeeper", "analyst", "advisor", "adviser", "consultant",
+  // software and IT
+  "engineer", "developer", "programmer", "tester", "sysadmin", "devops",
+  // education
+  "teacher", "lecturer", "tutor",
+  // Hinglish
+  "banda", "bande", "log", "karmchari"
+];
+const PERSON_NOUN = `(?:${PERSON_NOUNS.join("|")})s?`;
 const PERSON_TARGETING_VERB = "(?:rank|ranking|rate|score|grade|compare|list|name|identify|reveal|expose|show|find|pick|single out|flag|profile|track|monitor|batao|bata|dikhao)";
 const SUPERLATIVE = "(?:most|least|more|less|highest|lowest|worst|best|top|bottom|sabse|zyada|jyada|kam)";
 const PERSONAL_STATE = "(?:at risk|risk|tired|stressed|burn(?:ed|t)? ?out|overworked|burnt|lazy|unproductive|slow|sick|absent|late|hours|overtime|worked|working|thaka|thak|aalsi|bimar|kaam)";

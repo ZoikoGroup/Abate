@@ -197,12 +197,13 @@ The **Live Demo Console** presents real HTTP traffic against the backend, with a
   * **8-Stage AI Rollout Assessment (`S14`):** `REGISTERED -> BASELINE -> DETECT -> ATTRIBUTE -> CONTROL -> VERIFY -> PERFORMANCE_REVIEW -> CLOSED`. Optimistic concurrency via `If-Match` version header and strict stage guards block premature closure (`409 Conflict`) whenever prerequisites or hazards remain unresolved.
 * **Where to See It in UI:** `Outcomes & AI Change (Phase 7)` tab.
 
-### UK Legal Sector Pack (SRA 2023 Workplace Culture / HSWA 1974 §2 / ISO 45003)
-* **Scope / Domain:** `backend/src/domains/sector-legal/`, `legal-uk-sra`.
+### Sector Packs (Legal launched; Healthcare and Software & IT in preview)
+* **Scope / Domain:** sector pack registry in `backend/src/domains/lifecycle/sector-registry.ts`, packs in `backend/src/domains/lifecycle/packs/`, generic endpoints in `backend/src/routes/sector-work.ts`. Any sector is a data definition, see ADR-006. The legal pack is `legal-uk-sra` (SRA 2023 Workplace Culture / HSWA 1974 §2 / ISO 45003). Healthcare and Software & IT are previews: selectable, not claimed as launched, regulatory content pending the Legal & Policy Lead.
+* **How to demo another sector:** `Organizations` tab -> `Sector Pack` card -> pick a sector -> `Apply Sector Pack`. The sector tab, vocabulary, demand windows and forbidden fields change with no code change.
 * **What It Delivers:**
   * **Domain-Neutral Translation (`WORK_ITEM`):** Maps legal matters (`COMMERCIAL_LITIGATION`, `CORPORATE_MA`, `REGULATORY_INVESTIGATION`, `ARBITRATION`) and court/closing demand windows (`TRIAL_PREP`, `CLOSING_TRANSACTION`) into domain-neutral intervals while rejecting `privilegedAdvice`, `billingRate`, and `individualLawyerRanking` (`400`).
   * **Trial Window Fatigue Surge Detection:** Flags sustained unbuffered drafting (`>= 3` consecutive sessions past `20:00 UTC`) to trigger SRA-aligned supervisory partner review *(note: in UI, the partner sign-off preview button is labeled `Simulation` while fatigue check & boundary mapping execute against real backend endpoints)*.
-* **Where to See It in UI:** `Legal Sector Pack (SRA 2023)` tab + Legal Matters panel in `Hazards & Controls`.
+* **Where to See It in UI:** the sector tab (titled by the active pack, for example `Legal Sector Pack (SRA 2023)`) + the sector work item panel in `Hazards & Controls`.
 
 ### Phase 8: Operations, Zero-Impersonation Support, Merkle Verifier & Release Dossier
 * **Scope / Domains:** `B8` Operations, Audit Verifier (`WebCrypto`), `build-dossier.ts` / `sign-dossier.ts`.

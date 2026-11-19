@@ -2950,12 +2950,66 @@
         }
       }
     },
+    "/sector/work-items": {
+      "get": {
+        "tags": [
+          "Sector Packs"
+        ],
+        "summary": "List work items for the tenant's active sector pack, with the pack vocabulary",
+        "responses": {
+          "200": {
+            "description": "Active sectorKey, vocabulary and array of SectorWorkItem"
+          },
+          "403": {
+            "description": "No sector pack is enabled for this tenant"
+          }
+        }
+      }
+    },
+    "/sector/work-items/map": {
+      "post": {
+        "tags": [
+          "Sector Packs"
+        ],
+        "summary": "Validate sector work-item metadata against the active pack and map it to the neutral WORK_ITEM (rejects pack-forbidden fields)",
+        "responses": {
+          "200": {
+            "description": "SectorWorkItem and neutral work item representation"
+          },
+          "400": {
+            "description": "Validation error: forbidden field, unit, jurisdiction or demand window outside the pack"
+          },
+          "403": {
+            "description": "No sector pack is enabled for this tenant"
+          }
+        }
+      }
+    },
+    "/sector/work-items/fatigue-check": {
+      "post": {
+        "tags": [
+          "Sector Packs"
+        ],
+        "summary": "Evaluate consecutive late-night sessions for a work item using the active pack's rule and wording",
+        "responses": {
+          "200": {
+            "description": "SectorFatigueAssessment"
+          },
+          "403": {
+            "description": "No sector pack is enabled for this tenant"
+          },
+          "404": {
+            "description": "Work item not found"
+          }
+        }
+      }
+    },
     "/sector/legal/matters": {
       "get": {
         "tags": [
           "UK Legal Sector Pack (SRA 2023)"
         ],
-        "summary": "List UK Legal Practice matters and active court/closing demand windows",
+        "summary": "Alias of /sector/work-items for the Legal pack: list UK Legal Practice matters and active court/closing demand windows",
         "responses": {
           "200": {
             "description": "Array of LegalMatterView"

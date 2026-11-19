@@ -8,7 +8,7 @@
     "build": "tsc -b && vite build",
     "lint": "oxlint",
     "preview": "vite preview",
-    "test": "node ../backend/node_modules/tsx/dist/cli.mjs tests/components.test.tsx"
+    "test": "node ../backend/node_modules/tsx/dist/cli.mjs tests/components.test.tsx && node ../backend/node_modules/tsx/dist/cli.mjs tests/sector-pack.test.tsx"
   },
   "dependencies": {
     "react": "^19.3.1",

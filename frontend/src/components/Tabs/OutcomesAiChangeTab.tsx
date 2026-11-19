@@ -56,7 +56,7 @@ export function OutcomesAiChangeTab({ currentTenant, token }: OutcomesAiChangeTa
   const [evaluations, setEvaluations] = useState<OutcomeEvaluationView[]>([]);
   const [selectedOutcomeId, setSelectedOutcomeId] = useState("WORKLOAD_SUSTAINABILITY");
   const [evalReleaseId, setEvalReleaseId] = useState(BASELINE_RELEASE_ID);
-  const [claimText, setClaimText] = useState("Observed 18% improvement in protected focus blocks across litigation associates.");
+  const [claimText, setClaimText] = useState("Observed 18% improvement in protected focus blocks across the delivery team.");
   const [evalConfidence, setEvalConfidence] = useState<"HIGH" | "MEDIUM" | "LOW">("MEDIUM");
 
   // AI Change state
@@ -64,7 +64,7 @@ export function OutcomesAiChangeTab({ currentTenant, token }: OutcomesAiChangeTa
   const [activeAssessmentId, setActiveAssessmentId] = useState<string | null>(null);
 
   // New Profile Form
-  const [profileTitle, setProfileTitle] = useState("Litigation Research & Synthesis Agent");
+  const [profileTitle, setProfileTitle] = useState("Research & Synthesis Agent");
   const [affectedRoles, setAffectedRoles] = useState("Senior Analyst, Coordinator");
   const [affectedTasks, setAffectedTasks] = useState("Precedent synthesis, citation cross-checking");
   const [automationMode, setAutomationMode] = useState<"ASSIST" | "AUTOMATE_WITH_REVIEW" | "AUTONOMOUS_BOUNDED">("ASSIST");
@@ -388,7 +388,7 @@ export function OutcomesAiChangeTab({ currentTenant, token }: OutcomesAiChangeTa
       if (!target) {
         const created = await createAiChange(
           {
-            title: profileTitle || "Litigation Research & Synthesis Agent",
+            title: profileTitle || "Research & Synthesis Agent",
             affectedRoles: affectedRoles.split(",").map(s => s.trim()).filter(Boolean),
             affectedTasks: affectedTasks.split(",").map(s => s.trim()).filter(Boolean),
             automationMode,

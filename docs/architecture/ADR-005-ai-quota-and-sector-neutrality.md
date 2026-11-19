@@ -12,6 +12,8 @@
 - **Over-Limit Response & Precedence:** Exceeding budget returns HTTP `429 RATE_LIMITED` with a `Retry-After` header (seconds until next UTC month start) and calm UI guidance pointing to the manual workflow. Independent kill switches (`all_ai`, `use_case:*`, `model:*`, `provider:*`) are checked before quota and override everything (`503 UNAVAILABLE`).
 
 ## 2. Sector-Neutral Core & Legal Sector Pack Contract
+
+> **Superseded by `ADR-006-sector-pack-registry.md`.** Sector packs are now a registry, routes are generic with legal aliases, and the UI gate is the active pack rather than the legal flag. The text below is kept as the record of the original decision.
 - **Neutral Core:** Work-design entities use neutral core concepts (`WORK_ITEM`, `unit`, `demand_window`, `accountable_reviewer`, `evaluateNeutralFatigueSurge`). Legal terms (`Matter`, `Practice Area`, `Trial Prep`, `Supervisory Partner`, SRA thresholds) belong solely in the Legal Sector Pack (`legalMapping` + `domains/sector-legal/`).
 - **Per-Tenant Pack Gating:** `GET /api/v2/tenant/sector-profile` resolves active `tenant_policy_binding` records for the tenant. Legal UI (`LegalPracticeTab` + fatigue panel in `HazardControlTab`) renders only when `hasLegalPack === true`, and `/api/v2/sector/legal/*` endpoints fail closed (`403 FORBIDDEN`) for tenants without a Legal binding.
 - **Truthful Scope & Guardrails:** Abate is framed as sector-neutral work-design infrastructure for regulated knowledge-work teams, with the UK Legal Sector Pack (SRA 2023) active today. `validateSectorPack()` blocks any pack attempting to lower `privacyFloor` (`< 10`) or set `aiAuthority = "EXPANDED"`.

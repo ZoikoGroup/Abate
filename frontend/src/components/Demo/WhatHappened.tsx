@@ -107,7 +107,7 @@ export const WhatHappened: React.FC<WhatHappenedProps> = ({ stepId, data }) => {
               <span className="w-num">1</span>
               <div className="w-info">
                 <strong>organization</strong>
-                <p>Inserted row for <code>{data?.activeOrgName || "Apex Litigation Practice"}</code> with UUID &amp; tenant ID.</p>
+                <p>Inserted row for <code>{data?.activeOrgName || "Apex Operations Unit"}</code> with UUID &amp; tenant ID.</p>
               </div>
             </div>
             <div className="write-card">

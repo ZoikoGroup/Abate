@@ -856,6 +856,9 @@ export interface LegalHold {
   id: string;
   data_category: DataCategory;
   scope_connection_id: string | null;
+  /** Neutral case reference. */
+  case_ref?: string;
+  /** Deprecated alias of case_ref. */
   matter_ref: string;
   reason: string;
   placed_by: string;
@@ -949,7 +952,7 @@ export async function runRetention(idempotencyKey: string, token: string): Promi
 }
 
 export async function placeLegalHold(
-  input: { dataCategory: DataCategory; scopeConnectionId?: string; matterRef: string; reason: string },
+  input: { dataCategory: DataCategory; scopeConnectionId?: string; caseRef: string; reason: string },
   idempotencyKey: string,
   token: string
 ): Promise<{ id: string; placedAt: string }> {
@@ -1434,48 +1437,50 @@ export async function advanceAiAssessment(
 }
 
 // -------------------------------------------------------------
-// Legal Sector Pack Client (SRA 2023 / Health & Safety At Work)
+// Sector Pack Client: work items for the tenant's active sector pack
 // -------------------------------------------------------------
 
-export interface LegalMatterView {
-  matterId: string;
-  matterTitle: string;
-  practiceArea: "COMMERCIAL_LITIGATION" | "CORPORATE_MA" | "REGULATORY_INVESTIGATION" | "ARBITRATION";
-  currentPhase: "TRIAL_PREP" | "TRIAL" | "COURT_HEARING" | "CLOSING" | "CLOSING_TRANSACTION" | "FILING_DEADLINE" | "DISCOVERY";
-  jurisdiction: "EWHC" | "UK_TRIBUNAL" | "LCIA_ARBITRATION" | "COMPETITION_APPEAL_TRIBUNAL";
-  leadPartnerId: string;
+export interface SectorWorkItemView {
+  externalRef: string;
+  title: string;
+  unit: string;
+  demandWindow: string;
+  jurisdiction?: string;
+  accountableReviewerId: string;
   activeWindowStart: string;
   activeWindowEnd: string;
 }
 
-export interface LegalFatigueAssessmentView {
-  matterId: string;
-  practiceArea: string;
-  currentPhase: string;
+export interface SectorFatigueAssessmentView {
+  sectorKey: string;
+  workItemId: string;
+  unit: string;
+  demandWindow: string;
   hasFatigueSurge: boolean;
   consecutiveLateNightsCount: number;
+  thresholdUsed: number;
   statutoryReference: string;
-  applicableGate: "SUPERVISORY_PARTNER_CONSULTATION" | "STANDARD_APPROVAL";
+  applicableGate: string;
   regulatoryNotice: string;
 }
 
-export async function fetchLegalMatters(token?: string): Promise<LegalMatterView[]> {
-  const res = await api<{ items: LegalMatterView[] }>("/api/v2/sector/legal/matters", { token });
+export async function fetchSectorWorkItems(token?: string): Promise<SectorWorkItemView[]> {
+  const res = await api<{ items: SectorWorkItemView[] }>("/api/v2/sector/work-items", { token });
   return res.items || [];
 }
 
-export async function checkLegalFatigue(matterId: string, token?: string, intervals?: any[]): Promise<LegalFatigueAssessmentView> {
-  return api<LegalFatigueAssessmentView>("/api/v2/sector/legal/fatigue-check", {
+export async function checkSectorFatigue(workItemId: string, token?: string, intervals?: any[]): Promise<SectorFatigueAssessmentView> {
+  return api<SectorFatigueAssessmentView>("/api/v2/sector/work-items/fatigue-check", {
     method: "POST",
-    body: JSON.stringify({ matterId, intervals }),
+    body: JSON.stringify({ workItemId, intervals }),
     token
   });
 }
 
-export async function mapLegalMatter(matter: any, token?: string): Promise<any> {
-  return api<any>("/api/v2/sector/legal/matters/map", {
+export async function mapSectorWorkItem(item: any, token?: string): Promise<any> {
+  return api<any>("/api/v2/sector/work-items/map", {
     method: "POST",
-    body: JSON.stringify(matter),
+    body: JSON.stringify(item),
     token
   });
 }
@@ -1592,9 +1597,42 @@ export async function replayDeadLetter(
   });
 }
 
+export interface SectorUiCopy {
+  navLabel: string;
+  sectorBadge: string;
+  badges: string[];
+  heading: string;
+  subtitle: string;
+  panelTitle: string;
+  panelDescription: string;
+  mandatoryNote: string;
+  boundaryTitle: string;
+  boundaryText: string;
+  listTitle: string;
+  unitFilterLabel: string;
+  allUnitsLabel: string;
+  unitLabels: Record<string, string>;
+  fatigueButtonLabel: string;
+  fatigueCardTitle: string;
+  surgeBadge: string;
+  compliantBadge: string;
+  thresholdNote: string;
+  consultationTitle: string;
+  consultationSignerLabel: string;
+  consultationSignerDefault: string;
+  consultationActions: Array<{ value: string; label: string }>;
+  decoyFields: Array<{ field: string; label: string; value: string | number }>;
+}
+
 export interface TenantSectorProfile {
   tenantId: string;
-  sectorKey: "GENERIC" | "LEGAL" | "ACCOUNTING";
+  /** Registered sector key, for example GENERIC, LEGAL or ACCOUNTING. Any registered sector may appear. */
+  sectorKey: string;
+  packKey?: string;
+  displayName?: string;
+  /** True when a sector pack other than the neutral baseline is active. */
+  packActive?: boolean;
+  /** Deprecated: use sectorKey === "LEGAL". */
   hasLegalPack: boolean;
   activePacks: string[];
   vocabulary: {
@@ -1605,8 +1643,18 @@ export interface TenantSectorProfile {
     supervisor: string;
   };
   demandWindows: string[];
+  highDemandWindows?: string[];
+  workItemUnits?: string[];
+  /** Screen wording authored by the sector pack. Optional so older backends still render. */
+  ui?: SectorUiCopy;
   claimScope: string;
   enabledSectors: string[];
+  availableSectors?: Array<{
+    sectorKey: string;
+    packKey: string;
+    displayName: string;
+    status: "BASELINE" | "LAUNCHED" | "PREVIEW" | "FIXTURE";
+  }>;
 }
 
 export async function fetchTenantSectorProfile(token: string): Promise<TenantSectorProfile> {
@@ -1683,7 +1731,7 @@ export async function fetchPolicyResolution(feature: string, token: string): Pro
 }
 
 export async function updateTenantSectorProfile(
-  body: { sectorKey: "GENERIC" | "LEGAL" | "ACCOUNTING"; packKey: string },
+  body: { sectorKey: string; packKey: string },
   idempotencyKey: string,
   token: string
 ): Promise<TenantSectorProfile> {
