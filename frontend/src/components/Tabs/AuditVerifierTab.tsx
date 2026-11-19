@@ -214,17 +214,17 @@ async function verifyBundleInBrowser(rawText: string): Promise<VerificationRepor
 async function createSampleBundleJson(tenantId: string): Promise<string> {
   const artHazard = {
     id: "00000000-0000-4000-a007-000000000001",
-    title: "Out-of-hours filing overload (Sample Verification Artifact)",
+    title: "Out-of-hours deadline overload (Sample Verification Artifact)",
     version: 1
   };
   const artCause = {
     id: "00000000-0000-4000-a007-000000000002",
-    statement: "Unbuffered matter assignment cadence in litigation sprint",
+    statement: "Unbuffered work assignment cadence during a delivery sprint",
     version: 1
   };
   const artControl = {
     id: "00000000-0000-4000-a007-000000000003",
-    scope: "Corporate Litigation Practice",
+    scope: "Corporate Delivery Unit",
     objective: "Enforce 48h triage handoff",
     version: 2
   };

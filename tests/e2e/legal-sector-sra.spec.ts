@@ -23,7 +23,7 @@ test.describe("Legal Sector Pack (SRA 2023) E2E", () => {
     await expect(page.getByText(/SRA SURGE ALERT: FATIGUE DETECTED/i)).toBeVisible({ timeout: 10_000 });
     await expect(page.getByText(/Mandatory Supervisory Partner Consultation Gate/i)).toBeVisible();
 
-    const privilegeCheckbox = page.locator("#inject-privilege-check");
+    const privilegeCheckbox = page.getByLabel(/Inject Privileged Legal Advice/i);
     const translateBtn = page.getByRole("button", { name: /Execute Translation & Boundary Gate/i });
 
     await privilegeCheckbox.check();
@@ -32,6 +32,6 @@ test.describe("Legal Sector Pack (SRA 2023) E2E", () => {
 
     await privilegeCheckbox.uncheck();
     await translateBtn.click();
-    await expect(page.getByText(/Mapped Neutral Representation \(Zero Privilege Leak\)/i)).toBeVisible({ timeout: 10_000 });
+    await expect(page.getByText(/Mapped Neutral Representation \(Zero Confidential Leak\)/i)).toBeVisible({ timeout: 10_000 });
   });
 });

@@ -223,7 +223,7 @@ export function BoundedAiTab({ currentTenant, token }: BoundedAiTabProps) {
         // Step 1: propose action
         const prop = await proposeAction({
           tool: "ticket_notification",
-          target: "team-litigation",
+          target: "team-delivery",
           params: { message: "Scheduled rest window notice" },
           resourceVersion: 1,
           approvalRef: SEEDED_APPROVAL_ID
@@ -262,7 +262,7 @@ export function BoundedAiTab({ currentTenant, token }: BoundedAiTabProps) {
       } else if (testId === "TIMEOUT_RECONCILIATION") {
         const prop = await proposeAction({
           tool: "ticket_notification",
-          target: "team-litigation",
+          target: "team-delivery",
           params: { simulateTimeout: true },
           resourceVersion: 1,
           approvalRef: SEEDED_APPROVAL_ID

@@ -62,7 +62,7 @@ export function RetentionTab({ currentTenant, token }: RetentionTabProps) {
 
   const [retentionDays, setRetentionDays] = useState("365");
   const [basis, setBasis] = useState("");
-  const [matterRef, setMatterRef] = useState("");
+  const [caseRef, setCaseRef] = useState("");
   const [holdReason, setHoldReason] = useState("");
   const [holdScope, setHoldScope] = useState("");
   const [releaseReasons, setReleaseReasons] = useState<Record<string, string>>({});
@@ -154,13 +154,13 @@ export function RetentionTab({ currentTenant, token }: RetentionTabProps) {
   const handlePlaceHold = () => act("Legal hold placed", async () => {
     await placeLegalHold({
       dataCategory: "WORK_FACT",
-      matterRef,
+      caseRef,
       reason: holdReason,
       ...(holdScope ? { scopeConnectionId: holdScope } : {})
     }, newKey(), token!);
-    setMatterRef("");
+    setCaseRef("");
     setHoldReason("");
-    return `Hold ${matterRef}: ${holdScope ? "facts from one connection" : "all work facts"} are now exempt from purge.`;
+    return `Hold ${caseRef}: ${holdScope ? "facts from one connection" : "all work facts"} are now exempt from purge.`;
   });
 
   const handleReleaseHold = (holdId: string) => act("Legal hold released", async () => {
@@ -365,8 +365,8 @@ export function RetentionTab({ currentTenant, token }: RetentionTabProps) {
 
         <div className="form-grid">
           <div className="form-group">
-            <label className="form-label" htmlFor="hold-matter">Work item / Hold reference</label>
-            <input id="hold-matter" className="text-control" value={matterRef} onChange={e => setMatterRef(e.target.value)} placeholder="HOLD-2026-014" />
+            <label className="form-label" htmlFor="hold-case-ref">Work item / Hold reference</label>
+            <input id="hold-case-ref" className="text-control" value={caseRef} onChange={e => setCaseRef(e.target.value)} placeholder="HOLD-2026-014" />
           </div>
           <div className="form-group">
             <label className="form-label" htmlFor="hold-scope">Scope</label>
@@ -380,7 +380,7 @@ export function RetentionTab({ currentTenant, token }: RetentionTabProps) {
             <input id="hold-reason" className="text-control" value={holdReason} onChange={e => setHoldReason(e.target.value)} placeholder="Preservation notice received" />
           </div>
         </div>
-        <button type="button" className="btn btn-warning" disabled={busy || !matterRef.trim() || holdReason.trim().length < 5} onClick={handlePlaceHold}>Place legal hold</button>
+        <button type="button" className="btn btn-warning" disabled={busy || !caseRef.trim() || holdReason.trim().length < 5} onClick={handlePlaceHold}>Place legal hold</button>
 
         {state && state.holds.length > 0 && (
           <div className="table-responsive">
@@ -389,7 +389,7 @@ export function RetentionTab({ currentTenant, token }: RetentionTabProps) {
               <tbody>
                 {state.holds.map(h => (
                   <tr key={h.id}>
-                    <td className="monospace">{h.matter_ref}</td>
+                    <td className="monospace">{h.case_ref ?? h.matter_ref}</td>
                     <td>{h.scope_connection_id ? `connection …${h.scope_connection_id.slice(-12)}` : "all work facts"}</td>
                     <td>{h.reason}</td>
                     <td>{fmt(h.placed_at)}</td>
@@ -399,7 +399,7 @@ export function RetentionTab({ currentTenant, token }: RetentionTabProps) {
                         <div className="button-group">
                           <input
                             className="text-control"
-                            aria-label={`Release reason for ${h.matter_ref}`}
+                            aria-label={`Release reason for ${h.case_ref ?? h.matter_ref}`}
                             placeholder="Release reason"
                             value={releaseReasons[h.id] ?? ""}
                             onChange={e => setReleaseReasons(r => ({ ...r, [h.id]: e.target.value }))}

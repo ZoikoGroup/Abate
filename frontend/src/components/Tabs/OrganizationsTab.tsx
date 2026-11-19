@@ -3,12 +3,14 @@ import { useState } from "react";
 import { api, ApiError, type Organization, type TenantSectorProfile, PRESET_TENANTS } from "../../api/client";
 import { getSectorVocabulary } from "../../utils/vocabulary";
 import { StateView } from "../StateView";
+import { SectorPackSelector } from "../SectorPackSelector";
 
 interface OrganizationsTabProps {
   currentTenant: typeof PRESET_TENANTS[0];
   token: string | null;
   organizations: Organization[];
   sectorProfile?: TenantSectorProfile | null;
+  onSectorProfileChange?: (profile: TenantSectorProfile) => void;
   onRefresh: () => void;
 }
 
@@ -17,6 +19,7 @@ export function OrganizationsTab({
   token,
   organizations,
   sectorProfile,
+  onSectorProfileChange,
   onRefresh
 }: OrganizationsTabProps) {
   const vocab = getSectorVocabulary(sectorProfile);
@@ -130,6 +133,9 @@ export function OrganizationsTab({
 
   return (
     <div className="tab-pane">
+      {onSectorProfileChange && (
+        <SectorPackSelector token={token} sectorProfile={sectorProfile} onChanged={onSectorProfileChange} />
+      )}
       <div className="card">
         <div className="card-header">
           <div>
@@ -154,7 +160,7 @@ export function OrganizationsTab({
               id="org-name"
               type="text"
               className="text-control"
-              placeholder="e.g. Commercial Litigation Group"
+              placeholder="e.g. Operations Group"
               value={orgName}
               onChange={(e) => setOrgName(e.target.value)}
               required
