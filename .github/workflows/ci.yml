@@ -138,6 +138,7 @@ jobs:
       - name: Run wording lint, OpenAPI contract check, typecheck and compile backend
         run: |
           npm --prefix backend run lint:wording
+          npm --prefix backend run lint:sector-neutrality
           npm --prefix backend run generate:openapi -- --check
           npm --prefix backend run build
 
@@ -157,6 +158,9 @@ jobs:
           npm --prefix backend run test-completion
           npm --prefix backend run test-pilot
           npm --prefix backend run test-legal
+          npm --prefix backend run test-sector-registry
+          npm --prefix backend run test-sector-work
+          npm --prefix backend run test-hold-reference
           npm --prefix backend run test-boundaries
           npm --prefix backend run test-ingest
           npm --prefix backend run test-privacy
