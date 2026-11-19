@@ -191,9 +191,13 @@ export function RetentionTab({ currentTenant, token }: RetentionTabProps) {
   });
 
   const handleSeedExpired = () => act("Sample facts ingested", async () => {
-    const conn = connections.find(c => c.state === "ACTIVE");
+    const list = connections.length > 0 ? connections : await fetchConnections(token!);
+    const isIngestable = (state: string) => state === "ACTIVE" || state === "RESUMED";
+    const conn =
+      list.find(c => isIngestable(c.state) && c.source === "ZoikoTime") ||
+      list.find(c => isIngestable(c.state));
     if (!conn) {
-      throw new Error("No ACTIVE source connection available. Resume or register an ACTIVE connection in Ingestion & Work Ledger first.");
+      throw new Error("No ACTIVE or RESUMED source connection available. Resume or register an ACTIVE connection in Ingestion & Work Ledger first.");
     }
     const at = (daysAgo: number, hour: number) => {
       const d = new Date(Date.now() - daysAgo * DAY_MS);
