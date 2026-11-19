@@ -5,6 +5,7 @@ import {
   type SemanticQuery,
   type ReleaseView,
   type MetricDefinition,
+  type TenantSectorProfile,
   queryRelease,
   fetchRelease,
   fetchMetricDefinitions,
@@ -12,14 +13,17 @@ import {
   downloadReleaseCsv,
   PRESET_TENANTS
 } from "../../api/client";
+import { getSectorVocabulary } from "../../utils/vocabulary";
 import { StateView } from "../StateView";
 
 interface CohortAnalyticsTabProps {
   currentTenant: typeof PRESET_TENANTS[0];
   token: string | null;
+  sectorProfile?: TenantSectorProfile | null;
 }
 
-export function CohortAnalyticsTab({ currentTenant, token }: CohortAnalyticsTabProps) {
+export function CohortAnalyticsTab({ currentTenant, token, sectorProfile }: CohortAnalyticsTabProps) {
+  const vocab = getSectorVocabulary(sectorProfile);
   const defaultCohortRef = currentTenant.id.includes("-b000-")
     ? "org:00000000-0000-4000-b001-000000000001"
     : "org:00000000-0000-4000-a001-000000000001";
@@ -304,10 +308,13 @@ export function CohortAnalyticsTab({ currentTenant, token }: CohortAnalyticsTabP
       <div className="card">
         <div className="card-header">
           <div>
-            <div style={{ display: "flex", gap: "0.5rem", marginBottom: "0.5rem", alignItems: "center" }}>
-              <span className="badge badge-coral">PHASE 3 CERTIFIED</span>
+            <div style={{ display: "flex", gap: "0.5rem", marginBottom: "0.5rem", alignItems: "center", flexWrap: "wrap" }}>
+              <span className="badge badge-coral">PHASE 3 VERIFIED</span>
               <span className="badge badge-aubergine">DOMAIN S06: PRIVACY RELEASE</span>
               <span className="monospace-badge">{currentTenant.name}</span>
+              <span className="badge badge-secondary" data-testid="sector-vocab-pill">
+                Scope: {vocab.unit} &bull; {vocab.demandWindow}
+              </span>
             </div>
             <h3>Deterministic Cohort Measurement & Privacy Release</h3>
             <p className="card-desc">
@@ -532,10 +539,10 @@ export function CohortAnalyticsTab({ currentTenant, token }: CohortAnalyticsTabP
             <div style={{ display: "flex", gap: "0.5rem", alignItems: "center" }}>
               <span
                 className={`badge ${activeRelease.status === "RELEASED"
-                    ? "badge-success"
-                    : activeRelease.status === "STALE"
-                      ? "badge-warning"
-                      : "badge-coral"
+                  ? "badge-success"
+                  : activeRelease.status === "STALE"
+                    ? "badge-warning"
+                    : "badge-coral"
                   }`}
               >
                 STATUS: {activeRelease.status}

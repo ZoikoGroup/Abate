@@ -83,3 +83,43 @@ groups:
         annotations:
           summary: "Required Abate dependency ({{ $labels.component }}) is unreachable"
           description: "Check GET /api/health, Postgres connectivity, and S3 object store reachability."
+
+      - alert: AbateConnectorStaleDetected
+        expr: abate_connectors_stale_total > 0
+        for: 5m
+        labels:
+          severity: warning
+          service: abate-ingest
+        annotations:
+          summary: "One or more source connectors are STALE (> 3x expected cadence)"
+          description: "Inspect connector freshness via GET /api/v2/connections; never interpret outage as zero work."
+
+      - alert: AbatePackResolutionFailure
+        expr: increase(abate_pack_resolution_failures_total[5m]) > 0
+        for: 1m
+        labels:
+          severity: critical
+          service: abate-policy
+        annotations:
+          summary: "Jurisdiction or policy pack resolution failed closed"
+          description: "Inspect policy_pack effective dates, tenant_policy_binding, and pack:* kill switches."
+
+      - alert: AbateAiBudgetHighUtilization
+        expr: abate_ai_budget_utilization_ratio >= 0.8
+        for: 5m
+        labels:
+          severity: warning
+          service: abate-ai
+        annotations:
+          summary: "Bounded AI monthly budget utilization reached >= 80%"
+          description: "Review AI spend via GET /api/v2/ai/quota; manual risk-control workflows continue unaffected."
+
+      - alert: AbateTenantRateLimitBurst
+        expr: increase(abate_http_rate_limited_total[5m]) >= 25
+        for: 2m
+        labels:
+          severity: warning
+          service: abate-api
+        annotations:
+          summary: "Sustained HTTP 429 rate-limit refusals detected (noisy-tenant protection active)"
+          description: "Verify noisy-tenant isolation and inspect client retry behavior."

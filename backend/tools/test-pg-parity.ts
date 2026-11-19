@@ -26,6 +26,9 @@ import { resolveTenantSectorProfile, setTenantSectorSetting } from "../src/domai
 import { createOrganization } from "../src/domains/tenant/commands";
 import { resolveActor } from "../src/domains/tenant/auth";
 import { compileRelease } from "../src/domains/privacy";
+import { runAiUseCase, getMonthlySpendMinor } from "../src/domains/ai";
+import { EventBus } from "../src/worker/outbox-publisher";
+import { drainBatch } from "../src/worker/daemon";
 
 const requireLive = process.argv.includes("--require-live");
 let passed = 0;
@@ -317,6 +320,98 @@ async function main() {
     ]);
     const releasedCount = [relA, relB].filter((r) => r.status === "RELEASED").length;
     assert.strictEqual(releasedCount, 1, `Exactly 1 overlapping cohort may release, got ${releasedCount}`);
+  });
+
+  await check("AI Quota Atomicity on live PG (G-16): concurrent calls cannot exceed monthly cap", async () => {
+    const actor = await resolveActor(tenantA, "auth0|user-tenant-a-risk-owner");
+    const spentBefore = await withTenant(tenantA, (tx) => getMonthlySpendMinor(tx, "explain_release"));
+    const existingRes = await migratorPool!.query(
+      `SELECT monthly_budget_minor FROM ai_use_case WHERE key = 'explain_release' AND version = 1`
+    );
+    const hadRow = existingRes.rowCount && existingRes.rowCount > 0;
+    const origBudget = hadRow ? Number(existingRes.rows[0].monthly_budget_minor) : 100000;
+    const tightCap = spentBefore + 12; // Room for at most 1 call (each run reserves 10, costs 3)
+
+    if (hadRow) {
+      await migratorPool!.query(
+        `UPDATE ai_use_case SET monthly_budget_minor = $1 WHERE key = 'explain_release' AND version = 1`,
+        [tightCap]
+      );
+    } else {
+      await migratorPool!.query(
+        `INSERT INTO ai_use_case (key, version, purpose, allowed_inputs, output_schema_ref, prompt_version, model_ref, provider_region, max_steps, max_input_tokens, max_output_tokens, timeout_ms, monthly_budget_minor, enabled, eval_thresholds)
+         VALUES ('explain_release', 1, 'Explain release', '["RELEASE","KNOWLEDGE"]'::jsonb, 'schema:ai_proposal_v1', 'explain_release_v1', 'zoiko-mock-v1', 'eu-west-2', 1, 2048, 1024, 8000, $1, true, '{}'::jsonb)`,
+        [tightCap]
+      );
+    }
+
+    try {
+      const results = await Promise.allSettled(
+        Array.from({ length: 4 }, (_, i) =>
+          withTenant(tenantA, (tx) =>
+            runAiUseCase(tx, actor, "explain_release", {
+              contextRefs: [{ type: "RELEASE", id: "00000000-0000-4000-a003-000000000001" }],
+              question: `Concurrent quota probe ${i}`
+            })
+          )
+        )
+      );
+      const fulfilled = results.filter((r) => r.status === "fulfilled").length;
+      const rateLimited = results.filter(
+        (r) => r.status === "rejected" && (r.reason?.code === "RATE_LIMITED" || /budget|limit|quota/i.test(String(r.reason?.message || "")))
+      ).length;
+      assert.strictEqual(fulfilled, 1, `Exactly 1 concurrent call may pass tight budget cap, got ${fulfilled}`);
+      assert.strictEqual(rateLimited, 3, `Remaining 3 concurrent calls must fail with RATE_LIMITED, got ${rateLimited}`);
+    } finally {
+      if (hadRow) {
+        await migratorPool!.query(
+          `UPDATE ai_use_case SET monthly_budget_minor = $1 WHERE key = 'explain_release' AND version = 1`,
+          [origBudget]
+        );
+      } else {
+        await migratorPool!.query(
+          `DELETE FROM ai_use_case WHERE key = 'explain_release' AND version = 1`
+        );
+      }
+    }
+  });
+
+  await check("Live PG Worker Outbox SKIP LOCKED + Crash Recovery Deduplication (T-02 / G-01)", async () => {
+    // Pre-drain any pending outbox events left by earlier parity checks (e.g. createOrganization)
+    await drainBatch({ bus: new EventBus(), consumerName: `pg-pre-drain-${crypto.randomUUID().slice(0, 8)}`, batchSize: 100 });
+
+    const bus = new EventBus();
+    const consumer = `pg-worker-parity-${crypto.randomUUID().slice(0, 8)}`;
+    const evId = crypto.randomUUID();
+    const aggId = crypto.randomUUID();
+    const handledTargetEvents: string[] = [];
+    bus.subscribe(consumer, "*", async (env) => {
+      if (env.eventId === evId) {
+        handledTargetEvents.push(env.eventId);
+      }
+    });
+
+    await withTenant(tenantA, async (tx) => {
+      await tx.q(
+        `INSERT INTO outbox_event (id, tenant_id, aggregate, aggregate_id, aggregate_version, event_type, schema_version, purpose, refs)
+         VALUES ($1, $2, 'organization', $3, 1, 'ORG_PARITY_TEST', 'v1.0', 'PARITY', $4::jsonb)`,
+        [evId, tenantA, aggId, JSON.stringify([{ id: aggId }])]
+      );
+    });
+
+    // Attempt 1 crashes after publish (before markPublished) -> inbox_event already recorded
+    let crashed = false;
+    try {
+      await drainBatch({ bus, consumerName: consumer, simulateCrashAfterPublish: true });
+    } catch (err: any) {
+      if (err?.message === "SIMULATED_WORKER_CRASH_AFTER_PUBLISH") crashed = true;
+    }
+    assert.strictEqual(crashed, true, "Simulated crash must abort batch before markPublished");
+    assert.strictEqual(handledTargetEvents.length, 1, "First delivery must invoke consumer exactly once for target event");
+
+    // Attempt 2 recovers & marks published; inbox_event prevents duplicate effect for evId
+    await drainBatch({ bus, consumerName: consumer, simulateCrashAfterPublish: false });
+    assert.strictEqual(handledTargetEvents.length, 1, "Consumer inbox_event on live PG must deduplicate redelivered event");
   });
 
   console.log(`\n\x1b[32m✔ Live PostgreSQL Parity & Role Isolation Suite PASSED (${passed} checks).\x1b[0m\n`);

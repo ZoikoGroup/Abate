@@ -1,0 +1,33 @@
+# .github/CODEOWNERS
+# Playbook B0 & Completion Plan §5.6:
+# Database roles, grants, migrations, privacy release, authorization, metrics, policy packs, and action execution
+# require explicit security/platform review before merge.
+
+# Database schema, roles, grants, RLS policies, and triggers
+/backend/db/init/                          @abate-security @abate-platform
+/backend/db/migrations/                    @abate-security @abate-platform
+/docs/db-audit.sql                         @abate-security @abate-platform
+
+# Privacy Release compiler and deterministic measurement calculators
+/backend/src/domains/privacy/              @abate-privacy @abate-security
+/backend/src/domains/measure/              @abate-privacy @abate-platform
+
+# Authentication, OIDC, authorization, and tenant isolation primitives
+/backend/src/domains/tenant/auth*          @abate-security
+/backend/src/domains/support/              @abate-security
+/backend/src/platform/oidc.ts              @abate-security
+/backend/src/platform/ssrf.ts              @abate-security
+/backend/src/platform/rate-limit.ts        @abate-security
+/backend/src/platform/db/with-tenant.ts    @abate-security @abate-platform
+
+# Policy packs, retention lifecycle, and external action broker
+/backend/src/domains/lifecycle/            @abate-governance @abate-platform
+/backend/src/domains/actions/              @abate-security @abate-platform
+/backend/src/domains/ai/                   @abate-security @abate-platform
+
+# CI/CD workflows, container builds, and release dossier governance
+/.github/workflows/                        @abate-platform @abate-security
+/backend/Dockerfile                        @abate-platform @abate-security
+/frontend/Dockerfile                       @abate-platform @abate-security
+/docs/governance/                          @abate-governance
+/ops/                                      @abate-platform

@@ -14,6 +14,7 @@ import {
   DEFAULT_MAX_ATTEMPTS,
   DEFAULT_LEASE_SECONDS
 } from "./outbox-publisher";
+import { runScheduledRetentionPass } from "./retention-executor";
 
 export interface WorkerMetrics {
   workerId: string;
@@ -26,6 +27,8 @@ export interface WorkerMetrics {
   totalDeadLetters: number;
   lastError: string | null;
   lastRunAt: string | null;
+  lastRetentionRunAt?: string | null;
+  retentionPurgedTotal?: number;
 }
 
 export interface WorkerOptions {
@@ -38,6 +41,8 @@ export interface WorkerOptions {
   bus?: EventBus;
   consumerName?: string;
   simulateCrashAfterPublish?: boolean;
+  enableRetentionExecutor?: boolean;
+  retentionIntervalMs?: number;
 }
 
 // Global live metrics state for operations dashboard and health endpoints
@@ -51,7 +56,9 @@ const globalMetrics: WorkerMetrics = {
   totalFailures: 0,
   totalDeadLetters: 0,
   lastError: null,
-  lastRunAt: null
+  lastRunAt: null,
+  lastRetentionRunAt: null,
+  retentionPurgedTotal: 0
 };
 
 // In-memory (per-process) map to detect stale versions: `${consumer}:${aggregate_id}` -> highest version consumed
@@ -187,7 +194,7 @@ export async function drainBatch(opts: WorkerOptions = {}): Promise<{
     }
   } finally {
     for (const id of unfinished) {
-      await releaseClaim(id).catch(() => {});
+      await releaseClaim(id).catch(() => { });
     }
   }
 
@@ -203,6 +210,8 @@ let stopRequested = false;
 export async function runWorkerDaemon(opts: WorkerOptions = {}): Promise<void> {
   const minIntervalMs = opts.minIntervalMs || 100;
   const maxIntervalMs = opts.maxIntervalMs || 5000;
+  const retentionIntervalMs = opts.retentionIntervalMs || 3_600_000;
+  let lastRetentionTick = 0;
   let currentDelay = minIntervalMs;
 
   daemonRunning = true;
@@ -221,6 +230,13 @@ export async function runWorkerDaemon(opts: WorkerOptions = {}): Promise<void> {
     while (!stopRequested) {
       try {
         const result = await drainBatch(opts);
+
+        if (opts.enableRetentionExecutor && Date.now() - lastRetentionTick >= retentionIntervalMs) {
+          lastRetentionTick = Date.now();
+          const retSummary = await runScheduledRetentionPass();
+          globalMetrics.lastRetentionRunAt = retSummary.executedAt;
+          globalMetrics.retentionPurgedTotal = (globalMetrics.retentionPurgedTotal || 0) + retSummary.totalPurged;
+        }
 
         if (result.processed > 0) {
           // If work was found and processed, poll immediately with minimal backoff

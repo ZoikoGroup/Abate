@@ -267,6 +267,15 @@ export const openApiSpec = {
         responses: {
           "200": { description: "TenantSectorProfile" }
         }
+      },
+      put: {
+        tags: ["Tenants & Organizations"],
+        summary: "Update per-tenant sector pack setting (tenant_sector_setting) via idempotent command",
+        responses: {
+          "200": { description: "Updated TenantSectorProfile" },
+          "400": { description: "Validation error or missing Idempotency-Key" },
+          "403": { description: "Requires RISK_OWNER or EMPLOYER_ADMIN role" }
+        }
       }
     },
     "/connections/{id}/pause": {

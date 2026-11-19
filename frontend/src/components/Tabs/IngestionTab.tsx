@@ -14,14 +14,17 @@ import {
   type IngestReceipt,
   type WorkFact,
   type ZoikoTimeBatchPayload,
+  type TenantSectorProfile,
   PRESET_TENANTS,
   ApiError
 } from "../../api/client";
+import { getSectorVocabulary } from "../../utils/vocabulary";
 import { StateView } from "../StateView";
 
 interface IngestionTabProps {
   currentTenant: typeof PRESET_TENANTS[0];
   token: string | null;
+  sectorProfile?: TenantSectorProfile | null;
   onRefresh: () => void;
 }
 
@@ -32,7 +35,8 @@ function withReqId(err: unknown, fallback: string): string {
   return err instanceof Error ? err.message : fallback;
 }
 
-export function IngestionTab({ currentTenant, token, onRefresh }: IngestionTabProps) {
+export function IngestionTab({ currentTenant, token, sectorProfile, onRefresh }: IngestionTabProps) {
+  const vocab = getSectorVocabulary(sectorProfile);
   const [contracts, setContracts] = useState<SourceContract[]>([]);
   const [selectedContractId, setSelectedContractId] = useState<string>("");
   const [newCadenceSeconds, setNewCadenceSeconds] = useState<string>("3600");
@@ -453,7 +457,7 @@ export function IngestionTab({ currentTenant, token, onRefresh }: IngestionTabPr
         <h2 style={{ marginTop: "0.5rem" }}>Ingestion & Work-State Ledger</h2>
         <p className="lead">
           Strict schema ingestion pipeline without surveillance overcollection. Source contracts filter
-          data at the boundary, enforce tenant-scoped HMAC pseudonymization, evaluate source freshness
+          {` ${vocab.workItems.toLowerCase()} `}and{` ${vocab.unit.toLowerCase()} `}cadence metadata at the boundary, enforce tenant-scoped HMAC pseudonymization, evaluate source freshness
           over time, and maintain an append-only historical work ledger.
         </p>
         <div className="tagline-quote">&ldquo;Change the work. Not the worker.&rdquo;</div>

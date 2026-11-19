@@ -17,7 +17,18 @@ import { withWorker, memDb } from "../src/platform/db/with-tenant";
 import { setRateLimitOverridesForTest } from "../src/platform/rate-limit";
 import { signConnectorWebhook, clearWebhookReplayCache } from "../src/domains/ingest/webhook-auth";
 import { scrubTelemetryAttributes, telemetry, logSafeError } from "../src/platform/telemetry";
-import { loadConfig, resetConfigCache } from "../src/platform/config";
+import { loadConfig, resetConfigCache, buildConfig } from "../src/platform/config";
+import { assertSafeOutboundUrl } from "../src/platform/ssrf";
+import { runScheduledRetentionPass } from "../src/worker/retention-executor";
+import {
+  evaluateOperationalAlerts,
+  renderPrometheusMetrics,
+  setStaleConnectorCount,
+  recordPackResolutionFailure,
+  setAiBudgetUtilizationRatio,
+  recordRateLimitHit,
+  resetOperationalSignals
+} from "../src/platform/monitoring";
 
 let passed = 0;
 
@@ -360,6 +371,144 @@ async function main() {
     assert.strictEqual(decoyRes.body.code, "VALIDATION");
     assert.ok(Array.isArray(decoyRes.body.fields) && decoyRes.body.fields.includes("keystroke_tracker"));
     assert.ok(!JSON.stringify(decoyRes.body).includes(secretDecoyVal), "400 error body must never echo submitted values");
+  });
+
+  await check("SSRF Outbound Guard (Section 6 & 9): blocks metadata, private IPs, and non-HTTPS in production", () => {
+    const prodCfg = buildConfig({ APP_ENV: "production", NODE_ENV: "production" });
+    assert.throws(() => assertSafeOutboundUrl("http://169.254.169.254/latest/meta-data/", { cfg: prodCfg }), /prohibited|metadata/i);
+    assert.throws(() => assertSafeOutboundUrl("http://metadata.google.internal/computeMetadata/v1/", { cfg: prodCfg }), /prohibited|metadata/i);
+    assert.throws(() => assertSafeOutboundUrl("https://10.0.0.5/jwks.json", { cfg: prodCfg }), /private|reserved/i);
+    assert.throws(() => assertSafeOutboundUrl("https://127.0.0.1/token", { cfg: prodCfg }), /private|reserved/i);
+    assert.throws(() => assertSafeOutboundUrl("http://idp.example.com/.well-known/jwks.json", { cfg: prodCfg }), /HTTPS/i);
+    assert.doesNotThrow(() => assertSafeOutboundUrl("https://idp.example.com/.well-known/jwks.json", { cfg: prodCfg }));
+  });
+
+  await check("Cursor Pagination & Allow-Listed Filters: returns X-Next-Cursor and rejects unknown filter keys (400)", async () => {
+    for (let i = 0; i < 2; i++) {
+      await expressCall("POST", "/api/v2/organizations", {
+        token: tokenA,
+        headers: { "idempotency-key": `cursor-org-${i}-${crypto.randomUUID()}` },
+        body: { name: `Cursor Page Org ${i}` }
+      });
+    }
+    const page1 = await expressCall("GET", "/api/v2/organizations?limit=1", { token: tokenA });
+    assert.strictEqual(page1.status, 200);
+    assert.strictEqual(page1.body.length, 1);
+    assert.strictEqual(page1.headers["x-has-more"], "true");
+    assert.ok(page1.headers["x-next-cursor"], "X-Next-Cursor header must be set when more items exist");
+
+    const page2 = await expressCall("GET", `/api/v2/organizations?limit=1&cursor=${encodeURIComponent(page1.headers["x-next-cursor"]!)}`, { token: tokenA });
+    assert.strictEqual(page2.status, 200);
+    assert.strictEqual(page2.body.length, 1);
+    assert.notStrictEqual(page2.body[0].id, page1.body[0].id, "Page 2 must advance past Page 1 cursor");
+
+    const badFilter = await expressCall("GET", "/api/v2/organizations?evilFilter=SECRET_VAL_XYZ", { token: tokenA });
+    assert.strictEqual(badFilter.status, 400);
+    assert.strictEqual(badFilter.body.code, "VALIDATION");
+    assert.ok(badFilter.body.fields?.includes("evilFilter"));
+    assert.ok(!JSON.stringify(badFilter.body).includes("SECRET_VAL_XYZ"), "Unknown query filter error must not echo value");
+  });
+
+  await check("ETag / If-Match Concurrency & 202 Recalculation Job (Section 6)", async () => {
+    // 1. Connection ETag & stale If-Match -> 409
+    const reg = await expressCall("POST", "/api/v2/connections", {
+      token: tokenA,
+      headers: { "idempotency-key": `etag-conn-${crypto.randomUUID()}` },
+      body: { source: "ZoikoTime", contractId: "00000000-0000-4000-a005-000000000001", expectedCadenceSeconds: 3600 }
+    });
+    const getConn = await expressCall("GET", `/api/v2/connections/${reg.body.id}`, { token: tokenA });
+    assert.strictEqual(getConn.status, 200);
+    assert.strictEqual(getConn.headers["etag"], '"ACTIVE"');
+
+    const staleConn = await expressCall("POST", `/api/v2/connections/${reg.body.id}/suspend`, {
+      token: tokenA,
+      headers: { "idempotency-key": `etag-stale-${crypto.randomUUID()}`, "if-match": '"PAUSED"' }
+    });
+    assert.strictEqual(staleConn.status, 409);
+
+    // 2. Hazard ETag & stale If-Match -> 409
+    const haz = await expressCall("GET", `/api/v2/hazards/${GOLDEN_01.approvedControl.hazardId}`, { token: tokenA });
+    assert.strictEqual(haz.status, 200);
+    assert.ok(haz.headers["etag"], "GET /api/v2/hazards/:id must return ETag header");
+
+    const staleHaz = await expressCall("POST", `/api/v2/hazards/${GOLDEN_01.approvedControl.hazardId}/disposition`, {
+      token: tokenA,
+      headers: { "if-match": '"999"' },
+      body: { disposition: "CONTROLLED", rationale: "Stale check", residualRisk: "LOW", reviewDate: "2026-12-31" }
+    });
+    assert.strictEqual(staleHaz.status, 409);
+
+    // 3. Long-running metric recalculation returns 202 Accepted + jobId
+    const recalc = await expressCall("POST", "/api/v2/metrics/BOUNDARY_INTRUSION_SHARE/recalculate", { token: tokenA });
+    assert.strictEqual(recalc.status, 202);
+    assert.ok(recalc.body.jobId, "202 Accepted response must include jobId");
+  });
+
+  await check("Scheduled Retention Executor Worker (G-21 / T-19): runs active retention policy safely", async () => {
+    const setClass = await expressCall("POST", "/api/v2/retention/classes", {
+      token: tokenA,
+      headers: { "idempotency-key": `ret-exec-class-${crypto.randomUUID()}` },
+      body: { dataCategory: "WORK_FACT", retentionDays: 120, basis: "Executor verification schedule" }
+    });
+    assert.ok(setClass.status === 200 || setClass.status === 201);
+
+    const summary = await runScheduledRetentionPass({ tenantIds: [GOLDEN_01.tenantA.id] });
+    assert.strictEqual(summary.tenantsEvaluated, 1);
+    assert.strictEqual(summary.runsExecuted, 1);
+    assert.strictEqual(summary.totalBlocked, 0);
+  });
+
+  await check("Observability 6-Category Alerts & Prometheus Metrics (Section 6): freshness, outbox, privacy, pack, AI cost, tenant load", () => {
+    resetOperationalSignals();
+    try {
+      setStaleConnectorCount(2);
+      recordPackResolutionFailure();
+      setAiBudgetUtilizationRatio(0.85);
+      for (let i = 0; i < 25; i++) recordRateLimitHit();
+
+      const sloStub = {
+        latency: [],
+        availability: { requests: 100, serverErrors: 0, ratio: 1, target: 0.999, status: "MET" }
+      };
+      const workerStub = {
+        state: "RUNNING",
+        queueDepth: 3,
+        queueLagMs: 75_000,
+        totalProcessed: 10,
+        totalFailures: 0,
+        totalDeadLetters: 0
+      };
+      const depsStub = { databaseOk: true, databaseRequired: false, objectStoreOk: true, objectStoreMode: "memory" };
+
+      const report = evaluateOperationalAlerts({
+        cfg: loadConfig(),
+        sloReport: sloStub,
+        workerMetrics: workerStub,
+        deps: depsStub
+      });
+      const firingIds = new Set(report.alerts.filter((a) => a.state === "FIRING").map((a) => a.id));
+      for (const expectedId of [
+        "AbateConnectorStaleDetected",
+        "AbatePackResolutionFailure",
+        "AbateAiBudgetHighUtilization",
+        "AbateTenantRateLimitBurst",
+        "AbateWorkerQueueLagHigh"
+      ]) {
+        assert.ok(firingIds.has(expectedId), `Expected alert ${expectedId} to fire`);
+      }
+
+      const prom = renderPrometheusMetrics({ sloReport: sloStub, workerMetrics: workerStub, deps: depsStub });
+      for (const metricName of [
+        "abate_connectors_stale_total 2",
+        "abate_pack_resolution_failures_total 1",
+        "abate_ai_budget_utilization_ratio 0.85",
+        "abate_http_rate_limited_total 25"
+      ]) {
+        assert.ok(prom.includes(metricName), `Expected Prometheus metric '${metricName}'`);
+      }
+    } finally {
+      resetOperationalSignals();
+    }
   });
 
   console.log(`\n\x1b[32m✔ Completion Gates Verification PASSED (${passed} checks).\x1b[0m\n`);

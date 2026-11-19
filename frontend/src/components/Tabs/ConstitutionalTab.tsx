@@ -1,5 +1,6 @@
 // frontend/src/components/Tabs/ConstitutionalTab.tsx
 import type { SystemHealth, SystemInfo } from "../../api/client";
+import { StateView } from "../StateView";
 
 interface ConstitutionalTabProps {
   health: SystemHealth | null;
@@ -9,6 +10,9 @@ interface ConstitutionalTabProps {
 export function ConstitutionalTab({ health, info }: ConstitutionalTabProps) {
   return (
     <div className="tab-pane">
+      {!health && (
+        <StateView state={{ kind: "loading" }} />
+      )}
       <div className="card hero-banner">
         <h2>Zoiko Abate Core Mission & Architecture Baseline</h2>
         <p className="lead">

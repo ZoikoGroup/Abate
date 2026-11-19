@@ -9,8 +9,37 @@ import { openApiSpec } from "../src/contracts/openapi";
 
 const REPO_ROOT = path.resolve(__dirname, "../..");
 const OUT_PATH = path.join(REPO_ROOT, "docs/openapi.json");
+const GENERATED_TS_PATH = path.join(REPO_ROOT, "frontend/src/api/openapi.generated.ts");
 const CLIENT_PATH = path.join(REPO_ROOT, "frontend/src/api/client.ts");
 const CHECK_ONLY = process.argv.includes("--check");
+
+function renderGeneratedClientTypes(spec: any): string {
+  const pathsObj: Record<string, Record<string, any>> = spec.paths || {};
+  const sortedPaths = Object.keys(pathsObj).sort();
+  const pathMethodLines = sortedPaths.map((p) => {
+    const methods = Object.keys(pathsObj[p] || {})
+      .filter((m) => ["get", "post", "put", "patch", "delete"].includes(m.toLowerCase()))
+      .map((m) => `"${m.toUpperCase()}"`)
+      .sort();
+    return `  ${JSON.stringify(p)}: [${methods.join(", ")}] as const`;
+  });
+
+  return [
+    "// AUTO-GENERATED from backend/src/contracts/openapi.ts via `npm --prefix backend run generate:openapi`.",
+    "// Do not hand-edit; CI checks drift via `npm --prefix backend run generate:openapi -- --check`.",
+    "",
+    `export const OPENAPI_SPEC_VERSION = ${JSON.stringify(spec?.info?.version || "1.0.0")} as const;`,
+    `export const OPENAPI_SERVER_BASE = ${JSON.stringify(spec?.servers?.[0]?.url || "/api/v2")} as const;`,
+    "",
+    "export const OPENAPI_PATHS = {",
+    pathMethodLines.join(",\n"),
+    "} as const;",
+    "",
+    "export type OpenApiPath = keyof typeof OPENAPI_PATHS;",
+    "export type OpenApiMethod<P extends OpenApiPath = OpenApiPath> = (typeof OPENAPI_PATHS)[P][number];",
+    ""
+  ].join("\n");
+}
 
 function normalizeRouteTemplate(raw: string): string[] {
   const base = raw
@@ -63,6 +92,8 @@ function main() {
   }
   console.log(`  \x1b[32m✔\x1b[0m Frontend client.ts routes (${matches.length} call sites) match ${specPaths.size} OpenAPI paths.`);
 
+  const generatedTs = renderGeneratedClientTypes(openApiSpec);
+
   if (CHECK_ONLY) {
     if (!fs.existsSync(OUT_PATH)) {
       console.error("  \x1b[31m✖\x1b[0m docs/openapi.json is missing. Run: npm --prefix backend run generate:openapi");
@@ -73,12 +104,17 @@ function main() {
       console.error("  \x1b[31m✖\x1b[0m docs/openapi.json is out of date. Run: npm --prefix backend run generate:openapi");
       process.exit(1);
     }
-    console.log("  \x1b[32m✔\x1b[0m docs/openapi.json is in sync with backend/src/contracts/openapi.ts.\n");
+    if (!fs.existsSync(GENERATED_TS_PATH) || fs.readFileSync(GENERATED_TS_PATH, "utf-8") !== generatedTs) {
+      console.error("  \x1b[31m✖\x1b[0m frontend/src/api/openapi.generated.ts is out of date. Run: npm --prefix backend run generate:openapi");
+      process.exit(1);
+    }
+    console.log("  \x1b[32m✔\x1b[0m docs/openapi.json and frontend/src/api/openapi.generated.ts are in sync.\n");
     return;
   }
 
   fs.writeFileSync(OUT_PATH, specJson, "utf-8");
-  console.log(`  \x1b[32m✔\x1b[0m Wrote ${path.relative(REPO_ROOT, OUT_PATH)} (${specPaths.size} paths).\n`);
+  fs.writeFileSync(GENERATED_TS_PATH, generatedTs, "utf-8");
+  console.log(`  \x1b[32m✔\x1b[0m Wrote ${path.relative(REPO_ROOT, OUT_PATH)} and ${path.relative(REPO_ROOT, GENERATED_TS_PATH)} (${specPaths.size} paths).\n`);
 }
 
 main();

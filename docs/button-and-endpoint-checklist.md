@@ -1,8 +1,8 @@
 # Abate Button, Demo Step & Endpoint Verification Checklist
 
-> **Verification Date:** 2026-11-17
-> **Verified Against:** Updated workspace after all Part 2 frontend & backend fixes
-> **Playwright & Axe Suite:** `38 / 38 PASS` (`0` failed, `0` skipped, `1.7m` on isolated ports `5055` / `5174`)
+> **Verification Date:** 2026-11-19
+> **Verified Against:** Updated workspace after Sprints 1–2 and Phase B completion
+> **Playwright & Axe Suite:** `45 / 45 PASS` (`0` failed, `0` skipped, `2.2m`)
 
 ---
 
@@ -115,7 +115,7 @@ Every `/api/v2/*` route invoked by `frontend/src/api/client.ts`, `LiveDemoConsol
 | Cohort Analytics & Privacy | `4. Parent/Child Residual Attack` | `POST /api/v2/releases/query` (ensures parent first) | `200 OK` (`status: "UNAVAILABLE"`); `RELEASE SUPPRESSED` | PASS | `tests/e2e/all-tabs-buttons.spec.ts:132` (`ok 19`) |
 | Cohort Analytics & Privacy | `Execute Semantic Query` | `POST /api/v2/releases/query` | `200 OK`; `PRIVACY COMPILER RELEASE APPROVED` | PASS | `tests/e2e/all-tabs-buttons.spec.ts:132` (`ok 19`) |
 | Cohort Analytics & Privacy | `Export Release CSV` | `GET /api/v2/releases/:id/export.csv` | `200 OK`; `RELEASE CSV EXPORTED` | PASS | `tests/e2e/all-tabs-buttons.spec.ts:132` (`ok 19`) |
-| Cohort Analytics & Privacy | `Trigger Recalculation` | `POST /api/v2/metrics/:id/recalculate` | `200 OK`; `METRIC RECALCULATION TRIGGERED` | PASS | `tests/e2e/all-tabs-buttons.spec.ts:132` (`ok 19`) |
+| Cohort Analytics & Privacy | `Trigger Recalculation` | `POST /api/v2/metrics/:id/recalculate` | `202 Accepted` + `jobId`; `METRIC RECALCULATION TRIGGERED` | PASS | `tests/e2e/all-tabs-buttons.spec.ts:183` (`ok 22`) |
 | **Hazards & Controls (Phase 4)** | Legal Matter Cards (`button`) | `POST /api/v2/sector/legal/fatigue-check` | `200 OK`; selects matter & loads SRA fatigue assessment | PASS | `tests/e2e/all-tabs-buttons.spec.ts:175` (`ok 20`) |
 | Hazards & Controls | `Use Seeded Baseline` + `+ Register Authoritative Hazard` | `POST /api/v2/hazards` | `200`/`201`; `HAZARD REGISTERED IN AUTHORITATIVE STATE` | PASS | `tests/e2e/all-tabs-buttons.spec.ts:175` (`ok 20`, `ok 37`) |
 | Hazards & Controls | `AiPanel`: `Generate AI Explanation` / `Discard` | `POST /api/v2/ai/explain-release`, `POST /api/v2/ai/runs/:id/discard` | `200 OK`; displays & discards draft proposal | PASS | `tests/e2e/all-tabs-buttons.spec.ts:175` (`ok 20`) |
@@ -156,22 +156,26 @@ Every `/api/v2/*` route invoked by `frontend/src/api/client.ts`, `LiveDemoConsol
 | **Transactional Outbox** | `⟳ Trigger Worker Drain Loop` | `POST /api/v2/outbox/drain` | `200 OK`; `DRAIN LOOP EXECUTED` inline banner | PASS | `tests/e2e/all-tabs-buttons.spec.ts:509` (`ok 27`) |
 | **Append-Only Audit Trail** | `↻ Refresh Log` | `GET /api/v2/audit-events` | `200 OK`; reloads tenant audit table with inline status | PASS | `tests/e2e/all-tabs-buttons.spec.ts:519` (`ok 28`) |
 | **Audit Verifier & Merkle** | `Issue & Verify Live Package`, `Simulate Artifact Tamper`, `Load Clean Sample Bundle`, `Re-Verify Bundle`, `Inspect Merkle proof for leaf ...` | `POST /api/v2/evidence-packages` + client `crypto.subtle` WebCrypto | `201` on live package; detects tamper (`TAMPER OR MISMATCH DETECTED`); verifies clean sample (`VERIFIED: Manifest Hash`) | PASS | `tests/e2e/all-tabs-buttons.spec.ts:529` (`ok 29`, `ok 31`) |
-| **Constitutional Invariants** | `OpenAPI 3.1 Contract Registry ->` link | `GET /api/v2/contracts/openapi.json` | `200 OK`; serves OpenAPI `3.1.0` JSON (`106` paths) | PASS | `tests/e2e/all-tabs-buttons.spec.ts:553` (`ok 30`) |
+| **Constitutional Invariants** | `OpenAPI 3.1 Contract Registry ->` link | `GET /api/v2/contracts/openapi.json` | `200 OK`; serves OpenAPI `3.1.0` JSON (`112` paths, synced with `openapi.generated.ts`) | PASS | `tests/e2e/all-tabs-buttons.spec.ts:568` (`ok 33`) |
+| **Responsive & Keyboard & Sector Neutrality** | Desktop (`1280x800`), Tablet (`768x1024`), Phone (`390x844`), Tab focus, `PUT /api/v2/tenant/sector-profile` (`GENERIC`) | `GET/PUT /api/v2/tenant/sector-profile`, `GET /api/v2/me` | Primary buttons reachable across viewports; Legal tab hidden & neutral `Unit / Team` / `Demand Window` vocabulary shown when `GENERIC` pack active | PASS | `tests/e2e/responsive-and-sector-neutral.spec.ts` (`ok 42, 43, 44`) |
 
 ---
 
-## 5. Verification Command Outputs Summary (`2026-11-17` Post-Edit)
+## 5. Verification Command Outputs Summary (`2026-11-19` Post-Edit)
 
 | Command | Result | Exact Observed Scope / Output |
 | :--- | :--- | :--- |
-| `npm --prefix backend run build` | PASS | Exited `0` (`tsc`) |
-| `npm --prefix frontend run lint` | PASS | Exited `0` (`Found 0 warnings and 0 errors` on `29` files) |
-| `npm --prefix frontend run build` | PASS | Exited `0` (`41 modules transformed`, built in `455ms`) |
+| `npm --prefix backend run build` | PASS | Exited `0` (`tsc`, `0` errors across `src/` & `tools/`) |
+| `npm --prefix backend run lint:wording` | PASS | Exited `0` (`Scanned 133 files with 0 overclaim violations`) |
+| `npm --prefix backend run generate:openapi -- --check` | PASS | Exited `0` (`112` OpenAPI paths synced across `docs/openapi.json` and `frontend/src/api/openapi.generated.ts`) |
+| `npm --prefix frontend run lint` | PASS | Exited `0` (`0` errors on `32` files) |
+| `npm --prefix frontend test` | PASS | Exited `0` (`9 StateView states + 3 sector vocabularies`) |
+| `npm --prefix frontend run build` | PASS | Exited `0` (`tsc -b && vite build`, `44` modules transformed) |
 | `npm --prefix tests run typecheck` | PASS | Exited `0` (`tsc -p tsconfig.json --noEmit`) |
-| `npm --prefix tests run test:e2e` | PASS | Exited `0`: **`38 passed (1.7m)`** (`15` Axe WCAG 2.1 AA scans + `15` `all-tabs-buttons` interactive specs + `live-demo-console` 12-step sequential refusal test + `6` domain E2E specs) |
-| `npm --prefix backend run test-boundaries` | PASS | Exited `0`: **`All 57 boundary, isolation, and reliability tests passed`** (`frontend/public/test-report.json` updated) |
-| `npm --prefix backend run test-worker` | PASS | Exited `0`: **`Worker Crash Lab Results: 6/6 PASSED in 63ms`** |
-| `npm --prefix backend run check:endpoints` | PASS | Exited `0`: **`All 22 endpoint invariant checks PASSED with 0 failures`** (`106` OpenAPI paths, `docs/endpoint-checks/2026-11-17.md` updated) |
+| `npm --prefix tests run test:e2e` | PASS | Exited `0`: **`45 passed (2.2m)`** (`18` Axe WCAG 2.1 AA + viewport scans + `15` `all-tabs-buttons` + `3` `responsive-and-sector-neutral` + `live-demo-console` + `7` domain/OIDC E2E specs) |
+| `npm --prefix backend run test-completion` | PASS | Exited `0`: **`11 checks PASSED`** (rate limits, HMAC webhooks, telemetry scrubbing, connection states, headers, dead-letter replay, 400/409 error shape, SSRF guard, cursor pagination & filter allowlist, ETag/If-Match & 202 recalc, scheduled retention executor) |
+| `npm --prefix backend run rehearse:key-rotation` | PASS | Exited `0`: **`4/4 PASSED`** (`evidence/key-rotation-rehearsal-report.json`, `0` secret leaks) |
+| `npm --prefix backend run drill:incident` | PASS | Exited `0`: **Detected `87ms`, contained `5ms`, recovered `43ms`**, `0` decoy leaks (`evidence/incident-exercise-report.json`) |
+| `npm --prefix backend run build-dossier` | PASS | Exited `0`: **`READY FOR REVIEW`** (57 boundaries, 10 ingest, 9 privacy, 9 control, 11 retention, 16 AI, 7 planes, 7 worker, 5 pilot, 2 verify-pg, 24 endpoint checks, 9/9 30d sim, 5/5 kill switches, 6/6 challenge P0=0; bound to `sbom.json`) |
 | `npm --prefix backend run test-fast` | PASS | Exited `0`: **`12 fast unit and policy tests passed`** |
 | `npm --prefix backend run test-pilot` | PASS | Exited `0`: **`5 pilot readiness gates verified`** |
-| `npm --prefix backend run verify-pg-smoke` | FAIL (No PG host) | Exited `1`: `AggregateError [ECONNREFUSED]` on `::1:5432` and `127.0.0.1:5432` |

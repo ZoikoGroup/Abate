@@ -30,6 +30,7 @@ import { createOrganization, getOrganization, listOrganizations, getTenant } fro
 import { ingestBatch, listSourceContracts, listConnections, getConnection, registerConnection, setConnectionState, listReceipts, listWorkFacts, type ConnectionState } from "./domains/ingest";
 import { verifyConnectorWebhookRequest } from "./domains/ingest/webhook-auth";
 import { rateLimitMiddleware } from "./platform/rate-limit";
+import { applyCursorPagination, setPaginationHeaders, validateAllowedQueryParams } from "./platform/pagination";
 import { compileRelease, getRelease, getReleaseTx } from "./domains/privacy";
 import {
   ExplainReleaseInput,
@@ -86,6 +87,7 @@ import {
   recordCorrection,
   acknowledgeCorrection,
   resolveTenantSectorProfile,
+  setTenantSectorSetting,
   assertTenantHasLegalPack
 } from "./domains/lifecycle";
 import {
@@ -178,7 +180,8 @@ app.use((req: Request, res: Response, next: NextFunction) => {
 
 app.use(cors({
   origin: cfg.clientUrl,
-  credentials: true
+  credentials: true,
+  exposedHeaders: ["ETag", "X-Next-Cursor", "X-Has-More", "X-Request-Id", "Retry-After"]
 }));
 
 app.use(compression());
@@ -657,6 +660,66 @@ app.get("/api/v2/tenant/sector-profile", async (req: Request, res: Response) => 
   }
 });
 
+const SetTenantSectorProfileBody = z.object({
+  sectorKey: z.enum(["GENERIC", "LEGAL", "ACCOUNTING"]),
+  packKey: z.string().min(2).max(120)
+}).strict();
+
+app.put("/api/v2/tenant/sector-profile", async (req: Request, res: Response) => {
+  try {
+    const who = await authenticate(getHeader(req, "authorization"));
+    const actor = await resolveActor(who.tenantId, who.subject, new Date(), who.role);
+    const idempotencyKey = getHeader(req, "idempotency-key") || getHeader(req, "x-idempotency-key");
+    if (!idempotencyKey) {
+      throw new AppError("VALIDATION", "Header 'Idempotency-Key' is required for all state-changing commands.", undefined, undefined, ["Idempotency-Key"]);
+    }
+    const input = SetTenantSectorProfileBody.parse(req.body);
+    const isAdmin = actor.memberships.some((m: any) => ["RISK_OWNER", "EMPLOYER_ADMIN"].includes(m.domain_role));
+    if (!isAdmin) {
+      throw new AppError("FORBIDDEN", "Only a Risk Owner or Employer Admin may change tenant sector pack settings.");
+    }
+    const result = await runCommand({
+      tenantId: who.tenantId,
+      operation: "tenant.sector_profile.set",
+      idempotencyKey,
+      requestHash: computeRequestHash(input),
+      actor,
+      body: async (tx) => {
+        await setTenantSectorSetting(tx, {
+          tenantId: who.tenantId,
+          sectorKey: input.sectorKey,
+          packKey: input.packKey,
+          updatedBy: actor.principalId
+        });
+        const profile = await resolveTenantSectorProfile(tx, who.tenantId);
+        return {
+          result: profile,
+          audit: {
+            purpose: who.purpose,
+            command: "tenant.sector_profile.set",
+            resourceType: "tenant_sector_setting",
+            resourceId: who.tenantId,
+            result: "SUCCESS" as const,
+            evidenceRefs: [`sector_pack/${input.packKey}`]
+          },
+          events: [{
+            aggregate: "tenant_sector_setting",
+            aggregateId: who.tenantId,
+            aggregateVersion: 1,
+            eventType: "tenant.sector_profile.updated",
+            schemaVersion: "v1.0",
+            purpose: who.purpose,
+            refs: [`sector_pack/${input.packKey}`]
+          }]
+        };
+      }
+    });
+    res.status(result.status).json(result.body);
+  } catch (err) {
+    toErrorResponse(err, res);
+  }
+});
+
 // Inspect single tenant profile with strict boundary enforcement
 app.get("/api/v2/tenants/:id", async (req: Request, res: Response) => {
   try {
@@ -707,11 +770,18 @@ app.post("/api/v2/organizations", async (req: Request, res: Response) => {
 
 app.get("/api/v2/organizations", async (req: Request, res: Response) => {
   try {
+    validateAllowedQueryParams(req, ["limit", "cursor"]);
     const who = await authenticate(getHeader(req, "authorization"));
     const actor = await resolveActor(who.tenantId, who.subject, new Date(), who.role);
 
     const orgs = await listOrganizations({ who, actor });
-    res.status(200).json(orgs);
+    const page = applyCursorPagination(orgs, {
+      cursor: typeof req.query.cursor === "string" ? req.query.cursor : undefined,
+      limit: parseLimit(req, 200, 500),
+      getKey: (o: any) => String(o.id)
+    });
+    setPaginationHeaders(res, page);
+    res.status(200).json(page.items);
   } catch (err) {
     toErrorResponse(err, res);
   }
@@ -734,15 +804,29 @@ app.get("/api/v2/organizations/:id", async (req: Request, res: Response) => {
 // Audit events query for caller's tenant
 app.get("/api/v2/audit-events", async (req: Request, res: Response) => {
   try {
+    validateAllowedQueryParams(req, ["limit", "cursor", "command", "resourceType"]);
     const who = await authenticate(getHeader(req, "authorization"));
     await resolveActor(who.tenantId, who.subject, new Date(), who.role);
 
     // RLS scopes the audit trail to the authenticated tenant
     const auditLimit = parseLimit(req, 200, 1000);
-    const events = await withTenant(who.tenantId, async (tx) =>
-      (await tx.q(`SELECT * FROM audit_event ORDER BY occurred_at DESC LIMIT ${auditLimit}`)).rows.slice(0, auditLimit)
+    const filterCommand = typeof req.query.command === "string" ? req.query.command : undefined;
+    const filterResourceType = typeof req.query.resourceType === "string" ? req.query.resourceType : undefined;
+    const rawEvents = await withTenant(who.tenantId, async (tx) =>
+      (await tx.q(`SELECT * FROM audit_event ORDER BY occurred_at DESC LIMIT 1000`)).rows
     );
-    res.status(200).json(events);
+    const filtered = rawEvents.filter((e: any) => {
+      if (filterCommand && e.command !== filterCommand) return false;
+      if (filterResourceType && e.resource_type !== filterResourceType) return false;
+      return true;
+    });
+    const page = applyCursorPagination(filtered, {
+      cursor: typeof req.query.cursor === "string" ? req.query.cursor : undefined,
+      limit: auditLimit,
+      getKey: (e: any) => String(e.id)
+    });
+    setPaginationHeaders(res, page);
+    res.status(200).json(page.items);
   } catch (err) {
     toErrorResponse(err, res);
   }
@@ -817,14 +901,28 @@ async function handleConnectionStateRequest(
   try {
     const who = await authenticate(getHeader(req, "authorization"));
     const actor = await resolveActor(who.tenantId, who.subject, new Date(), who.role);
+    const connectionId = String(req.params.id);
+
+    const ifMatch = getHeader(req, "if-match");
+    if (ifMatch) {
+      const current = await getConnection({ who, actor, connectionId });
+      const expectedEtag = String(current.state);
+      const cleanMatch = ifMatch.replace(/^W\//, "").replace(/^"|"$/g, "");
+      if (cleanMatch !== expectedEtag) {
+        throw new AppError("CONFLICT", `Stale connection state conflict: expected state "${expectedEtag}". Refresh and retry.`);
+      }
+    }
 
     const out = await setConnectionState({
       who,
       actor,
-      connectionId: String(req.params.id),
+      connectionId,
       newState,
       idempotencyKey: getHeader(req, "idempotency-key") || undefined
     });
+    if (out.body?.state) {
+      res.setHeader("ETag", `"${out.body.state}"`);
+    }
     res.status(out.status).json(out.body);
   } catch (err) {
     toErrorResponse(err, res);
@@ -890,6 +988,9 @@ app.get("/api/v2/connections/:id", async (req: Request, res: Response) => {
     const actor = await resolveActor(who.tenantId, who.subject, new Date(), who.role);
 
     const conn = await getConnection({ who, actor, connectionId: String(req.params.id) });
+    if (conn?.state) {
+      res.setHeader("ETag", `"${conn.state}"`);
+    }
     res.status(200).json(conn);
   } catch (err) {
     toErrorResponse(err, res);
@@ -935,11 +1036,26 @@ app.get("/api/v2/receipts", async (req: Request, res: Response) => {
 // Work Fact Revisions (Pseudonymized ledger facts)
 app.get("/api/v2/work-facts", async (req: Request, res: Response) => {
   try {
+    validateAllowedQueryParams(req, ["limit", "cursor", "kind", "connectionId"]);
     const who = await authenticate(getHeader(req, "authorization"));
     const actor = await resolveActor(who.tenantId, who.subject, new Date(), who.role);
 
-    const facts = await listWorkFacts({ who, actor, limit: parseLimit(req, 200, 1000) });
-    res.status(200).json(facts);
+    const limit = parseLimit(req, 200, 1000);
+    const filterKind = typeof req.query.kind === "string" ? req.query.kind : undefined;
+    const filterConnectionId = typeof req.query.connectionId === "string" ? req.query.connectionId : undefined;
+    const facts = await listWorkFacts({ who, actor, limit: 1000 });
+    const filtered = facts.filter((f: any) => {
+      if (filterKind && f.kind !== filterKind) return false;
+      if (filterConnectionId && f.connection_id !== filterConnectionId) return false;
+      return true;
+    });
+    const page = applyCursorPagination(filtered, {
+      cursor: typeof req.query.cursor === "string" ? req.query.cursor : undefined,
+      limit,
+      getKey: (f: any) => String(f.id)
+    });
+    setPaginationHeaders(res, page);
+    res.status(200).json(page.items);
   } catch (err) {
     toErrorResponse(err, res);
   }
@@ -1097,7 +1213,7 @@ app.post("/api/v2/metrics/:id/recalculate", async (req: Request, res: Response) 
 
     rememberJob({ id: jobId, tenantId: who.tenantId, type: "METRIC_RECALCULATION", result: { status: "SUCCESS", count: recalculatedCount } });
 
-    res.status(200).json({
+    res.status(202).json({
       jobId,
       status: "QUEUED",
       count: recalculatedCount,
@@ -1230,14 +1346,15 @@ app.post("/api/v2/hazards", async (req: Request, res: Response) => {
 // List Hazards with causes and interventions count
 app.get("/api/v2/hazards", async (req: Request, res: Response) => {
   try {
+    validateAllowedQueryParams(req, ["limit", "cursor", "disposition"]);
     const who = await authenticate(getHeader(req, "authorization"));
     await resolveActor(who.tenantId, who.subject, new Date(), who.role);
+    const filterDisposition = typeof req.query.disposition === "string" ? req.query.disposition : undefined;
 
     const out = await withTenant(who.tenantId, async (tx) => {
       // Three queries total regardless of hazard count (was 1 + 2 per hazard); counts are tallied in memory.
-      const limit = parseLimit(req, 200, 500);
-      const hRes = await tx.q("SELECT * FROM hazard WHERE tenant_id = $1 ORDER BY created_at DESC, id LIMIT $2", [who.tenantId, limit]);
-      const hazardRows = hRes.rows.slice(0, limit);
+      const hRes = await tx.q("SELECT * FROM hazard WHERE tenant_id = $1 ORDER BY created_at DESC, id LIMIT $2", [who.tenantId, 500]);
+      const hazardRows = hRes.rows.filter((h: any) => !filterDisposition || h.disposition === filterDisposition);
       const causeCounts = new Map<string, number>();
       for (const c of (await tx.q("SELECT hazard_id FROM cause WHERE tenant_id = $1", [who.tenantId])).rows) {
         causeCounts.set(c.hazard_id, (causeCounts.get(c.hazard_id) || 0) + 1);
@@ -1258,7 +1375,13 @@ app.get("/api/v2/hazards", async (req: Request, res: Response) => {
       return list;
     });
 
-    res.status(200).json(out);
+    const page = applyCursorPagination(out, {
+      cursor: typeof req.query.cursor === "string" ? req.query.cursor : undefined,
+      limit: parseLimit(req, 200, 500),
+      getKey: (h: any) => String(h.id)
+    });
+    setPaginationHeaders(res, page);
+    res.status(200).json(page.items);
   } catch (err) {
     toErrorResponse(err, res);
   }
@@ -1296,6 +1419,9 @@ app.get("/api/v2/hazards/:id", async (req: Request, res: Response) => {
       };
     });
 
+    if (out.hazard?.version !== undefined) {
+      res.setHeader("ETag", `"${out.hazard.version}"`);
+    }
     res.status(200).json(out);
   } catch (err) {
     toErrorResponse(err, res);
@@ -1701,14 +1827,22 @@ app.post("/api/v2/hazards/:id/disposition", async (req: Request, res: Response) 
     const hazardId = String(req.params.id);
     const input = SetDispositionInput.parse(req.body);
 
+    const ifMatch = getHeader(req, "if-match");
     const out = await withTenant(who.tenantId, async (tx) => {
       const hRes = await tx.q("SELECT * FROM hazard WHERE id = $1 AND tenant_id = $2", [hazardId, who.tenantId]);
       if (!hRes.rowCount || hRes.rowCount === 0) {
         throw new AppError("NOT_FOUND", "Hazard not found.");
       }
+      const currentHazard = hRes.rows[0];
+      if (ifMatch) {
+        const cleanMatch = ifMatch.replace(/^W\//, "").replace(/^"|"$/g, "");
+        if (cleanMatch !== String(currentHazard.version)) {
+          throw new AppError("CONFLICT", `Stale hazard version conflict: expected version ${currentHazard.version}. Reload and retry.`);
+        }
+      }
 
       await tx.q(
-        "UPDATE hazard SET disposition = $1 WHERE id = $2",
+        "UPDATE hazard SET disposition = $1, version = version + 1 WHERE id = $2",
         [input.disposition, hazardId]
       );
 
@@ -1721,6 +1855,9 @@ app.post("/api/v2/hazards/:id/disposition", async (req: Request, res: Response) 
       };
     });
 
+    if (out?.version !== undefined) {
+      res.setHeader("ETag", `"${out.version}"`);
+    }
     res.status(200).json(out);
   } catch (err) {
     toErrorResponse(err, res);
@@ -2035,13 +2172,21 @@ app.post("/api/v2/evidence-packages", async (req: Request, res: Response) => {
 // List Evidence Packages
 app.get("/api/v2/evidence-packages", async (req: Request, res: Response) => {
   try {
+    validateAllowedQueryParams(req, ["limit", "cursor", "state"]);
     const who = await authenticate(getHeader(req, "authorization"));
     await resolveActor(who.tenantId, who.subject, new Date(), who.role);
-    const out = await withTenant(who.tenantId, async (tx) => {
-      const res = await tx.q(`SELECT * FROM evidence_package WHERE tenant_id = $1 ORDER BY issued_at DESC LIMIT ${parseLimit(req, 100, 500)}`, [who.tenantId]);
-      return res.rows;
+    const filterState = typeof req.query.state === "string" ? req.query.state : undefined;
+    const rows = await withTenant(who.tenantId, async (tx) => {
+      const result = await tx.q(`SELECT * FROM evidence_package WHERE tenant_id = $1 ORDER BY issued_at DESC LIMIT 500`, [who.tenantId]);
+      return result.rows.filter((p: any) => !filterState || p.state === filterState);
     });
-    res.status(200).json(out);
+    const page = applyCursorPagination(rows, {
+      cursor: typeof req.query.cursor === "string" ? req.query.cursor : undefined,
+      limit: parseLimit(req, 100, 500),
+      getKey: (p: any) => String(p.id)
+    });
+    setPaginationHeaders(res, page);
+    res.status(200).json(page.items);
   } catch (err) {
     toErrorResponse(err, res);
   }

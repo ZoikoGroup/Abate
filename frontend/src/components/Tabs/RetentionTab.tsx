@@ -12,11 +12,19 @@ import {
   placeLegalHold,
   releaseLegalHold,
   submitZoikoBatch,
+  fetchEntitlements,
+  fetchPolicyResolution,
+  fetchTenantSectorProfile,
+  submitRightsRequest,
   type RetentionState,
   type RetentionPreview,
   type JurisdictionPack,
   type Connection,
-  type RetentionRunStatus
+  type RetentionRunStatus,
+  type TenantEntitlementsView,
+  type PolicyResolutionResult,
+  type TenantSectorProfile,
+  type RightsRequestReceipt
 } from "../../api/client";
 import { StateView } from "../StateView";
 
@@ -59,29 +67,57 @@ export function RetentionTab({ currentTenant, token }: RetentionTabProps) {
   const [holdScope, setHoldScope] = useState("");
   const [releaseReasons, setReleaseReasons] = useState<Record<string, string>>({});
 
+  // Section 7.2: Policy/Sector Packs + Dual-Gate Entitlements + GDPR Art 17 Rights Request state
+  const [entitlements, setEntitlements] = useState<TenantEntitlementsView | null>(null);
+  const [sectorProfile, setSectorProfile] = useState<TenantSectorProfile | null>(null);
+  const [policyFeature, setPolicyFeature] = useState("INTERVENTION_APPROVAL");
+  const [policyResolution, setPolicyResolution] = useState<PolicyResolutionResult | null>(null);
+  const [rightsPseudonym, setRightsPseudonym] = useState("");
+  const [lastRightsReceipt, setLastRightsReceipt] = useState<RightsRequestReceipt | null>(null);
+
   const load = useCallback(async () => {
     if (!token) return;
     try {
-      const [s, v, c] = await Promise.all([fetchRetentionState(token), fetchPackVersions(token), fetchConnections(token)]);
+      const [s, v, c, ent, sec, pol] = await Promise.all([
+        fetchRetentionState(token),
+        fetchPackVersions(token),
+        fetchConnections(token),
+        fetchEntitlements(token).catch(() => null),
+        fetchTenantSectorProfile(token).catch(() => null),
+        fetchPolicyResolution(policyFeature, token).catch(() => null)
+      ]);
       setState(s);
       setVersions(v.versions);
       setConnections(c);
+      setEntitlements(ent);
+      setSectorProfile(sec);
+      setPolicyResolution(pol);
     } catch (err: unknown) {
       setFeedback({ kind: "error", title: "Could not load retention state", message: formatRetentionError(err) });
     }
-  }, [token]);
+  }, [token, policyFeature]);
 
   useEffect(() => {
     if (!token) return;
     let cancelled = false;
-    void Promise.all([fetchRetentionState(token), fetchPackVersions(token), fetchConnections(token)])
-      .then(([s, v, c]) => {
+    void Promise.all([
+      fetchRetentionState(token),
+      fetchPackVersions(token),
+      fetchConnections(token),
+      fetchEntitlements(token).catch(() => null),
+      fetchTenantSectorProfile(token).catch(() => null),
+      fetchPolicyResolution(policyFeature, token).catch(() => null)
+    ])
+      .then(([s, v, c, ent, sec, pol]) => {
         if (cancelled) return;
         setPreview(null);
         setFeedback(null);
         setState(s);
         setVersions(v.versions);
         setConnections(c);
+        setEntitlements(ent);
+        setSectorProfile(sec);
+        setPolicyResolution(pol);
       })
       .catch((err: unknown) => {
         if (!cancelled) {
@@ -91,7 +127,7 @@ export function RetentionTab({ currentTenant, token }: RetentionTabProps) {
     return () => {
       cancelled = true;
     };
-  }, [token, currentTenant.id]);
+  }, [token, currentTenant.id, policyFeature]);
 
   // Every action follows the same shape: run, report, reload
   const act = async (title: string, fn: () => Promise<string>) => {
@@ -145,6 +181,13 @@ export function RetentionTab({ currentTenant, token }: RetentionTabProps) {
     setPreview(null);
     if (r.status !== "COMPLETED") return `Status ${r.status}: ${r.blockedReason ?? "no retention class configured"}. Nothing was deleted.`;
     return `Eligible ${r.eligible} = purged ${r.purged} + held ${r.held}. Verified tombstones: ${r.verified}.`;
+  });
+
+  const handleSubmitRightsRequest = () => act("GDPR Art 17 rights request completed", async () => {
+    const receipt = await submitRightsRequest(rightsPseudonym.trim(), newKey(), token!);
+    setLastRightsReceipt(receipt);
+    setRightsPseudonym("");
+    return `Request ${receipt.requestId.slice(0, 8)}...: deleted ${receipt.deleted}, verified ${receipt.verified}, held exceptions ${receipt.heldExceptions}.`;
   });
 
   const handleSeedExpired = () => act("Sample facts ingested", async () => {
@@ -205,7 +248,7 @@ export function RetentionTab({ currentTenant, token }: RetentionTabProps) {
           </div>
           {coverage && (
             <div style={{ display: "flex", gap: "0.4rem", alignItems: "center" }}>
-              {isSynthetic && <span className="badge badge-warning">PLACEHOLDER (unapproved)</span>}
+              {isSynthetic && <span className="badge badge-warning">Placeholder duration (pending Data Owner approval)</span>}
               <span className={coverage.status === "COVERED" ? "badge badge-success" : "badge badge-coral"}>{coverage.status}</span>
             </div>
           )}
@@ -445,6 +488,123 @@ export function RetentionTab({ currentTenant, token }: RetentionTabProps) {
                 ))}
               </tbody>
             </table>
+          </div>
+        )}
+      </div>
+
+      {/* Section 7.2 Screen #10: Policy, Sector Packs & Dual-Gate Entitlements */}
+      <div className="card" data-testid="policy-sector-entitlements-card">
+        <div className="card-header">
+          <div>
+            <h3>Policy, Sector Packs &amp; Dual-Gate Entitlements</h3>
+            <p className="card-desc">
+              Every capability requires BOTH commercial entitlement AND active jurisdiction/sector policy permission. Commercial upgrades never lower privacy thresholds, and not-entitled vs. policy-restricted refusals are shown separately.
+            </p>
+          </div>
+          {sectorProfile && (
+            <span className="badge badge-aubergine">
+              SECTOR: {sectorProfile.sectorKey}
+            </span>
+          )}
+        </div>
+
+        <div className="grid-2col">
+          <div className="info-block">
+            <div className="data-row">
+              <span className="data-label">Active Sector Pack</span>
+              <span className="data-value monospace">{sectorProfile?.activePacks.join(", ") || "generic-work-design"}</span>
+            </div>
+            <div className="data-row">
+              <span className="data-label">Claim Scope</span>
+              <span className="data-value">{sectorProfile?.claimScope || "Neutral work-design core active."}</span>
+            </div>
+            <div className="data-row">
+              <span className="data-label">Commercial Plan</span>
+              <span className="data-value monospace">{entitlements?.entitlements?.plan || "PILOT_STANDARD"}</span>
+            </div>
+          </div>
+
+          <div className="info-block">
+            <div className="form-group" style={{ marginBottom: "0.75rem" }}>
+              <label className="form-label" htmlFor="policy-feature-select">Evaluate Dual-Gate Feature</label>
+              <select
+                id="policy-feature-select"
+                className="select-control"
+                value={policyFeature}
+                onChange={e => setPolicyFeature(e.target.value)}
+              >
+                <option value="INTERVENTION_APPROVAL">INTERVENTION_APPROVAL</option>
+                <option value="AI_EXPLANATION">AI_EXPLANATION</option>
+                <option value="EVIDENCE_EXPORT">EVIDENCE_EXPORT</option>
+                <option value="EXTERNAL_ACTION">EXTERNAL_ACTION</option>
+              </select>
+            </div>
+            {policyResolution && (
+              <>
+                <div className="data-row">
+                  <span className="data-label">Commercial Entitlement Gate</span>
+                  <span className="data-value">
+                    {policyResolution.entitled === false ? "NOT ENTITLED (commercial plan)" : "ENTITLED"}
+                  </span>
+                </div>
+                <div className="data-row">
+                  <span className="data-label">Jurisdiction / Policy Gate</span>
+                  <span className="data-value">
+                    {policyResolution.policyAllowed === false ? "POLICY RESTRICTED (fail-closed)" : "PERMITTED BY POLICY"}
+                  </span>
+                </div>
+                <div className="data-row">
+                  <span className="data-label">Effective Decision</span>
+                  <span className="data-value">
+                    <strong>{policyResolution.allowed ? "ALLOWED" : "DENIED"}</strong>
+                    {policyResolution.reason ? ` — ${policyResolution.reason}` : ""}
+                  </span>
+                </div>
+              </>
+            )}
+          </div>
+        </div>
+      </div>
+
+      {/* Section 7.2 Screen #9: Subject Rights Request (GDPR Art 17 Erasure) */}
+      <div className="card" data-testid="rights-request-card">
+        <div className="card-header">
+          <div>
+            <h3>Subject Rights Request (GDPR Art 17 Erasure)</h3>
+            <p className="card-desc">
+              Hard-deletes unheld facts for a tenant-scoped subject pseudonym via tombstone verification. Facts under an active legal hold are retained and reported explicitly as held exceptions.
+            </p>
+          </div>
+          <span className="badge badge-dark">GDPR ART 17</span>
+        </div>
+
+        <div className="form-grid">
+          <div className="form-group">
+            <label className="form-label" htmlFor="rights-pseudonym">Subject pseudonym (tenant-scoped)</label>
+            <input
+              id="rights-pseudonym"
+              className="text-control"
+              value={rightsPseudonym}
+              onChange={e => setRightsPseudonym(e.target.value)}
+              placeholder="e.g. pseudo_subject_001"
+            />
+          </div>
+        </div>
+        <button
+          type="button"
+          className="btn btn-secondary"
+          disabled={busy || rightsPseudonym.trim().length < 3}
+          onClick={handleSubmitRightsRequest}
+        >
+          {busy ? "Processing..." : "Open rights erasure request"}
+        </button>
+
+        {lastRightsReceipt && (
+          <div className="callout-info" style={{ marginTop: "0.75rem" }} data-testid="rights-receipt-banner">
+            <strong>Rights Request {lastRightsReceipt.status}</strong> ({lastRightsReceipt.requestId.slice(0, 8)}…) ·
+            Deleted: <strong>{lastRightsReceipt.deleted}</strong> ·
+            Verified tombstones: <strong>{lastRightsReceipt.verified}</strong> ·
+            Legal-hold exceptions retained: <strong>{lastRightsReceipt.heldExceptions}</strong>
           </div>
         )}
       </div>

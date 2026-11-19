@@ -8,11 +8,52 @@ export interface PrivacyReleaseCounters {
   engineErrorsTotal: number;
 }
 
+export interface OperationalSignals {
+  staleConnectors: number;
+  packResolutionFailuresTotal: number;
+  aiBudgetUtilizationRatio: number;
+  rateLimitedTotal: number;
+}
+
 const privacyCounters: PrivacyReleaseCounters = {
   releasedTotal: 0,
   suppressedTotal: 0,
   engineErrorsTotal: 0
 };
+
+const operationalSignals: OperationalSignals = {
+  staleConnectors: 0,
+  packResolutionFailuresTotal: 0,
+  aiBudgetUtilizationRatio: 0,
+  rateLimitedTotal: 0
+};
+
+export function recordRateLimitHit(): void {
+  operationalSignals.rateLimitedTotal++;
+}
+
+export function recordPackResolutionFailure(): void {
+  operationalSignals.packResolutionFailuresTotal++;
+}
+
+export function setStaleConnectorCount(count: number): void {
+  operationalSignals.staleConnectors = Math.max(0, Math.floor(count));
+}
+
+export function setAiBudgetUtilizationRatio(ratio: number): void {
+  operationalSignals.aiBudgetUtilizationRatio = Math.max(0, Math.min(10, Number.isFinite(ratio) ? ratio : 0));
+}
+
+export function getOperationalSignals(): OperationalSignals {
+  return { ...operationalSignals };
+}
+
+export function resetOperationalSignals(): void {
+  operationalSignals.staleConnectors = 0;
+  operationalSignals.packResolutionFailuresTotal = 0;
+  operationalSignals.aiBudgetUtilizationRatio = 0;
+  operationalSignals.rateLimitedTotal = 0;
+}
 
 export function recordPrivacyOutcome(outcome: "RELEASED" | "SUPPRESSED" | "ERROR"): void {
   if (outcome === "RELEASED") {
@@ -185,6 +226,47 @@ export function evaluateOperationalAlerts(params: {
     runbookHint: "Verify OBJECT_STORE_ENDPOINT, bucket permissions, and credentials."
   });
 
+  const signals = getOperationalSignals();
+  alerts.push({
+    id: "AbateConnectorStaleDetected",
+    severity: "warning",
+    state: signals.staleConnectors > 0 ? "FIRING" : "OK",
+    summary: "One or more source connectors exceeded 3x expected cadence (STALE).",
+    value: signals.staleConnectors,
+    threshold: 0,
+    runbookHint: "Check connector freshness in GET /api/v2/connections; do not treat outage as zero work."
+  });
+
+  alerts.push({
+    id: "AbatePackResolutionFailure",
+    severity: "critical",
+    state: signals.packResolutionFailuresTotal > 0 ? "FIRING" : "OK",
+    summary: "Jurisdiction or policy pack resolution failed closed (NOT_COVERED or paused pack).",
+    value: signals.packResolutionFailuresTotal,
+    threshold: 0,
+    runbookHint: "Verify active policy_pack dates, tenant_policy_binding, and pack:* kill switches."
+  });
+
+  alerts.push({
+    id: "AbateAiBudgetHighUtilization",
+    severity: "warning",
+    state: signals.aiBudgetUtilizationRatio >= 0.8 ? "FIRING" : "OK",
+    summary: "Bounded AI monthly spend reached >= 80% of configured tenant budget.",
+    value: signals.aiBudgetUtilizationRatio,
+    threshold: 0.8,
+    runbookHint: "Review GET /api/v2/ai/quota; manual risk-control workflows remain unaffected."
+  });
+
+  alerts.push({
+    id: "AbateTenantRateLimitBurst",
+    severity: "warning",
+    state: signals.rateLimitedTotal >= 25 ? "FIRING" : "OK",
+    summary: "Sustained HTTP 429 rate-limit refusals detected (noisy-tenant protection active).",
+    value: signals.rateLimitedTotal,
+    threshold: 25,
+    runbookHint: "Inspect noisy-tenant traffic patterns; healthy tenants remain isolated."
+  });
+
   const firing = alerts.filter(a => a.state === "FIRING");
   return {
     evaluatedAt,
@@ -250,7 +332,19 @@ export function renderPrometheusMetrics(params: {
     "# HELP abate_dependencies_up Dependency reachability (1=up, 0=down)",
     "# TYPE abate_dependencies_up gauge",
     `abate_dependencies_up{component="database"} ${deps.databaseOk ? 1 : 0}`,
-    `abate_dependencies_up{component="object_store"} ${deps.objectStoreOk ? 1 : 0}`
+    `abate_dependencies_up{component="object_store"} ${deps.objectStoreOk ? 1 : 0}`,
+    "# HELP abate_connectors_stale_total Active source connectors currently in STALE state",
+    "# TYPE abate_connectors_stale_total gauge",
+    `abate_connectors_stale_total ${operationalSignals.staleConnectors}`,
+    "# HELP abate_pack_resolution_failures_total Policy/jurisdiction pack resolution failures (fail-closed)",
+    "# TYPE abate_pack_resolution_failures_total counter",
+    `abate_pack_resolution_failures_total ${operationalSignals.packResolutionFailuresTotal}`,
+    "# HELP abate_ai_budget_utilization_ratio Peak observed monthly AI budget utilization ratio",
+    "# TYPE abate_ai_budget_utilization_ratio gauge",
+    `abate_ai_budget_utilization_ratio ${operationalSignals.aiBudgetUtilizationRatio}`,
+    "# HELP abate_http_rate_limited_total Total HTTP 429 rate-limit refusals across tenants/actors",
+    "# TYPE abate_http_rate_limited_total counter",
+    `abate_http_rate_limited_total ${operationalSignals.rateLimitedTotal}`
   );
 
   return `${lines.join("\n")}\n`;

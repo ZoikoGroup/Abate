@@ -1,0 +1,56 @@
+# infra/docker-compose.staging.yml
+# Staging overlay for fixed-environment SLO benchmarking, PITR restore rehearsals,
+# S3-compatible versioned object storage, OIDC lockdown, and secret-manager hydration.
+#
+# Usage:
+#   docker compose -f docker-compose.yml -f infra/docker-compose.staging.yml --profile fullstack up -d
+
+services:
+  postgres:
+    command:
+      - postgres
+      - -c
+      - config_file=/etc/postgresql/postgres-pitr.conf
+    volumes:
+      - pg_wal_archive:/var/lib/postgresql/wal-archive
+      - ./postgres-pitr.conf:/etc/postgresql/postgres-pitr.conf:ro
+
+  objectstore-init:
+    image: minio/mc:RELEASE.2024-03-07T00-31-49Z
+    container_name: abate-objectstore-init
+    depends_on:
+      - objectstore
+    entrypoint: >
+      /bin/sh -c " until mc alias set staging http://objectstore:9000 $${OBJECT_STORE_ACCESS_KEY:-minioadmin} $${OBJECT_STORE_SECRET_KEY:-minioadmin_dev_only}; do sleep 2; done; mc mb --ignore-existing staging/$${OBJECT_STORE_BUCKET:-abate-artifacts}; mc version enable staging/$${OBJECT_STORE_BUCKET:-abate-artifacts}; "
+    restart: "no"
+
+  backend:
+    environment:
+      APP_ENV: staging
+      NODE_ENV: production
+      ABATE_REQUIRE_PG: "1"
+      DISABLE_DEV_TOKEN: "true"
+      OBJECT_STORE_MODE: s3
+      OBJECT_STORE_ENDPOINT: http://objectstore:9000
+      OBJECT_STORE_BUCKET: ${OBJECT_STORE_BUCKET:-abate-artifacts}
+      ABATE_SECRETS_FILE: /run/secrets/abate-secrets.json
+      STRUCTURED_LOGS: "true"
+      COOKIE_SECURE: "true"
+    volumes:
+      - ${ABATE_STAGING_SECRETS_FILE:-../ops/pilot-secrets.example.json}:/run/secrets/abate-secrets.json:ro
+
+  worker:
+    environment:
+      APP_ENV: staging
+      NODE_ENV: production
+      ABATE_REQUIRE_PG: "1"
+      OBJECT_STORE_MODE: s3
+      OBJECT_STORE_ENDPOINT: http://objectstore:9000
+      OBJECT_STORE_BUCKET: ${OBJECT_STORE_BUCKET:-abate-artifacts}
+      ABATE_SECRETS_FILE: /run/secrets/abate-secrets.json
+      ABATE_ENABLE_RETENTION_EXECUTOR: "1"
+    volumes:
+      - ${ABATE_STAGING_SECRETS_FILE:-../ops/pilot-secrets.example.json}:/run/secrets/abate-secrets.json:ro
+
+volumes:
+  pg_wal_archive:

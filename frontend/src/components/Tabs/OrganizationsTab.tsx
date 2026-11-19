@@ -1,12 +1,14 @@
 // frontend/src/components/Tabs/OrganizationsTab.tsx
 import { useState } from "react";
-import { api, ApiError, type Organization, PRESET_TENANTS } from "../../api/client";
+import { api, ApiError, type Organization, type TenantSectorProfile, PRESET_TENANTS } from "../../api/client";
+import { getSectorVocabulary } from "../../utils/vocabulary";
 import { StateView } from "../StateView";
 
 interface OrganizationsTabProps {
   currentTenant: typeof PRESET_TENANTS[0];
   token: string | null;
   organizations: Organization[];
+  sectorProfile?: TenantSectorProfile | null;
   onRefresh: () => void;
 }
 
@@ -14,8 +16,10 @@ export function OrganizationsTab({
   currentTenant,
   token,
   organizations,
+  sectorProfile,
   onRefresh
 }: OrganizationsTabProps) {
+  const vocab = getSectorVocabulary(sectorProfile);
   const [orgName, setOrgName] = useState("");
   const [idempotencyKey, setIdempotencyKey] = useState(`idem-${crypto.randomUUID().slice(0, 8)}`);
   const [injectProhibitedField, setInjectProhibitedField] = useState(false);
@@ -46,7 +50,7 @@ export function OrganizationsTab({
       setIdempotencyKey(keyToUse);
     }
 
-    const basePayload = { name: orgName || "Strategic Advisory Practice" };
+    const basePayload = { name: orgName || `Strategic ${vocab.unit}` };
     const payload = customPayload || (injectProhibitedField
       ? { ...basePayload, keystroke_tracker_payload: "ILLEGAL_SURVEILLANCE_FIELD" }
       : basePayload);
