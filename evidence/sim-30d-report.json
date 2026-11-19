@@ -1,14 +1,14 @@
 {
   "schema": "abate.simulation-30d.v1",
   "mode": "SCRIPTED_REAL_HTTP",
-  "generatedAt": "2026-11-18T11:49:57.216Z",
-  "baseUrl": "express://in-process",
+  "generatedAt": "2026-11-19T11:35:41.143Z",
+  "baseUrl": "http://127.0.0.1:64493",
   "summary": {
     "totalSteps": 9,
     "passedSteps": 9,
     "failedSteps": 0,
     "passed": true,
-    "durationMs": 166
+    "durationMs": 397
   },
   "steps": [
     {
@@ -23,7 +23,7 @@
       "phase": "Org Idempotency & Cross-Tenant 404",
       "endpoint": "POST/GET /api/v2/organizations",
       "passed": true,
-      "detail": "Created org ef8552aa, verified replay, 409 conflict, and cross-tenant 404"
+      "detail": "Created org 9adf9648, verified replay, 409 conflict, and cross-tenant 404"
     },
     {
       "dayRange": "Days 03-05",
@@ -51,14 +51,14 @@
       "phase": "Privacy Release (Class B 28d Valid vs Short Window Blocked)",
       "endpoint": "POST /api/v2/releases/query",
       "passed": true,
-      "detail": "Short Class B window suppressed (NOT_AVAILABLE); 29d release issued (3fe6b3e9)"
+      "detail": "Short Class B window suppressed (NOT_AVAILABLE); 29d release issued (e1b9c307)"
     },
     {
       "dayRange": "Days 17-25",
       "phase": "BE-007 Hazard -> Control -> Re-Approval -> Evidence Pack",
       "endpoint": "POST /api/v2/hazards & /controls & /evidence-packages",
       "passed": true,
-      "detail": "Closed hazard a9dec53a via v2 re-approval; evidence pack 9e8109db"
+      "detail": "Closed hazard 28829553 via v2 re-approval; evidence pack 4904ebcd"
     },
     {
       "dayRange": "Days 26-28",

@@ -55,6 +55,7 @@ export default function App() {
   const [oidcLoginError, setOidcLoginError] = useState<string | null>(null);
   const [tenantInfo, setTenantInfo] = useState<TenantInfo | null>(null);
   const [sectorProfile, setSectorProfile] = useState<TenantSectorProfile | null>(null);
+  const [allowedNav, setAllowedNav] = useState<string[] | null>(null);
   const [organizations, setOrganizations] = useState<Organization[]>([]);
   const [auditEvents, setAuditEvents] = useState<AuditEvent[]>([]);
   const [loading, setLoading] = useState(false);
@@ -118,17 +119,19 @@ export default function App() {
   }, []);
 
   const loadTenantWorkspace = useCallback(async (sessionToken: string) => {
-    const [currTenant, orgs, audits, secProfile] = await Promise.all([
+    const [currTenant, orgs, audits, secProfile, me] = await Promise.all([
       api<TenantInfo>("/api/v2/tenants/current", { token: sessionToken }),
       api<Organization[]>("/api/v2/organizations", { token: sessionToken }),
       api<AuditEvent[]>("/api/v2/audit-events", { token: sessionToken }),
-      fetchTenantSectorProfile(sessionToken).catch(() => null)
+      fetchTenantSectorProfile(sessionToken).catch(() => null),
+      fetchCurrentPrincipal(sessionToken).catch(() => null)
     ]);
 
     setTenantInfo(currTenant);
     setOrganizations(orgs);
     setAuditEvents(audits);
     setSectorProfile(secProfile);
+    setAllowedNav(Array.isArray(me?.allowedNav) ? me.allowedNav : null);
     if (secProfile && !secProfile.hasLegalPack) {
       setActiveTab(prev => (prev === "legal" ? "organizations" : prev));
     }
@@ -411,7 +414,7 @@ export default function App() {
         >
           Outcomes &amp; AI Change (Phase 7)
         </button>
-        {sectorProfile?.hasLegalPack && (
+        {sectorProfile?.hasLegalPack && (!allowedNav || allowedNav.includes("LEGAL_PRACTICE")) && (
           <button
             type="button"
             className={`tab-button ${activeTab === "legal" ? "active" : ""}`}
@@ -490,6 +493,7 @@ export default function App() {
             currentTenant={currentTenant}
             token={token}
             organizations={organizations}
+            sectorProfile={sectorProfile}
             onRefresh={() => fetchTenantData(activeTenantId, activeRole)}
           />
         )}
@@ -498,6 +502,7 @@ export default function App() {
           <IngestionTab
             currentTenant={currentTenant}
             token={token}
+            sectorProfile={sectorProfile}
             onRefresh={() => fetchTenantData(activeTenantId, activeRole)}
           />
         )}
@@ -506,6 +511,7 @@ export default function App() {
           <CohortAnalyticsTab
             currentTenant={currentTenant}
             token={token}
+            sectorProfile={sectorProfile}
           />
         )}
 

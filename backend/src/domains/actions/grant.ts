@@ -5,11 +5,10 @@ import { loadConfig } from "../../platform/config";
 import { canonicalJson, sha256Hex } from "../../platform/canonical";
 import { ActionGrantPayload, ActionGrantPayloadSchema } from "../../contracts/actions";
 
-const cfg = loadConfig();
 const GRANT_TTL_SECONDS = 120;
 
 function hmac(data: string): Buffer {
-  return crypto.createHmac("sha256", cfg.actionGrantSecret).update(data).digest();
+  return crypto.createHmac("sha256", loadConfig().actionGrantSecret).update(data).digest();
 }
 
 function signToken(payload: object): string {

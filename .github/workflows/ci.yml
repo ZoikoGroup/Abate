@@ -126,6 +126,7 @@ jobs:
           npm --prefix backend run verify-pg-smoke
           npm --prefix backend run test-load -- --http --tcp
           npm --prefix backend run measure-restore
+          npm --prefix backend run rehearse:pitr -- --require-live
 
       - name: Run wording lint, OpenAPI contract check, typecheck and compile backend
         run: |
@@ -173,6 +174,8 @@ jobs:
         run: |
           npm --prefix backend run verify-evidence
           npm --prefix backend run drill-kill-switches
+          npm --prefix backend run drill:incident
+          npm --prefix backend run rehearse:key-rotation
           npm --prefix backend run challenge
           npm --prefix backend run sim-30d -- --tcp
           npm --prefix backend run check:endpoints
@@ -189,11 +192,40 @@ jobs:
           npm --prefix backend audit --omit=dev --audit-level=high || true
           npm --prefix frontend audit --omit=dev --audit-level=high || true
 
-      - name: Validate Docker Compose config and container image builds
+      - name: Validate Docker Compose configs, build container images and record digests
         run: |
           docker compose config -q
+          docker compose -f docker-compose.yml -f infra/docker-compose.staging.yml config -q
           docker build -t abate-backend:ci ./backend
           docker build -t abate-frontend:ci ./frontend
+          BACKEND_ID=$(docker image inspect --format='{{.Id}}' abate-backend:ci)
+          FRONTEND_ID=$(docker image inspect --format='{{.Id}}' abate-frontend:ci)
+          echo "ABATE_IMAGE_DIGESTS={\"backend\":\"${BACKEND_ID}\",\"frontend\":\"${FRONTEND_ID}\"}" >> "$GITHUB_ENV"
+
+      - name: Scan backend and frontend container images with Trivy (G-28 / T-25)
+        continue-on-error: true
+        run: |
+          mkdir -p evidence
+          TRIVY_IMAGE="ghcr.io/aquasecurity/trivy:latest"
+          docker pull "$TRIVY_IMAGE" || { TRIVY_IMAGE="aquasec/trivy:latest"; docker pull "$TRIVY_IMAGE"; }
+          docker run --rm \
+            -v /var/run/docker.sock:/var/run/docker.sock \
+            -v "$PWD/evidence:/evidence" \
+            "$TRIVY_IMAGE" image \
+            --format table \
+            --severity CRITICAL,HIGH \
+            --exit-code 0 \
+            --output /evidence/trivy-backend.txt \
+            abate-backend:ci
+          docker run --rm \
+            -v /var/run/docker.sock:/var/run/docker.sock \
+            -v "$PWD/evidence:/evidence" \
+            "$TRIVY_IMAGE" image \
+            --format table \
+            --severity CRITICAL,HIGH \
+            --exit-code 0 \
+            --output /evidence/trivy-frontend.txt \
+            abate-frontend:ci
 
       - name: Assemble dynamic Release Dossier and verify READY FOR REVIEW or RATIFIED state
         env:
@@ -208,7 +240,7 @@ jobs:
           DATABASE_URL_OPS: postgres://disabled:disabled@127.0.0.1:1/abate
         run: |
           npm --prefix backend run build-dossier
-          node -e "const d = require('./evidence/release-dossier.json'); if (d.status !== 'READY FOR REVIEW' && d.status !== 'RATIFIED') { console.error('Expected READY FOR REVIEW or RATIFIED, got', d.status); process.exit(1); }"
+          node -e "const d = require('./evidence/release-dossier.json'); if (d.status !== 'READY FOR REVIEW' && d.status !== 'RATIFIED') { console.error('Expected READY FOR REVIEW or RATIFIED, got', d.status); process.exit(1); } if (!d.system?.imageDigests?.backend || !d.system?.sbom?.sha256) { console.error('Dossier must bind imageDigests and SBOM sha256'); process.exit(1); }"
 
       - name: Upload Release Dossier artifacts
         uses: actions/upload-artifact@v4
@@ -217,13 +249,19 @@ jobs:
           name: release-dossier
           path: |
             evidence/release-dossier.json
+            evidence/sbom.json
             evidence/independent-challenge-report.json
             evidence/challenge-findings.md
             evidence/sim-30d-report.json
             evidence/kill-switch-drill-report.json
+            evidence/incident-exercise-report.json
+            evidence/key-rotation-rehearsal-report.json
+            evidence/pitr-rehearsal-report.json
             evidence/restore-rehearsal-report.json
             evidence/pg-restore-measurement.json
             evidence/slo-benchmark-report.json
+            evidence/trivy-backend.txt
+            evidence/trivy-frontend.txt
             frontend/public/release-dossier.json
 
   e2e-a11y:

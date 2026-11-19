@@ -4,6 +4,7 @@ import crypto from "node:crypto";
 import jwt from "jsonwebtoken";
 import { AppConfig, isDevTokenEnabled, loadConfig } from "./config";
 import { AppError } from "./errors";
+import { assertSafeOutboundUrl } from "./ssrf";
 
 export const SESSION_COOKIE_NAME = "abate_session";
 export const OIDC_ASYMMETRIC_ALGS: jwt.Algorithm[] = [
@@ -172,15 +173,11 @@ function parseJwksDocument(rawJson: string): Record<string, any>[] {
   return doc.keys;
 }
 
-async function fetchJwksKeys(jwksUri: string, forceRefresh = false): Promise<Record<string, any>[]> {
-  let parsedUrl: URL;
+async function fetchJwksKeys(jwksUri: string, forceRefresh = false, cfg: AppConfig = loadConfig()): Promise<Record<string, any>[]> {
   try {
-    parsedUrl = new URL(jwksUri);
-  } catch {
-    throw new AppError("UNAUTHENTICATED", "Invalid OIDC JWKS URI configuration.");
-  }
-  if (parsedUrl.protocol !== "https:" && parsedUrl.protocol !== "http:") {
-    throw new AppError("UNAUTHENTICATED", "Unsupported OIDC JWKS URI protocol.");
+    assertSafeOutboundUrl(jwksUri, { cfg, allowLocalInDev: true, label: "OIDC JWKS URI" });
+  } catch (err: any) {
+    throw new AppError("UNAUTHENTICATED", err?.message || "Invalid OIDC JWKS URI configuration.");
   }
 
   const cached = jwksCache.get(jwksUri);
@@ -224,11 +221,11 @@ async function resolveAsymmetricKey(kid: string | undefined, cfg: AppConfig): Pr
   }
 
   if (cfg.oidcJwksUri) {
-    let keys = await fetchJwksKeys(cfg.oidcJwksUri, false);
+    let keys = await fetchJwksKeys(cfg.oidcJwksUri, false, cfg);
     let matched = selectJwk(keys, kid);
     if (!matched && kid) {
       // Support seamless key rollover on unknown kid
-      keys = await fetchJwksKeys(cfg.oidcJwksUri, true);
+      keys = await fetchJwksKeys(cfg.oidcJwksUri, true, cfg);
       matched = selectJwk(keys, kid);
     }
     if (!matched) {
@@ -305,6 +302,8 @@ export async function exchangeOidcAuthorizationCode(params: {
   if (!cfg.oidcTokenEndpoint || !cfg.oidcClientId) {
     throw new AppError("VALIDATION", "OIDC token endpoint and client ID are not configured on this server.");
   }
+
+  assertSafeOutboundUrl(cfg.oidcTokenEndpoint, { cfg, allowLocalInDev: true, label: "OIDC token endpoint" });
 
   const form = new URLSearchParams({
     grant_type: "authorization_code",

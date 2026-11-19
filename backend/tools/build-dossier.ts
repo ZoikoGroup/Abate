@@ -185,6 +185,31 @@ export async function assembleDossier() {
     }
   }
 
+  let sbomSummary: { path: string; sha256: string; componentCount: number } | null = null;
+  const sbomPath = path.join(repoRoot, "evidence/sbom.json");
+  if (fs.existsSync(sbomPath)) {
+    try {
+      const sbomRaw = fs.readFileSync(sbomPath, "utf8");
+      const sbomParsed = JSON.parse(sbomRaw);
+      const rawComponents = sbomParsed?.components;
+      const componentCount = Array.isArray(rawComponents)
+        ? rawComponents.length
+        : rawComponents && typeof rawComponents === "object"
+        ? Object.values(rawComponents).reduce<number>(
+            (sum, group) => sum + (group && typeof group === "object" ? Object.keys(group as Record<string, unknown>).length : 0),
+            0
+          )
+        : 0;
+      sbomSummary = {
+        path: "evidence/sbom.json",
+        sha256: sha256Hex(sbomRaw),
+        componentCount
+      };
+    } catch {
+      sbomSummary = null;
+    }
+  }
+
   const coreEvidencePayload = {
     schema: "abate.release-dossier.v1",
     commitSha,
@@ -195,7 +220,8 @@ export async function assembleDossier() {
       version: "1.0.0",
       architecture: "Two-Plane Modular Monolith with Forced Row-Level Security",
       postgresRequirementEnv: process.env.ABATE_REQUIRE_PG === "1" ? "LIVE_POSTGRES_REQUIRED" : "HYBRID_LOCAL_SANDBOX",
-      imageDigests
+      imageDigests,
+      sbom: sbomSummary
     },
     constitutionalInvariants: [
       { id: "INV-01", statement: "Tenant isolation at every seam via PostgreSQL RLS + transaction-local context", verified: allGatesGreen },

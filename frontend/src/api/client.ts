@@ -1,4 +1,13 @@
 // frontend/src/api/client.ts
+import {
+  OPENAPI_PATHS,
+  OPENAPI_SERVER_BASE,
+  OPENAPI_SPEC_VERSION,
+  type OpenApiMethod,
+  type OpenApiPath
+} from "./openapi.generated";
+
+export { OPENAPI_PATHS, OPENAPI_SERVER_BASE, OPENAPI_SPEC_VERSION, type OpenApiMethod, type OpenApiPath };
 
 export const BACKEND_URL = typeof window !== "undefined" ? "" : "http://127.0.0.1:5000";
 
@@ -87,6 +96,16 @@ export async function api<T>(endpoint: string, options: ApiRequestOptions = {}):
   }
 
   return (await res.json()) as T;
+}
+
+/**
+ * Contract-bound API helper typed directly against openapi.generated.ts (Completion Plan §6 & §7.1).
+ */
+export async function apiV2<T, P extends OpenApiPath>(
+  path: P,
+  options: ApiRequestOptions = {}
+): Promise<T> {
+  return api<T>(`${OPENAPI_SERVER_BASE}${path}`, options);
 }
 
 export const COOKIE_SESSION_TOKEN = "__ABATE_HTTPONLY_COOKIE_SESSION__";
@@ -208,14 +227,15 @@ export async function fetchOidcConfig(): Promise<OidcConfig> {
   return api<OidcConfig>("/api/v2/auth/oidc/config");
 }
 
-export async function fetchCurrentPrincipal(): Promise<{
+export async function fetchCurrentPrincipal(token?: string | null): Promise<{
   principalId: string;
   tenantId: string;
   tenantName: string;
   subject: string;
   role: string;
+  allowedNav?: string[];
 }> {
-  return api("/api/v2/me");
+  return apiV2("/me", { token });
 }
 
 export async function exchangeOidcAuth(body: {
@@ -1625,4 +1645,65 @@ export async function fetchOpsAiQuota(supportToken: string, tenantId?: string): 
   const qs = tenantId ? `?tenantId=${encodeURIComponent(tenantId)}` : "";
   const res = await api<{ items: AiQuotaStatus[] }>(`/api/v2/ops/ai-quota${qs}`, { token: supportToken });
   return res.items || [];
+}
+
+export interface TenantEntitlementsView {
+  tenantId: string;
+  entitlements: {
+    plan: string;
+    features: string[];
+    [key: string]: unknown;
+  };
+}
+
+export interface PolicyResolutionResult {
+  allowed: boolean;
+  entitled?: boolean;
+  policyAllowed?: boolean;
+  reason?: string | null;
+  appliedPacks?: Array<{ packKey: string; version: number; kind?: string }>;
+  resolution?: Record<string, unknown>;
+}
+
+export interface RightsRequestReceipt {
+  requestId: string;
+  status: "COMPLETED";
+  deleted: number;
+  verified: number;
+  heldExceptions: number;
+  completedAt: string;
+}
+
+export async function fetchEntitlements(token: string): Promise<TenantEntitlementsView> {
+  return apiV2<TenantEntitlementsView, "/entitlements">("/entitlements", { token });
+}
+
+export async function fetchPolicyResolution(feature: string, token: string): Promise<PolicyResolutionResult> {
+  return api<PolicyResolutionResult>(`/api/v2/policy/resolution?feature=${encodeURIComponent(feature)}`, { token });
+}
+
+export async function updateTenantSectorProfile(
+  body: { sectorKey: "GENERIC" | "LEGAL" | "ACCOUNTING"; packKey: string },
+  idempotencyKey: string,
+  token: string
+): Promise<TenantSectorProfile> {
+  return apiV2<TenantSectorProfile, "/tenant/sector-profile">("/tenant/sector-profile", {
+    method: "PUT",
+    body: JSON.stringify(body),
+    idempotencyKey,
+    token
+  });
+}
+
+export async function submitRightsRequest(
+  subjectPseudonym: string,
+  idempotencyKey: string,
+  token: string
+): Promise<RightsRequestReceipt> {
+  return apiV2<RightsRequestReceipt, "/lifecycle/rights-requests">("/lifecycle/rights-requests", {
+    method: "POST",
+    body: JSON.stringify({ subjectPseudonym }),
+    idempotencyKey,
+    token
+  });
 }

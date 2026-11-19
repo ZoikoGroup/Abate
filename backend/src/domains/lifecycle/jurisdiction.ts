@@ -11,6 +11,7 @@ import {
 import { PackRow, resolveEffectivePack, planPackPublish, canonicalJson, sha256Hex } from "./policy";
 import { activeBindings } from "./resolve";
 import { isKillSwitchActive } from "../ai/kill-switch";
+import { recordPackResolutionFailure } from "../../platform/monitoring";
 
 const iso = (d: string | Date | null) => (d === null ? null : new Date(d).toISOString());
 
@@ -68,10 +69,13 @@ export async function resolveTenantCoverage(
   const effective = bound
     .map(b => resolveEffectivePack(b.versions, at))
     .filter((p): p is PackRow => p !== null);
-  const notCovered = (reason: string) => ({
-    coverage: { status: "NOT_COVERED" as const, reason, boundPackKeys: bound.map(b => b.packKey), at: at.toISOString() },
-    pack: null
-  });
+  const notCovered = (reason: string) => {
+    recordPackResolutionFailure();
+    return {
+      coverage: { status: "NOT_COVERED" as const, reason, boundPackKeys: bound.map(b => b.packKey), at: at.toISOString() },
+      pack: null
+    };
+  };
 
   if (effective.length === 0) return notCovered("No approved jurisdiction pack is in effect for this tenant.");
   if (effective.length > 1) {

@@ -1,6 +1,7 @@
 // frontend/src/components/Tabs/IsolationTab.tsx
 import { useState } from "react";
 import { api, ApiError, PRESET_TENANTS, type TenantInfo, type Organization } from "../../api/client";
+import { StateView } from "../StateView";
 
 interface IsolationTabProps {
   currentTenant: typeof PRESET_TENANTS[0];
@@ -83,6 +84,7 @@ export function IsolationTab({
 
   return (
     <div className="tab-pane">
+      {!token && <StateView state={{ kind: "unauthorized" }} />}
       <div className="card">
         <div className="card-header">
           <div>

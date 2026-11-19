@@ -1,0 +1,26 @@
+{
+  "schema": "abate.key-rotation-rehearsal.v1",
+  "generatedAt": "2026-11-19T10:37:24.690Z",
+  "checksPassed": 4,
+  "totalChecks": 4,
+  "checks": [
+    {
+      "name": "OIDC RS256 JWKS zero-downtime rollover (v1 -> dual -> v2)",
+      "status": "PASS"
+    },
+    {
+      "name": "ACTION_GRANT_SECRET rotation invalidates prior signing key",
+      "status": "PASS"
+    },
+    {
+      "name": "CONNECTOR_WEBHOOK_SECRET rotation rejects old HMAC and accepts new HMAC",
+      "status": "PASS"
+    },
+    {
+      "name": "Zero secret material leaked into telemetry or error logs",
+      "status": "PASS"
+    }
+  ],
+  "secretLeaksDetected": 0,
+  "passed": true
+}

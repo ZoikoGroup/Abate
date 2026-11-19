@@ -14,14 +14,17 @@ import {
   type IngestReceipt,
   type WorkFact,
   type ZoikoTimeBatchPayload,
+  type TenantSectorProfile,
   PRESET_TENANTS,
   ApiError
 } from "../../api/client";
+import { getSectorVocabulary } from "../../utils/vocabulary";
 import { StateView } from "../StateView";
 
 interface IngestionTabProps {
   currentTenant: typeof PRESET_TENANTS[0];
   token: string | null;
+  sectorProfile?: TenantSectorProfile | null;
   onRefresh: () => void;
 }
 
@@ -32,7 +35,8 @@ function withReqId(err: unknown, fallback: string): string {
   return err instanceof Error ? err.message : fallback;
 }
 
-export function IngestionTab({ currentTenant, token, onRefresh }: IngestionTabProps) {
+export function IngestionTab({ currentTenant, token, sectorProfile, onRefresh }: IngestionTabProps) {
+  const vocab = getSectorVocabulary(sectorProfile);
   const [contracts, setContracts] = useState<SourceContract[]>([]);
   const [selectedContractId, setSelectedContractId] = useState<string>("");
   const [newCadenceSeconds, setNewCadenceSeconds] = useState<string>("3600");
@@ -133,13 +137,13 @@ export function IngestionTab({ currentTenant, token, onRefresh }: IngestionTabPr
         `reg-conn-${crypto.randomUUID()}`,
         token
       );
+      await loadData();
+      onRefresh();
       setFeedback({
         type: "success",
         title: "Source Connection Registered",
         message: `Bound new "${created.source}" connection (${created.id.slice(0, 8)}...) to contract ${contract.version}.`
       });
-      await loadData();
-      onRefresh();
     } catch (err: unknown) {
       setFeedback({
         type: "error",
@@ -167,13 +171,13 @@ export function IngestionTab({ currentTenant, token, onRefresh }: IngestionTabPr
         suspend: "Connection SUSPENDED",
         disconnect: "Connection DISCONNECTED"
       };
+      await loadData();
+      onRefresh();
       setFeedback({
         type: action === "disconnect" ? "warning" : "success",
         title: titleMap[action],
         message: `Connection "${conn.source}" (${conn.id.slice(0, 8)}...) is now ${formatConnectionStateLabel(updated.state)}.`
       });
-      await loadData();
-      onRefresh();
     } catch (err: unknown) {
       setFeedback({
         type: "error",
@@ -185,10 +189,15 @@ export function IngestionTab({ currentTenant, token, onRefresh }: IngestionTabPr
     }
   };
 
+  const isIngestableState = (state: string) => state === "ACTIVE" || state === "RESUMED";
+  const findIngestableZoikoConnection = () =>
+    connections.find(c => isIngestableState(c.state) && c.source === "ZoikoTime") ||
+    connections.find(c => isIngestableState(c.state));
+
   // Test 1: Send Standard Clean Batch
   const handleSendStandardBatch = async () => {
     if (!token || connections.length === 0) return;
-    const activeConn = connections.find(c => c.state === "ACTIVE");
+    const activeConn = findIngestableZoikoConnection();
     if (!activeConn) {
       setFeedback({
         type: "error",
@@ -265,7 +274,7 @@ export function IngestionTab({ currentTenant, token, onRefresh }: IngestionTabPr
       return;
     }
 
-    const activeConn = connections.find(c => c.state === "ACTIVE");
+    const activeConn = findIngestableZoikoConnection();
     if (!activeConn && !lastSentBatch) {
       setFeedback({
         type: "error",
@@ -280,7 +289,7 @@ export function IngestionTab({ currentTenant, token, onRefresh }: IngestionTabPr
 
     try {
       let targetBatch = lastSentBatch;
-      if (!targetBatch || !connections.some(c => c.id === targetBatch?.connectionId && c.state === "ACTIVE")) {
+      if (!targetBatch || !connections.some(c => c.id === targetBatch?.connectionId && isIngestableState(c.state))) {
         const now = new Date();
         const freshBatch: ZoikoTimeBatchPayload = {
           connectionId: (activeConn || connections[0]).id,
@@ -326,7 +335,7 @@ export function IngestionTab({ currentTenant, token, onRefresh }: IngestionTabPr
   // Test 3: Send Prohibited Surveillance Decoy Payload
   const handleSendDecoyAttack = async () => {
     if (!token || connections.length === 0) return;
-    const activeConn = connections.find(c => c.state === "ACTIVE") || connections[0];
+    const activeConn = findIngestableZoikoConnection() || connections[0];
     setActionLoading("batch-decoy");
     setFeedback(null);
 
@@ -390,7 +399,7 @@ export function IngestionTab({ currentTenant, token, onRefresh }: IngestionTabPr
   // Test 4: Send Revision 2 Correction
   const handleSendRevisionCorrection = async () => {
     if (!token || connections.length === 0) return;
-    const activeConn = connections.find(c => c.state === "ACTIVE");
+    const activeConn = findIngestableZoikoConnection();
     if (!activeConn) {
       setFeedback({
         type: "error",
@@ -453,7 +462,7 @@ export function IngestionTab({ currentTenant, token, onRefresh }: IngestionTabPr
         <h2 style={{ marginTop: "0.5rem" }}>Ingestion & Work-State Ledger</h2>
         <p className="lead">
           Strict schema ingestion pipeline without surveillance overcollection. Source contracts filter
-          data at the boundary, enforce tenant-scoped HMAC pseudonymization, evaluate source freshness
+          {` ${vocab.workItems.toLowerCase()} `}and{` ${vocab.unit.toLowerCase()} `}cadence metadata at the boundary, enforce tenant-scoped HMAC pseudonymization, evaluate source freshness
           over time, and maintain an append-only historical work ledger.
         </p>
         <div className="tagline-quote">&ldquo;Change the work. Not the worker.&rdquo;</div>

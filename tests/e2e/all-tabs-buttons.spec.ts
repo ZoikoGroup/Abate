@@ -180,10 +180,10 @@ test.describe("All Tabs & Buttons Full Real Verification", () => {
     expect((await csvRes).status()).toBe(200);
     await expect(page.getByText(/RELEASE CSV EXPORTED/i)).toBeVisible();
 
-    // Recalculate
+    // Recalculate (Section 6: 202 Accepted + jobId for long-running work)
     const recalcRes = page.waitForResponse(r => r.url().includes("/recalculate") && r.request().method() === "POST");
     await page.getByRole("button", { name: /Trigger Recalculation/i }).click();
-    expect((await recalcRes).status()).toBe(200);
+    expect((await recalcRes).status()).toBe(202);
     await expect(page.getByText(/METRIC RECALCULATION TRIGGERED/i)).toBeVisible();
   });
 

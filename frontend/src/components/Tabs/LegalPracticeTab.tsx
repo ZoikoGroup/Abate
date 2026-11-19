@@ -12,6 +12,7 @@ import {
   type LegalMatterView,
   type LegalFatigueAssessmentView
 } from "../../api/client";
+import { StateView } from "../StateView";
 
 function fmtLegalErr(err: unknown): string {
   if (err instanceof ApiError) {
@@ -177,6 +178,9 @@ export function LegalPracticeTab({ currentTenant, token }: LegalPracticeTabProps
           <span className="badge badge-success">HSWA 1974 §2</span>
         </div>
       </div>
+
+      {!token && <StateView state={{ kind: "unauthorized" }} />}
+      {loading && matters.length === 0 && <StateView state={{ kind: "loading" }} />}
 
       {errorMsg && (
         <div className="feedback-alert alert-error" role="alert">

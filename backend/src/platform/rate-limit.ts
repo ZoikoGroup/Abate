@@ -6,6 +6,7 @@
 import { Request, Response, NextFunction } from "express";
 import jwt from "jsonwebtoken";
 import { loadConfig } from "./config";
+import { recordRateLimitHit } from "./monitoring";
 
 export type RateLimitTier = "default" | "ai" | "export" | "ingest";
 
@@ -126,6 +127,7 @@ export function rateLimitMiddleware(req: Request, res: Response, next: NextFunct
   for (const c of checks) {
     const resCheck = consumeBucket(c.key, c.limit, rl.windowMs, now);
     if (!resCheck.allowed) {
+      recordRateLimitHit();
       res.setHeader("Retry-After", String(resCheck.retryAfterSec));
       res.status(429).json({
         code: "RATE_LIMITED",
