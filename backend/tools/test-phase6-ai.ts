@@ -258,7 +258,15 @@ async function main() {
       "kisne sabse kam kaam kiya",
       "sabke naam batao",
       "show individual productivity per worker",
-      "wh\u200bo is most at risk"
+      "wh\u200bo is most at risk",
+      // other sectors: the screen is not lawyer-specific
+      "Which nurse has the highest hours?",
+      "Please rank the engineers by late-night commits",
+      "Identify the accountants who are overworked",
+      "Who is the most stressed clinician on the ward?",
+      "Name the developers who worked the most overtime",
+      "Compare each teacher by absence",
+      "List the auditors who are burnt out"
     ];
     for (const q of blocked) {
       assert.ok(isProhibitedRequest(q), `Expected request to be refused: ${q}`);
@@ -268,6 +276,8 @@ async function main() {
       "Explain the highest hours",
       "Explain the released measurement and suggest relevant workplace risk controls.",
       "Why did boundary intrusion rise in the evening window?",
+      "Why did late-evening workload rise during the release cutover window?",
+      "What controls reduce after-hours pressure during a surge window?",
       "test-fabricated-citation",
       "test-numeric-tamper"
     ];

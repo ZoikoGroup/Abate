@@ -1,165 +1,48 @@
 // backend/src/domains/lifecycle/sector.ts
+// Sector resolution for a tenant. Sector knowledge lives in packs (see sector-registry.ts),
+// not in this file. This file resolves which pack applies and exposes the neutral fatigue math.
 import { AppError } from "../../platform/errors";
 import { Tx } from "../../platform/db/with-tenant";
+import {
+  DEFAULT_NEUTRAL_FATIGUE_RULE,
+  NeutralFatigueResult,
+  NeutralFatigueRule,
+  NeutralWorkItemInput,
+  SectorMapping,
+  SectorUiCopy,
+  SectorVocabulary,
+  validateSectorPack
+} from "./sector-pack";
+import {
+  AvailableSector,
+  assertValidSectorSelection,
+  detectSectorByBindings,
+  getBaselineMapping,
+  getSectorDisplayName,
+  getSectorMapping,
+  listAvailableSectors,
+  listEnabledSectorTags
+} from "./sector-registry";
+import { GENERIC_VOCABULARY } from "./packs/generic";
+import { LEGAL_VOCABULARY } from "./packs/legal";
+import { ACCOUNTING_VOCABULARY } from "./packs/accounting";
 
-export interface SectorVocabulary {
-  workItem: string;
-  workItems: string;
-  unit: string;
-  demandWindow: string;
-  supervisor: string;
-}
-
-export interface NeutralWorkItemInput {
-  workItemId: string;
-  unit: string;
-  demandWindow: string;
-}
-
-export interface NeutralFatigueRule {
-  highDemandWindows: string[];
-  consecutiveLateNights: number;
-  lateEveningUtcHour: number;
-  earlyMorningUtcHour: number;
-}
-
-export interface NeutralFatigueResult {
-  workItemId: string;
-  unit: string;
-  demandWindow: string;
-  hasFatigueSurge: boolean;
-  consecutiveLateNightsCount: number;
-  thresholdUsed: number;
-}
-
-export interface SectorMapping {
-  sector: string;
-  packKey: string;
-  vocabulary: SectorVocabulary;
-  workItem: {
-    fromEntity: (entity: any) => { kind: string; externalRef: string; unit: string };
-  };
-  demandWindows: string[];
-  highDemandWindows: string[];
-  fatigueRule: NeutralFatigueRule;
-  forbidden: string[];
-  requiredGates: Array<"APPROVAL" | "CONSULTATION" | "REVIEW">;
-  claimScope: string;
-  cannotOverride: ["privacyFloor", "aiAuthority"];
-}
-
-export const GENERIC_VOCABULARY: SectorVocabulary = {
-  workItem: "Work Item",
-  workItems: "Work Items",
-  unit: "Unit / Team",
-  demandWindow: "Demand Window",
-  supervisor: "Accountable Reviewer"
+export type {
+  NeutralFatigueResult,
+  NeutralFatigueRule,
+  NeutralWorkItemInput,
+  SectorMapping,
+  SectorUiCopy,
+  SectorVocabulary,
+  AvailableSector
 };
+export { DEFAULT_NEUTRAL_FATIGUE_RULE, GENERIC_VOCABULARY, LEGAL_VOCABULARY, ACCOUNTING_VOCABULARY, validateSectorPack };
+export { registerSectorPack, getSectorMapping, listAvailableSectors, describeSectorScope } from "./sector-registry";
 
-export const LEGAL_VOCABULARY: SectorVocabulary = {
-  workItem: "Matter",
-  workItems: "Matters",
-  unit: "Practice Area",
-  demandWindow: "Trial / Closing Window",
-  supervisor: "Supervisory Partner"
-};
-
-export const ACCOUNTING_VOCABULARY: SectorVocabulary = {
-  workItem: "Engagement",
-  workItems: "Engagements",
-  unit: "Service Line",
-  demandWindow: "Busy Season / Close Window",
-  supervisor: "Engagement Reviewer"
-};
-
-export const DEFAULT_NEUTRAL_FATIGUE_RULE: NeutralFatigueRule = {
-  highDemandWindows: ["PEAK_PERIOD", "HIGH_DEMAND", "DEADLINE_WINDOW"],
-  consecutiveLateNights: 3,
-  lateEveningUtcHour: 20,
-  earlyMorningUtcHour: 6
-};
-
-/**
- * Neutral Sector-Agnostic Core Profile.
- * Supplies baseline neutral vocabulary and configurable consecutive late-evening fatigue rule.
- */
-export const genericMapping: SectorMapping = {
-  sector: "GENERIC",
-  packKey: "generic-work-design",
-  vocabulary: GENERIC_VOCABULARY,
-  workItem: {
-    fromEntity: (w: { workItemId?: string; externalRef?: string; unit?: string }) => ({
-      kind: "WORK_ITEM",
-      externalRef: w.workItemId || w.externalRef || "WORK-ITEM-UNKNOWN",
-      unit: w.unit || "GENERAL_TEAM"
-    })
-  },
-  demandWindows: ["BASELINE", "PEAK_PERIOD", "HIGH_DEMAND", "DEADLINE_WINDOW"],
-  highDemandWindows: ["PEAK_PERIOD", "HIGH_DEMAND", "DEADLINE_WINDOW"],
-  fatigueRule: DEFAULT_NEUTRAL_FATIGUE_RULE,
-  forbidden: ["substantiveWorkProduct", "clientConfidentialNotes", "individualScore", "keystrokeLogs"],
-  requiredGates: ["APPROVAL"],
-  claimScope: "Neutral work-design core active (no sector-specific overlay bound). Enabled packs today: UK Legal Sector Pack (SRA 2023).",
-  cannotOverride: ["privacyFloor", "aiAuthority"]
-};
-
-/**
- * Legal Sector Pack Contract (Playbook B5 §3)
- * Maps matters, practice areas, phases, and trial/closing windows onto neutral core concepts.
- */
-export const legalMapping: SectorMapping = {
-  sector: "LEGAL",
-  packKey: "legal-uk-sra",
-  vocabulary: LEGAL_VOCABULARY,
-  workItem: {
-    fromEntity: (m: { matterId: string; practiceArea: string }) => ({
-      kind: "WORK_ITEM",
-      externalRef: m.matterId,
-      unit: m.practiceArea
-    })
-  },
-  demandWindows: ["TRIAL_PREP", "TRIAL", "CLOSING", "CLOSING_TRANSACTION", "FILING_DEADLINE"],
-  highDemandWindows: ["TRIAL_PREP", "CLOSING_TRANSACTION"],
-  fatigueRule: {
-    highDemandWindows: ["TRIAL_PREP", "CLOSING_TRANSACTION"],
-    consecutiveLateNights: 3,
-    lateEveningUtcHour: 20,
-    earlyMorningUtcHour: 6
-  },
-  forbidden: ["substantiveWorkProduct", "clientConfidentialNotes"], // never ingested, per constitutional boundaries
-  requiredGates: ["APPROVAL", "CONSULTATION", "REVIEW"],
-  claimScope: "UK Legal Sector Pack (SRA 2023) active for this tenant.",
-  cannotOverride: ["privacyFloor", "aiAuthority"] // sector packs cannot lower these
-};
-
-/**
- * Accounting Sector Pack Fixture (Architecture test for portability)
- * Proves the engine is neutral across knowledge sectors without code forks.
- */
-export const accountingMapping: SectorMapping = {
-  sector: "ACCOUNTING",
-  packKey: "accounting-fixture",
-  vocabulary: ACCOUNTING_VOCABULARY,
-  workItem: {
-    fromEntity: (eng: { engagementId: string; serviceLine: string }) => ({
-      kind: "WORK_ITEM",
-      externalRef: eng.engagementId,
-      unit: eng.serviceLine
-    })
-  },
-  demandWindows: ["BUSY_SEASON", "AUDIT_CLOSE", "TAX_DEADLINE"],
-  highDemandWindows: ["BUSY_SEASON", "AUDIT_CLOSE"],
-  fatigueRule: {
-    highDemandWindows: ["BUSY_SEASON", "AUDIT_CLOSE"],
-    consecutiveLateNights: 3,
-    lateEveningUtcHour: 20,
-    earlyMorningUtcHour: 6
-  },
-  forbidden: ["substantiveWorkProduct", "clientTaxReturns"],
-  requiredGates: ["APPROVAL", "CONSULTATION", "REVIEW"],
-  claimScope: "Portability test fixture only (Accounting is not a launched commercial pack).",
-  cannotOverride: ["privacyFloor", "aiAuthority"]
-};
+/** Built-in mappings, kept as named exports for existing callers. New code should use getSectorMapping. */
+export const genericMapping: SectorMapping = getBaselineMapping();
+export const legalMapping: SectorMapping = getSectorMapping("LEGAL") as SectorMapping;
+export const accountingMapping: SectorMapping = getSectorMapping("ACCOUNTING") as SectorMapping;
 
 /**
  * Sector-neutral consecutive late-evening fatigue rule.
@@ -213,19 +96,32 @@ export function evaluateNeutralFatigueSurge(
 
 export interface TenantSectorProfile {
   tenantId: string;
-  sectorKey: "GENERIC" | "LEGAL" | "ACCOUNTING";
+  /** Registered sector key, for example GENERIC, LEGAL or ACCOUNTING. */
+  sectorKey: string;
+  packKey: string;
+  displayName: string;
+  /** True when a sector pack other than the neutral baseline is active. */
+  packActive: boolean;
+  /** Deprecated: use sectorKey === "LEGAL". Kept for one release for existing clients. */
   hasLegalPack: boolean;
   activePacks: string[];
   vocabulary: SectorVocabulary;
   demandWindows: string[];
+  highDemandWindows: string[];
+  /** Allowed work item units for the sector. Empty means free-form. */
+  workItemUnits: string[];
+  /** Screen wording for the sector, so clients render any sector without sector-specific code. */
+  ui: SectorUiCopy;
   claimScope: string;
   enabledSectors: string[];
+  availableSectors: AvailableSector[];
 }
 
 export async function setTenantSectorSetting(
   tx: Tx,
-  args: { tenantId: string; sectorKey: "GENERIC" | "LEGAL" | "ACCOUNTING"; packKey: string; updatedBy?: string | null }
+  args: { tenantId: string; sectorKey: string; packKey: string; updatedBy?: string | null }
 ): Promise<void> {
+  assertValidSectorSelection(args.sectorKey, args.packKey);
   await tx.q(
     `INSERT INTO tenant_sector_setting (tenant_id, sector_key, pack_key, updated_by)
      VALUES ($1, $2, $3, $4)
@@ -262,31 +158,45 @@ export async function resolveTenantSectorProfile(
     activePacks.push(explicitSetting.pack_key);
   }
 
+  // An explicit tenant setting wins. A sector that is no longer registered fails closed to the
+  // neutral baseline. With no setting, the sector is detected from the tenant's policy bindings.
   let selected: SectorMapping;
-  if (explicitSetting?.sector_key === "LEGAL") {
-    selected = legalMapping;
-  } else if (explicitSetting?.sector_key === "ACCOUNTING") {
-    selected = accountingMapping;
-  } else if (explicitSetting?.sector_key === "GENERIC") {
-    selected = genericMapping;
+  if (explicitSetting?.sector_key) {
+    selected = getSectorMapping(explicitSetting.sector_key) ?? getBaselineMapping();
   } else {
-    const hasLegalPackByBinding = activePacks.some(k => k.includes("legal") || k.includes("bar"));
-    const isAccountingFixture = !hasLegalPackByBinding && activePacks.some(k => k.includes("accounting"));
-    selected = hasLegalPackByBinding ? legalMapping : (isAccountingFixture ? accountingMapping : genericMapping);
+    selected = detectSectorByBindings(activePacks) ?? getBaselineMapping();
   }
-
-  const hasLegalPack = selected.sector === "LEGAL";
 
   return {
     tenantId,
-    sectorKey: selected.sector as "GENERIC" | "LEGAL" | "ACCOUNTING",
-    hasLegalPack,
+    sectorKey: selected.sector,
+    packKey: selected.packKey,
+    displayName: getSectorDisplayName(selected.sector),
+    packActive: selected.sector !== getBaselineMapping().sector,
+    hasLegalPack: selected.sector === "LEGAL",
     activePacks,
     vocabulary: selected.vocabulary,
     demandWindows: selected.demandWindows,
+    highDemandWindows: selected.highDemandWindows,
+    workItemUnits: selected.workItemUnits,
+    ui: selected.ui,
     claimScope: selected.claimScope,
-    enabledSectors: ["LEGAL_UK"]
+    enabledSectors: listEnabledSectorTags(),
+    availableSectors: listAvailableSectors()
   };
+}
+
+/** Fails closed with 403 unless the tenant's active sector is the given one. */
+export async function assertTenantHasSectorPack(
+  tx: Tx,
+  tenantId: string,
+  sectorKey: string,
+  at: Date = new Date()
+): Promise<void> {
+  const profile = await resolveTenantSectorProfile(tx, tenantId, at);
+  if (profile.sectorKey !== sectorKey) {
+    throw new AppError("FORBIDDEN", `${getSectorDisplayName(sectorKey)} is not enabled for this tenant.`);
+  }
 }
 
 export async function assertTenantHasLegalPack(
@@ -297,18 +207,5 @@ export async function assertTenantHasLegalPack(
   const profile = await resolveTenantSectorProfile(tx, tenantId, at);
   if (!profile.hasLegalPack) {
     throw new AppError("FORBIDDEN", "Legal Sector Pack is not enabled for this tenant.");
-  }
-}
-
-/**
- * validateSectorPack: Ensures sector pack cannot lower privacy floor or expand AI authority.
- * PDF Page 4: "Sector pack tries to lower privacy floor or expand AI authority -> Rejected at load/validation time".
- */
-export function validateSectorPack(content: any): void {
-  if (content.privacyFloor !== undefined && content.privacyFloor < 10) {
-    throw new AppError("VALIDATION", `Sector pack rejected: cannot lower privacyFloor (${content.privacyFloor}) below constitutional minimum (10).`);
-  }
-  if (content.aiAuthority !== undefined && content.aiAuthority === "EXPANDED") {
-    throw new AppError("VALIDATION", "Sector pack rejected: cannot expand AI authority beyond human-in-the-loop governance.");
   }
 }

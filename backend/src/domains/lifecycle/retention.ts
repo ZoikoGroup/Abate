@@ -11,6 +11,7 @@ import {
   DataCategory,
   SetRetentionClassInput,
   PlaceLegalHoldInput,
+  normalizeHoldInput,
   ReleaseLegalHoldInput,
   RetentionRunReceipt,
   RetentionClassView,
@@ -109,6 +110,7 @@ export async function getRetentionState(args: {
     const classes: RetentionClassView[] = (await tx.q(`SELECT * FROM retention_class`)).rows
       .sort((a: any, b: any) => b.version - a.version);
     const holds: LegalHoldView[] = (await tx.q(`SELECT * FROM legal_hold`)).rows
+      .map((h: any) => ({ ...h, case_ref: h.matter_ref }))
       .sort((a: any, b: any) => +new Date(b.placed_at) - +new Date(a.placed_at));
     const runs: RetentionRunView[] = (await tx.q(`SELECT * FROM retention_run`)).rows
       .sort((a: any, b: any) => +new Date(b.completed_at) - +new Date(a.completed_at));
@@ -248,7 +250,8 @@ export async function placeLegalHold(args: {
   idempotencyKey: string | null | undefined;
 }) {
   requireRetentionAdmin(args.actor, "legal_hold.place");
-  const input = PlaceLegalHoldInput.parse(args.input);
+  // Normalize first so a request using either reference name hashes, and replays, identically.
+  const input = normalizeHoldInput(PlaceLegalHoldInput.parse(args.input));
 
   return runCommand({
     tenantId: args.who.tenantId,
@@ -269,7 +272,7 @@ export async function placeLegalHold(args: {
       await tx.q(
         `INSERT INTO legal_hold (id, tenant_id, data_category, scope_connection_id, matter_ref, reason, placed_by, placed_at)
          VALUES ($1, $2, $3, $4, $5, $6, $7, $8)`,
-        [id, tx.tenantId, input.dataCategory, input.scopeConnectionId ?? null, input.matterRef, input.reason, args.actor.principalId, placedAt]
+        [id, tx.tenantId, input.dataCategory, input.scopeConnectionId ?? null, input.caseRef, input.reason, args.actor.principalId, placedAt]
       );
 
       return {
@@ -277,7 +280,8 @@ export async function placeLegalHold(args: {
           id,
           dataCategory: input.dataCategory,
           scopeConnectionId: input.scopeConnectionId ?? null,
-          matterRef: input.matterRef,
+          caseRef: input.caseRef,
+          matterRef: input.caseRef, // deprecated alias of caseRef
           placedBy: args.actor.principalId,
           placedAt,
           active: true

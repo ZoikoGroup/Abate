@@ -56,13 +56,37 @@ export const SetRetentionClassInput = z.object({
 }).strict();
 export type SetRetentionClassInput = z.infer<typeof SetRetentionClassInput>;
 
+/**
+ * A records hold applies to every sector, so its reference is a neutral case reference.
+ * `matterRef` is the deprecated pre-generalization name. It is still accepted, and when both are
+ * sent they must match. The database column keeps its original name until a safe migration.
+ */
 export const PlaceLegalHoldInput = z.object({
   dataCategory: DataCategoryEnum,
   scopeConnectionId: z.string().uuid().optional(),
-  matterRef: z.string().min(2),
+  caseRef: z.string().min(2).optional(),
+  matterRef: z.string().min(2).optional(),
   reason: z.string().min(5)
-}).strict();
+}).strict()
+  .refine(i => i.caseRef !== undefined || i.matterRef !== undefined, {
+    message: "caseRef is required.",
+    path: ["caseRef"]
+  })
+  .refine(i => i.caseRef === undefined || i.matterRef === undefined || i.caseRef === i.matterRef, {
+    message: "caseRef and matterRef must match when both are sent.",
+    path: ["matterRef"]
+  });
 export type PlaceLegalHoldInput = z.infer<typeof PlaceLegalHoldInput>;
+
+/** The hold input with the reference resolved to a single name. Hash and store this, not the raw body. */
+export function normalizeHoldInput(i: PlaceLegalHoldInput) {
+  return {
+    dataCategory: i.dataCategory,
+    scopeConnectionId: i.scopeConnectionId,
+    caseRef: (i.caseRef ?? i.matterRef) as string,
+    reason: i.reason
+  };
+}
 
 export const ReleaseLegalHoldInput = z.object({
   releaseReason: z.string().min(5)
@@ -130,6 +154,8 @@ export interface LegalHoldView {
   tenant_id: string;
   data_category: DataCategory;
   scope_connection_id: string | null;
+  /** Neutral case reference. Same value as matter_ref, which is the stored column and a deprecated alias. */
+  case_ref: string;
   matter_ref: string;
   reason: string;
   placed_by: string;
