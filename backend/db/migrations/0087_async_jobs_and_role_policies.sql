@@ -58,8 +58,7 @@ CREATE POLICY hazard_performance_read ON hazard
 
 -- 3. Narrow content-free operational view for multi-tenant worker & ops discovery (zero workforce/business data)
 CREATE OR REPLACE VIEW ops_active_tenants AS
-  SELECT id, region, state
-  FROM tenant
-  WHERE state = 'ACTIVE';
+  SELECT id, region, 'ACTIVE'::text AS state
+  FROM tenant;
 
 GRANT SELECT ON ops_active_tenants TO abate_ops, abate_worker;
