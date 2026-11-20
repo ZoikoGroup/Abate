@@ -53,7 +53,7 @@ export const NEUTRAL_UI: SectorUiCopy = {
   fatigueButtonLabel: "Fatigue Check",
   fatigueCardTitle: "Workplace Fatigue Audit",
   surgeBadge: "SURGE ALERT: FATIGUE DETECTED",
-  compliantBadge: "COMPLIANT: NORMAL VARIANCE",
+  compliantBadge: "WITHIN THRESHOLD: NORMAL VARIANCE",
   thresholdNote: "Consecutive late-evening work during a high-demand window triggers mandatory consultation.",
   consultationTitle: "Mandatory Consultation Gate",
   consultationSignerLabel: "Accountable Reviewer",

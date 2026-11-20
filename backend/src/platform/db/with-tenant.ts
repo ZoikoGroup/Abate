@@ -132,6 +132,9 @@ class MemoryDatabase {
   // Sector Neutrality per-tenant pack setting (0084_completion_roles_rls_constraints.sql)
   public tenantSectorSettings: Map<string, any> = new Map();
 
+  // Durable async jobs table (0087_async_jobs_and_role_policies.sql)
+  public asyncJobs: Map<string, any> = new Map();
+
   constructor() {
     this.seedDefaults();
   }
@@ -288,6 +291,7 @@ class MemoryDatabase {
     this.outcomeEvaluations.clear();
     this.aiChangeProfiles.clear();
     this.aiWorkDesignAssessments.clear();
+    this.asyncJobs.clear();
     this.seedDefaults();
   }
 }
@@ -2593,6 +2597,51 @@ class MemoryClient {
     if (upper.includes("FROM TENANT_SECTOR_SETTING")) {
       const rec = this.tenantContext ? memDb.tenantSectorSettings.get(this.tenantContext) : null;
       return { rows: rec ? [rec] : [], rowCount: rec ? 1 : 0, command: "SELECT", oid: 0, fields: [] };
+    }
+
+    // Durable Async Jobs (0087_async_jobs_and_role_policies.sql)
+    if (upper.includes("INSERT INTO ASYNC_JOB")) {
+      const id = params[0];
+      const tId = params[1];
+      const jobType = params[2];
+      const hasExplicitState = params.length >= 6;
+      const state = hasExplicitState ? params[3] : "COMPLETED";
+      const progress = hasExplicitState ? Number(params[4] ?? 100) : 100;
+      const rawSummary = hasExplicitState ? params[5] : params[3];
+      const errorCode = hasExplicitState ? (params[6] ?? null) : null;
+      if (this.tenantContext && tId !== this.tenantContext) {
+        throw new Error("RLS WITH CHECK violation: cross-tenant async_job write rejected");
+      }
+      const now = new Date().toISOString();
+      const rec = {
+        id,
+        tenant_id: tId,
+        job_type: jobType,
+        state: state || "COMPLETED",
+        progress,
+        result_summary: typeof rawSummary === "string" ? JSON.parse(rawSummary) : (rawSummary ?? null),
+        error_code: errorCode,
+        created_at: now,
+        updated_at: now
+      };
+      memDb.asyncJobs.set(id, rec);
+      return { rows: [rec], rowCount: 1, command: "INSERT", oid: 0, fields: [] };
+    }
+
+    if (upper.includes("FROM ASYNC_JOB")) {
+      let rows = Array.from(memDb.asyncJobs.values()).filter((j) => j.tenant_id === this.tenantContext);
+      if (upper.includes("WHERE ID = $1") && params.length > 0) {
+        rows = rows.filter((j) => j.id === params[0]);
+      }
+      return { rows, rowCount: rows.length, command: "SELECT", oid: 0, fields: [] };
+    }
+
+    // Narrow operational view: ops_active_tenants (id, region, state only)
+    if (upper.includes("FROM OPS_ACTIVE_TENANTS")) {
+      const rows = Array.from(memDb.tenants.values())
+        .filter((t) => (t.state || "ACTIVE") === "ACTIVE")
+        .map((t) => ({ id: t.id, region: t.region, state: t.state || "ACTIVE" }));
+      return { rows, rowCount: rows.length, command: "SELECT", oid: 0, fields: [] };
     }
 
     return { rows: [], rowCount: 0, command: "SELECT", oid: 0, fields: [] };

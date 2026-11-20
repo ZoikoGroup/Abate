@@ -134,7 +134,7 @@ import {
   generateDiagnosticReceipt,
   verifyDiagnosticReceipt
 } from "./domains/support";
-import { withTenant, withPlatform, withWorker, QueryFn, checkPgHealth, isPostgresRequired } from "./platform/db/with-tenant";
+import { withTenant, withPlatform, withWorker, withPerformance, withOps, QueryFn, checkPgHealth, isPostgresRequired } from "./platform/db/with-tenant";
 import { getWorkerMetrics } from "./worker/daemon";
 import { drainOnce } from "./worker/outbox-publisher";
 import { seedTwoTenants } from "./fixtures/seed";
@@ -567,12 +567,49 @@ app.post("/api/v2/auth/logout", (_req: Request, res: Response) => {
   res.status(204).send();
 });
 
-// Principal Profile & Allowed Navigations (Guide §D.1 / §F.1)
+// Principal Profile & Allowed Navigations (Guide §D.1 / §F.1 / Completion Plan §7.1)
 app.get("/api/v2/me", async (req: Request, res: Response) => {
   try {
     const who = await authenticate(getHeader(req, "authorization"));
     const actor = await resolveActor(who.tenantId, who.subject, new Date(), who.role);
     const tenant = await getTenant({ who, actor });
+    const sectorProfile = await withTenant(who.tenantId, async (tx) => resolveTenantSectorProfile(tx, who.tenantId));
+
+    const effectiveRoles = new Set<string>([
+      ...(who.role ? [who.role] : []),
+      ...actor.memberships.map((m: any) => String(m.domain_role))
+    ]);
+    const isReadOnlyRole =
+      !effectiveRoles.has("RISK_OWNER") &&
+      !effectiveRoles.has("EMPLOYER_ADMIN") &&
+      !effectiveRoles.has("APPROVER") &&
+      !effectiveRoles.has("REVIEWER") &&
+      !effectiveRoles.has("IMPLEMENTATION_OWNER") &&
+      !effectiveRoles.has("DPO") &&
+      !effectiveRoles.has("PRIVACY_OFFICER") &&
+      (effectiveRoles.has("VIEWER") || effectiveRoles.has("WORKER_REP") || effectiveRoles.has("EMPLOYEE") || effectiveRoles.has("MEMBER"));
+
+    const allowedNav: string[] = [
+      "DASHBOARD",
+      "ORGANIZATIONS",
+      "COHORT_ANALYTICS",
+      "HAZARD_CONTROL",
+      "AUDIT",
+      "VERIFIER",
+      "CONSTITUTIONAL"
+    ];
+
+    if (sectorProfile.sectorKey !== "GENERIC") {
+      allowedNav.push("SECTOR_PACK");
+      if (sectorProfile.sectorKey === "LEGAL") {
+        // deprecated alias of SECTOR_PACK, kept for one release for older clients
+        allowedNav.push("LEGAL_PRACTICE");
+      }
+    }
+
+    if (!isReadOnlyRole) {
+      allowedNav.push("INGESTION", "RETENTION", "BOUNDED_AI", "OUTCOMES", "ISOLATION", "OUTBOX", "OPS");
+    }
 
     res.status(200).json({
       principalId: actor.principalId,
@@ -585,17 +622,7 @@ app.get("/api/v2/me", async (req: Request, res: Response) => {
         organizationId: m.organization_id,
         domainRole: m.domain_role
       })),
-      allowedNav: [
-        "DASHBOARD",
-        "ORGANIZATIONS",
-        "COHORT_ANALYTICS",
-        "SECTOR_PACK",
-        "LEGAL_PRACTICE", // deprecated alias of SECTOR_PACK, kept for one release for older clients
-        "HAZARD_CONTROL",
-        "BOUNDED_AI",
-        "AUDIT",
-        "OPS"
-      ]
+      allowedNav
     });
   } catch (err) {
     toErrorResponse(err, res);
@@ -1206,6 +1233,7 @@ app.post("/api/v2/metrics/:id/recalculate", async (req: Request, res: Response) 
     const jobId = crypto.randomUUID();
     let recalculatedCount = 0;
     // In production, enqueued to worker; here marks the tenant's active releases of this metric SUPERSEDED
+    // and persists the job row durably in async_job (0087_async_jobs_and_role_policies.sql).
     await withTenant(who.tenantId, async (tx) => {
       const releases = (await tx.q("SELECT * FROM privacy_release")).rows
         .filter((r: any) => r.metric_id === req.params.id && r.status === "RELEASED");
@@ -1213,6 +1241,11 @@ app.post("/api/v2/metrics/:id/recalculate", async (req: Request, res: Response) 
         await tx.q("UPDATE privacy_release SET status = $1 WHERE id = $2", ["SUPERSEDED", r.id]);
         recalculatedCount++;
       }
+      await tx.q(
+        `INSERT INTO async_job (id, tenant_id, job_type, state, progress, result_summary, error_code)
+         VALUES ($1, $2, $3, 'COMPLETED', 100, $4, NULL)`,
+        [jobId, who.tenantId, "METRIC_RECALCULATION", JSON.stringify({ status: "SUCCESS", count: recalculatedCount })]
+      );
     });
 
     rememberJob({ id: jobId, tenantId: who.tenantId, type: "METRIC_RECALCULATION", result: { status: "SUCCESS", count: recalculatedCount } });
@@ -2487,9 +2520,20 @@ app.get("/api/v2/ops/ai-quota", async (req: Request, res: Response) => {
   try {
     await authenticateSupport(getHeader(req, "authorization"));
     const requestedTenantId = typeof req.query.tenantId === "string" && req.query.tenantId.trim() ? req.query.tenantId.trim() : null;
-    const tenantIds = requestedTenantId
-      ? [requestedTenantId]
-      : [GOLDEN_01.tenantA.id, GOLDEN_01.tenantB.id];
+    let tenantIds: string[];
+    if (requestedTenantId) {
+      tenantIds = [requestedTenantId];
+    } else {
+      try {
+        const discovered = await withOps(async (tx) => {
+          const r = await tx.q("SELECT id FROM ops_active_tenants");
+          return r.rows.map((row: any) => String(row.id));
+        });
+        tenantIds = discovered.length > 0 ? discovered : [GOLDEN_01.tenantA.id, GOLDEN_01.tenantB.id];
+      } catch {
+        tenantIds = [GOLDEN_01.tenantA.id, GOLDEN_01.tenantB.id];
+      }
+    }
 
     const items = [];
     for (const tId of tenantIds) {
@@ -2502,22 +2546,22 @@ app.get("/api/v2/ops/ai-quota", async (req: Request, res: Response) => {
   }
 });
 
-// Kill Switches: Ops/Support and Tenant Inspection
+// Kill Switches: Ops/Support and Tenant Inspection (abate_ops least-privilege pool)
 app.get("/api/v2/ops/kill-switches", async (req: Request, res: Response) => {
   try {
     await authenticateSupport(getHeader(req, "authorization"));
-    res.status(200).json(await withPlatform(tx => getKillSwitches(tx)));
+    res.status(200).json(await withOps(tx => getKillSwitches(tx)));
   } catch (err) {
     toErrorResponse(err, res);
   }
 });
 
-// Global effect: only a support operator may flip a switch, and the operator is recorded
+// Global effect: only a support operator may flip a switch, and the operator is recorded (abate_ops pool)
 app.post("/api/v2/ops/kill-switches", async (req: Request, res: Response) => {
   try {
     const support = await authenticateSupport(getHeader(req, "authorization"));
     const input = KillSwitchInput.parse(req.body);
-    res.status(200).json(await withPlatform(tx => setKillSwitch(tx, input.scope, input.active, support.operator)));
+    res.status(200).json(await withOps(tx => setKillSwitch(tx, input.scope, input.active, support.operator)));
   } catch (err) {
     toErrorResponse(err, res);
   }
@@ -2746,6 +2790,26 @@ app.get("/api/v2/jobs/:id", async (req: Request, res: Response) => {
           createdAt: row.failed_at
         };
       }
+
+      const asyncRes = await tx.q(
+        `SELECT id, tenant_id, job_type, state, progress, result_summary, error_code, created_at, updated_at
+         FROM async_job WHERE id = $1`,
+        [jobId]
+      );
+      if (asyncRes.rows.length > 0) {
+        const row = asyncRes.rows[0];
+        return {
+          id: row.id,
+          tenantId: row.tenant_id,
+          type: row.job_type,
+          state: row.state,
+          progress: row.progress,
+          result: row.result_summary,
+          error: row.error_code,
+          createdAt: row.created_at,
+          updatedAt: row.updated_at
+        };
+      }
       return null;
     });
 
@@ -2893,19 +2957,15 @@ app.get("/api/v2/outcomes/definitions/:id", async (req: Request, res: Response) 
   }
 });
 
-// Domain S13: Outcomes Evaluations (Plane B - runs with write_plane = 'B')
+// Domain S13: Outcomes Evaluations (Plane B - runs on abate_performance pool with write_plane = 'B')
 app.post("/api/v2/outcomes/evaluations", async (req: Request, res: Response) => {
   try {
     const who = await authenticate(getHeader(req, "authorization"));
     const actor = await resolveActor(who.tenantId, who.subject, new Date(), who.role);
     const input = EvaluateOutcomeInput.parse(req.body);
-    const out = await withTenant(
-      who.tenantId,
-      async (tx) => {
-        return await evaluateOutcome(tx, actor, input);
-      },
-      { writePlane: "B" } // Enforce Plane B write context
-    );
+    const out = await withPerformance(who.tenantId, async (tx) => {
+      return await evaluateOutcome(tx, actor, input);
+    });
     res.status(201).json(out);
   } catch (err) {
     toErrorResponse(err, res);
@@ -2916,7 +2976,7 @@ app.get("/api/v2/outcomes/evaluations", async (req: Request, res: Response) => {
   try {
     const who = await authenticate(getHeader(req, "authorization"));
     await resolveActor(who.tenantId, who.subject, new Date(), who.role);
-    const out = await withTenant(who.tenantId, async (tx) => {
+    const out = await withPerformance(who.tenantId, async (tx) => {
       return await listOutcomeEvaluations(tx, who.tenantId);
     });
     res.status(200).json(out);
@@ -2929,7 +2989,7 @@ app.get("/api/v2/outcomes/evaluations/:id", async (req: Request, res: Response) 
   try {
     const who = await authenticate(getHeader(req, "authorization"));
     await resolveActor(who.tenantId, who.subject, new Date(), who.role);
-    const out = await withTenant(who.tenantId, async (tx) => {
+    const out = await withPerformance(who.tenantId, async (tx) => {
       return await getOutcomeEvaluation(tx, who.tenantId, String(req.params.id));
     });
     res.status(200).json(out);
@@ -2950,13 +3010,13 @@ app.get("/api/v2/outcomes/releases/:id", async (req: Request, res: Response) => 
   }
 });
 
-// Domain S14: AI Change Profiles & Assessments
+// Domain S14: AI Change Profiles & Assessments (abate_performance pool)
 app.post("/api/v2/ai-changes", async (req: Request, res: Response) => {
   try {
     const who = await authenticate(getHeader(req, "authorization"));
     const actor = await resolveActor(who.tenantId, who.subject, new Date(), who.role);
     const input = CreateAiChangeProfileInput.parse(req.body);
-    const out = await withTenant(who.tenantId, async (tx) => {
+    const out = await withPerformance(who.tenantId, async (tx) => {
       const profile = await registerAiChangeProfile(tx, actor, input);
       const assessment = await createAssessment(tx, actor, { profileId: profile.id, profileVersion: profile.version });
       return { profile, assessment };
@@ -2971,7 +3031,7 @@ app.get("/api/v2/ai-changes", async (req: Request, res: Response) => {
   try {
     const who = await authenticate(getHeader(req, "authorization"));
     await resolveActor(who.tenantId, who.subject, new Date(), who.role);
-    const out = await withTenant(who.tenantId, async (tx) => {
+    const out = await withPerformance(who.tenantId, async (tx) => {
       return await listAssessments(tx, who.tenantId);
     });
     res.status(200).json(out);
@@ -2984,7 +3044,7 @@ app.get("/api/v2/ai-changes/:id", async (req: Request, res: Response) => {
   try {
     const who = await authenticate(getHeader(req, "authorization"));
     await resolveActor(who.tenantId, who.subject, new Date(), who.role);
-    const out = await withTenant(who.tenantId, async (tx) => {
+    const out = await withPerformance(who.tenantId, async (tx) => {
       return await getAssessment(tx, who.tenantId, String(req.params.id));
     });
     res.status(200).json(out);
@@ -3003,7 +3063,7 @@ app.post("/api/v2/ai-changes/:id/advance", async (req: Request, res: Response) =
       throw new AppError("VALIDATION", "Header 'If-Match' (or body.version) is required for stage advance.");
     }
     const input = AdvanceAssessmentInput.parse(req.body);
-    const out = await withTenant(who.tenantId, async (tx) => {
+    const out = await withPerformance(who.tenantId, async (tx) => {
       return await advanceAssessment(tx, actor, String(req.params.id), input.to, ifMatch, input);
     });
     res.status(200).json(out);

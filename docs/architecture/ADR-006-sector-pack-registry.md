@@ -1,6 +1,6 @@
 # ADR-006: Sector Pack Registry (Abate for Every Sector)
 
-- **Status:** Accepted. Supersedes section 2 of `ADR-005-ai-quota-and-sector-neutrality.md`.
+- **Status:** DRAFT (Pending Product & Architecture Owner sign-off). Supersedes section 2 of `ADR-005-ai-quota-and-sector-neutrality.md`.
 - **Date:** 2026-11-19
 - **Owners:** Platform Architecture & Governance
 

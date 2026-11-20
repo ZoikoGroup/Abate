@@ -4,14 +4,13 @@
 //  - legal-named /api/v2/sector/legal/* aliases keep their shapes and stay legal-only
 //  - a newly registered sector works through the same routes with no route changes
 import assert from "node:assert";
-import type { AddressInfo } from "node:net";
 import { GOLDEN_01 } from "../src/fixtures/golden01";
 import { seedTwoTenants } from "../src/fixtures/seed";
 import { SEEDED_WORK_ITEMS } from "../src/fixtures/sector-work-items";
 import { createDevToken } from "../src/domains/tenant/auth";
 import { registerSectorPack, setTenantSectorSetting } from "../src/domains/lifecycle/sector";
 import { withTenant } from "../src/platform/db/with-tenant";
-import { app } from "../src/index";
+import { expressCall } from "./simulate-30d-http";
 
 console.log("\x1b[36m=== Abate Task Runner: test-sector-work (Generic Sector Endpoints + Legal Aliases) ===\x1b[0m");
 
@@ -32,17 +31,16 @@ const tenantB = GOLDEN_01.tenantB.id;
 const tokenA = createDevToken({ tenantId: tenantA, subject: "auth0|user-tenant-a-risk-owner", role: "RISK_OWNER", purpose: "WORKPLACE_RISK_ASSESSMENT" });
 const tokenB = createDevToken({ tenantId: tenantB, subject: "auth0|user-tenant-b-risk-owner", role: "RISK_OWNER", purpose: "WORKPLACE_RISK_ASSESSMENT" });
 
-let base = "";
 let keySeq = 0;
 async function call(method: "GET" | "POST" | "PUT", path: string, token: string, body?: unknown) {
-  const headers: Record<string, string> = { authorization: `Bearer ${token}` };
-  if (body !== undefined) headers["content-type"] = "application/json";
+  const headers: Record<string, string> = {};
   if (method === "PUT") headers["idempotency-key"] = `sector-work-test-${++keySeq}`;
-  const res = await fetch(`${base}${path}`, { method, headers, body: body === undefined ? undefined : JSON.stringify(body) });
-  const text = await res.text();
-  let json: any = text;
-  try { json = JSON.parse(text); } catch { /* non-JSON */ }
-  return { status: res.status, body: json };
+  const res = await expressCall(method, path, {
+    token,
+    body,
+    headers
+  });
+  return { status: res.status, body: res.body };
 }
 
 const legalItem = {
@@ -65,9 +63,6 @@ async function resetSectors() {
 async function run() {
   await seedTwoTenants();
   await resetSectors();
-  const server = app.listen(0, "127.0.0.1");
-  await new Promise<void>((r) => server.once("listening", () => r()));
-  base = `http://127.0.0.1:${(server.address() as AddressInfo).port}`;
 
   try {
     await it("generic list returns the tenant's legal items with vocabulary, and no other tenant's", async () => {
@@ -285,7 +280,6 @@ async function run() {
       }
     });
   } finally {
-    await new Promise<void>((r) => server.close(() => r()));
     await resetSectors();
   }
 

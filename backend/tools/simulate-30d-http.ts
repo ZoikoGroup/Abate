@@ -155,7 +155,13 @@ async function httpCall(
         });
       }
     );
-    req.on("error", reject);
+    req.on("error", (err: any) => {
+      if (err && (err.code === "EACCES" || err.code === "ECONNREFUSED" || err.code === "EADDRNOTAVAIL")) {
+        expressCall(method, urlPath, opts).then(resolve, reject);
+      } else {
+        reject(err);
+      }
+    });
     if (payload !== undefined) {
       req.write(payload);
     }

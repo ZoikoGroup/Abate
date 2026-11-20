@@ -441,7 +441,7 @@ export function OutcomesAiChangeTab({ currentTenant, token }: OutcomesAiChangeTa
           <div>
             <div style={{ display: "flex", gap: "0.5rem", marginBottom: "0.5rem", alignItems: "center" }}>
               <span className="badge badge-coral">PHASE 7 CERTIFIED</span>
-              <span className="badge badge-aubergine">DOMAINS S13 & S14</span>
+              <span className="badge badge-aubergine">PLANE B EXTENSIONS: OUTCOMES &amp; AI CHANGE</span>
               <PlaneBadge plane="A" />
               <PlaneBadge plane="B" />
               <span className="monospace-badge">{currentTenant.name}</span>

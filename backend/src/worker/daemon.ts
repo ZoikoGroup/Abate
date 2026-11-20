@@ -272,7 +272,16 @@ export async function stopWorkerDaemon(): Promise<void> {
 
 // Direct CLI entrypoint: tsx src/worker/daemon.ts
 if (typeof process !== "undefined" && process.argv[1]?.includes("daemon.ts")) {
-  runWorkerDaemon().catch((err) => {
+  const enableRetentionExecutor =
+    process.env.ABATE_ENABLE_RETENTION_EXECUTOR === "1" ||
+    process.env.ABATE_ENABLE_RETENTION_EXECUTOR === "true";
+  const parsedInterval = Number(process.env.ABATE_RETENTION_INTERVAL_MS);
+  const retentionIntervalMs = Number.isFinite(parsedInterval) && parsedInterval >= 1000 ? parsedInterval : undefined;
+
+  runWorkerDaemon({
+    enableRetentionExecutor,
+    retentionIntervalMs
+  }).catch((err) => {
     console.error("Worker daemon fatal error:", err);
     process.exit(1);
   });

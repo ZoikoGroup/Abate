@@ -38,6 +38,92 @@ export interface NeutralFatigueResult {
 
 export type RequiredGate = "APPROVAL" | "CONSULTATION" | "REVIEW";
 
+export type RuleCitationStatus = "APPROVED" | "PREVIEW_PLACEHOLDER";
+
+export interface ConsecutiveLateNightsRule {
+  ruleId: string;
+  title: string;
+  type: "CONSECUTIVE_LATE_NIGHTS";
+  highDemandWindows: string[];
+  consecutiveLateNights: number;
+  lateEveningUtcHour: number;
+  earlyMorningUtcHour: number;
+  requiredGate: RequiredGate;
+  citationStatus: RuleCitationStatus;
+  reference: string;
+  rationale: string;
+}
+
+export interface MinInterShiftRestRule {
+  ruleId: string;
+  title: string;
+  type: "MIN_INTER_SHIFT_REST";
+  minRestHours: number;
+  maxShortRestTransitions: number;
+  appliesToWindows?: string[];
+  requiredGate: RequiredGate;
+  citationStatus: RuleCitationStatus;
+  reference: string;
+  rationale: string;
+}
+
+export interface RollingWeeklyHoursCapRule {
+  ruleId: string;
+  title: string;
+  type: "ROLLING_WEEKLY_HOURS_CAP";
+  maxWeeklyHours: number;
+  windowDays: number;
+  requiredGate: RequiredGate;
+  citationStatus: RuleCitationStatus;
+  reference: string;
+  rationale: string;
+}
+
+export interface ConsecutiveOnCallOrWeekendRule {
+  ruleId: string;
+  title: string;
+  type: "CONSECUTIVE_ON_CALL_OR_WEEKEND";
+  maxConsecutiveWeekendDays: number;
+  minUninterruptedRestHours: number;
+  appliesToWindows?: string[];
+  requiredGate: RequiredGate;
+  citationStatus: RuleCitationStatus;
+  reference: string;
+  rationale: string;
+}
+
+export interface HighDemandWindowDurationRule {
+  ruleId: string;
+  title: string;
+  type: "HIGH_DEMAND_WINDOW_DURATION";
+  highDemandWindows: string[];
+  maxConsecutiveDays: number;
+  requiredGate: RequiredGate;
+  citationStatus: RuleCitationStatus;
+  reference: string;
+  rationale: string;
+}
+
+export type SectorRule =
+  | ConsecutiveLateNightsRule
+  | MinInterShiftRestRule
+  | RollingWeeklyHoursCapRule
+  | ConsecutiveOnCallOrWeekendRule
+  | HighDemandWindowDurationRule;
+
+export interface JurisdictionOverlay {
+  overlayKey: string;
+  jurisdictionCode: string;
+  effectiveFrom: string;
+  effectiveTo: string | null;
+  approvalStatus: "APPROVED" | "DRAFT" | "PREVIEW_PLACEHOLDER";
+  accountableReviewer: string | null;
+  reviewDate: string | null;
+  statutoryReferences: string[];
+  consultationGates: RequiredGate[];
+  retentionNote: string;
+}
+
 /** Screen wording for a sector. Every pack gets a full set; a pack authors only what differs from the default. */
 export interface SectorUiCopy {
   navLabel: string;
@@ -79,6 +165,7 @@ export interface FatigueNotice {
 export interface SectorMapping {
   sector: string;
   packKey: string;
+  status: SectorPackStatus;
   vocabulary: SectorVocabulary;
   /** Allowed unit values. Empty means any unit string is accepted. */
   workItemUnits: string[];
@@ -92,6 +179,10 @@ export interface SectorMapping {
   demandWindows: string[];
   highDemandWindows: string[];
   fatigueRule: NeutralFatigueRule;
+  /** Composable cohort work-design rules evaluated deterministically by the sector rule engine. */
+  rules: SectorRule[];
+  /** Effective-dated jurisdiction overlays linked to this sector pack (region != legal jurisdiction). */
+  jurisdictionOverlays: JurisdictionOverlay[];
   forbidden: string[];
   requiredGates: RequiredGate[];
   claimScope: string;
@@ -183,6 +274,69 @@ const FatigueRuleSchema = z.object({
   earlyMorningUtcHour: z.number().int().min(0).max(23)
 }).strict();
 
+const RULE_ID_PATTERN = /^[A-Z][A-Z0-9_-]{2,63}$/;
+const RequiredGateEnum = z.enum(["APPROVAL", "CONSULTATION", "REVIEW"]);
+const CitationStatusEnum = z.enum(["APPROVED", "PREVIEW_PLACEHOLDER"]);
+
+const SectorRuleBase = {
+  ruleId: z.string().regex(RULE_ID_PATTERN),
+  title: nonEmpty,
+  requiredGate: RequiredGateEnum,
+  citationStatus: CitationStatusEnum,
+  reference: z.string().trim().min(1).max(300),
+  rationale: z.string().trim().min(1).max(500)
+};
+
+const SectorRuleSchema = z.discriminatedUnion("type", [
+  z.object({
+    ...SectorRuleBase,
+    type: z.literal("CONSECUTIVE_LATE_NIGHTS"),
+    highDemandWindows: z.array(z.string().regex(WINDOW_PATTERN)).min(1),
+    consecutiveLateNights: z.number().int().min(1).max(14),
+    lateEveningUtcHour: z.number().int().min(0).max(23),
+    earlyMorningUtcHour: z.number().int().min(0).max(23)
+  }).strict(),
+  z.object({
+    ...SectorRuleBase,
+    type: z.literal("MIN_INTER_SHIFT_REST"),
+    minRestHours: z.number().min(4).max(24),
+    maxShortRestTransitions: z.number().int().min(0).max(10),
+    appliesToWindows: z.array(z.string().regex(WINDOW_PATTERN)).optional()
+  }).strict(),
+  z.object({
+    ...SectorRuleBase,
+    type: z.literal("ROLLING_WEEKLY_HOURS_CAP"),
+    maxWeeklyHours: z.number().min(20).max(80),
+    windowDays: z.number().int().min(7).max(182)
+  }).strict(),
+  z.object({
+    ...SectorRuleBase,
+    type: z.literal("CONSECUTIVE_ON_CALL_OR_WEEKEND"),
+    maxConsecutiveWeekendDays: z.number().int().min(1).max(6),
+    minUninterruptedRestHours: z.number().min(12).max(72),
+    appliesToWindows: z.array(z.string().regex(WINDOW_PATTERN)).optional()
+  }).strict(),
+  z.object({
+    ...SectorRuleBase,
+    type: z.literal("HIGH_DEMAND_WINDOW_DURATION"),
+    highDemandWindows: z.array(z.string().regex(WINDOW_PATTERN)).min(1),
+    maxConsecutiveDays: z.number().int().min(1).max(90)
+  }).strict()
+]);
+
+const JurisdictionOverlaySchema = z.object({
+  overlayKey: z.string().regex(PACK_KEY_PATTERN),
+  jurisdictionCode: z.string().regex(/^[A-Z][A-Z0-9_-]{1,31}$/),
+  effectiveFrom: z.string().datetime(),
+  effectiveTo: z.string().datetime().nullable(),
+  approvalStatus: z.enum(["APPROVED", "DRAFT", "PREVIEW_PLACEHOLDER"]),
+  accountableReviewer: z.string().trim().min(2).max(120).nullable(),
+  reviewDate: z.string().regex(/^\d{4}-\d{2}-\d{2}$/).nullable(),
+  statutoryReferences: z.array(z.string().trim().min(1).max(300)).max(12),
+  consultationGates: z.array(RequiredGateEnum).min(1),
+  retentionNote: z.string().trim().min(1).max(400)
+}).strict();
+
 export const SectorPackDefinitionSchema = z.object({
   sectorKey: z.string().regex(SECTOR_KEY_PATTERN),
   packKey: z.string().regex(PACK_KEY_PATTERN),
@@ -217,6 +371,10 @@ export const SectorPackDefinitionSchema = z.object({
   demandWindows: z.array(z.string().regex(WINDOW_PATTERN)).min(1),
   highDemandWindows: z.array(z.string().regex(WINDOW_PATTERN)),
   fatigueRule: FatigueRuleSchema,
+  /** Composable deep work-design rules. Omit to derive the default late-evening rule from fatigueRule. */
+  rules: z.array(SectorRuleSchema).max(12).optional(),
+  /** Effective-dated jurisdiction overlays for this sector pack. */
+  jurisdictionOverlays: z.array(JurisdictionOverlaySchema).max(12).optional(),
   /** Screen wording overrides. Anything omitted falls back to a default built from the pack vocabulary. */
   ui: SectorUiCopySchema.partial().optional(),
   /** Pack-authored wording. Omit to use the neutral default built from the pack vocabulary. */
@@ -270,6 +428,38 @@ export function parseSectorPackDefinition(input: unknown): SectorPackDefinition 
   }
   for (const w of def.fatigueRule.highDemandWindows) {
     if (!windows.has(w)) fail(`fatigueRule window '${w}' is not a declared demand window.`);
+  }
+  const seenRuleIds = new Set<string>();
+  for (const r of def.rules ?? []) {
+    if (seenRuleIds.has(r.ruleId)) fail(`duplicate ruleId '${r.ruleId}'.`);
+    seenRuleIds.add(r.ruleId);
+    if ((def.status === "PREVIEW" || def.status === "FIXTURE") && r.citationStatus === "APPROVED") {
+      fail(`rule '${r.ruleId}' cannot mark citationStatus APPROVED on a ${def.status} pack.`);
+    }
+    if ("highDemandWindows" in r) {
+      for (const w of r.highDemandWindows) {
+        if (!windows.has(w)) fail(`rule '${r.ruleId}' window '${w}' is not a declared demand window.`);
+      }
+    }
+    if ("appliesToWindows" in r && r.appliesToWindows) {
+      for (const w of r.appliesToWindows) {
+        if (!windows.has(w)) fail(`rule '${r.ruleId}' window '${w}' is not a declared demand window.`);
+      }
+    }
+  }
+  const seenOverlayKeys = new Set<string>();
+  for (const ov of def.jurisdictionOverlays ?? []) {
+    if (seenOverlayKeys.has(ov.overlayKey)) fail(`duplicate jurisdiction overlay '${ov.overlayKey}'.`);
+    seenOverlayKeys.add(ov.overlayKey);
+    if (ov.effectiveTo && Date.parse(ov.effectiveTo) <= Date.parse(ov.effectiveFrom)) {
+      fail(`jurisdiction overlay '${ov.overlayKey}' effectiveTo must be after effectiveFrom.`);
+    }
+    if ((def.status === "PREVIEW" || def.status === "FIXTURE") && ov.approvalStatus === "APPROVED") {
+      fail(`jurisdiction overlay '${ov.overlayKey}' cannot be APPROVED on a ${def.status} pack.`);
+    }
+    if (ov.approvalStatus === "APPROVED" && (!ov.accountableReviewer || !ov.reviewDate)) {
+      fail(`APPROVED jurisdiction overlay '${ov.overlayKey}' requires accountableReviewer and reviewDate.`);
+    }
   }
   return def;
 }

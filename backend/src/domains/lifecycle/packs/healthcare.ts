@@ -36,8 +36,72 @@ export const healthcarePack: SectorPackDefinition = {
     lateEveningUtcHour: 20,
     earlyMorningUtcHour: 6
   },
+  rules: [
+    {
+      ruleId: "HC_INTER_SHIFT_REST",
+      title: "Minimum Inter-Shift Recovery Rest Gap (< 11h)",
+      type: "MIN_INTER_SHIFT_REST",
+      minRestHours: 11,
+      maxShortRestTransitions: 0,
+      appliesToWindows: ["ROUTINE_OPERATIONS", "WINTER_PRESSURE", "SURGE_CAPACITY", "OUTBREAK_RESPONSE"],
+      requiredGate: "CONSULTATION",
+      citationStatus: "PREVIEW_PLACEHOLDER",
+      reference: "ISO 45003:2021 §6.1.2.1 (clinical rota statutory citations pending Policy & Governance Lead review)",
+      rationale: "Shift-aware recovery check: flags rota transitions with less than 11 hours of rest between consecutive shifts without falsely flagging standard night shifts."
+    },
+    {
+      ruleId: "HC_SURGE_WINDOW_DURATION",
+      title: "Sustained Surge / Pressure Window Duration",
+      type: "HIGH_DEMAND_WINDOW_DURATION",
+      highDemandWindows: ["WINTER_PRESSURE", "SURGE_CAPACITY", "OUTBREAK_RESPONSE"],
+      maxConsecutiveDays: 14,
+      requiredGate: "REVIEW",
+      citationStatus: "PREVIEW_PLACEHOLDER",
+      reference: "ISO 45003:2021 §6.1.2.1 (pending Policy & Governance Lead review)",
+      rationale: "Sustained winter pressure, surge capacity, or outbreak windows exceeding 14 days trigger mandatory staffing-support review."
+    },
+    {
+      ruleId: "HC_ROLLING_WEEKLY_HOURS",
+      title: "Rolling Cohort Weekly Hours Envelope",
+      type: "ROLLING_WEEKLY_HOURS_CAP",
+      maxWeeklyHours: 48,
+      windowDays: 119,
+      requiredGate: "CONSULTATION",
+      citationStatus: "PREVIEW_PLACEHOLDER",
+      reference: "ISO 45003:2021 §6.1.2.1 (jurisdiction working-time citation pending Policy & Governance Lead review)",
+      rationale: "Monitors cohort-level average weekly hours over a rolling reference window without scoring or ranking individual clinicians."
+    }
+  ],
+  jurisdictionOverlays: [
+    {
+      overlayKey: "healthcare-uk-preview",
+      jurisdictionCode: "UK",
+      effectiveFrom: "2025-01-01T00:00:00Z",
+      effectiveTo: null,
+      approvalStatus: "PREVIEW_PLACEHOLDER",
+      accountableReviewer: null,
+      reviewDate: null,
+      statutoryReferences: [],
+      consultationGates: ["APPROVAL", "CONSULTATION", "REVIEW"],
+      retentionNote: "Preview pack only: zero retention policy active until Policy & Governance Lead approves jurisdiction pack."
+    },
+    {
+      overlayKey: "healthcare-us-preview",
+      jurisdictionCode: "US",
+      effectiveFrom: "2025-01-01T00:00:00Z",
+      effectiveTo: null,
+      approvalStatus: "PREVIEW_PLACEHOLDER",
+      accountableReviewer: null,
+      reviewDate: null,
+      statutoryReferences: [],
+      consultationGates: ["APPROVAL", "CONSULTATION", "REVIEW"],
+      retentionNote: "Preview pack only: strict zero-PHI perimeter; zero retention policy active until approved."
+    }
+  ],
   forbidden: [
     "patientIdentifier",
+    "nhsNumber",
+    "mrn",
     "clinicalNotes",
     "diagnosisCode",
     "medicationRecord",

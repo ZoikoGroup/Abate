@@ -24,6 +24,12 @@ function fmtSectorErr(err: unknown): string {
   return err instanceof Error ? err.message : "Request failed.";
 }
 
+import {
+  SIMULATION_PRESETS,
+  CROSS_SECTOR_DECOY_CATALOG,
+  type SimulationPreset
+} from "../../utils/sector-simulations";
+
 interface SectorPackTabProps {
   currentTenant: typeof PRESET_TENANTS[0];
   token: string | null;
@@ -47,6 +53,10 @@ export function SectorPackTab({ currentTenant, token, sectorProfile }: SectorPac
   const [fatigueAssessment, setFatigueAssessment] = useState<SectorFatigueAssessmentView | null>(null);
   const [analyzingFatigue, setAnalyzingFatigue] = useState(false);
 
+  // Interactive Multi-Sector Simulation State
+  const [simulatedScenario, setSimulatedScenario] = useState<SimulationPreset | null>(null);
+  const [showAllPresets, setShowAllPresets] = useState(false);
+
   // Unit filter
   const [filterUnit, setFilterUnit] = useState<string>("ALL");
 
@@ -59,7 +69,8 @@ export function SectorPackTab({ currentTenant, token, sectorProfile }: SectorPac
   const [mappingResult, setMappingResult] = useState<any | null>(null);
   const [mappingLoading, setMappingLoading] = useState(false);
 
-  // Boundary rejection lab: which decoy fields to inject
+  // Boundary rejection lab: category filter and which decoy fields to inject
+  const [decoyCategory, setDecoyCategory] = useState<string>("ACTIVE_PACK");
   const [injected, setInjected] = useState<Record<string, boolean>>({});
   const [boundaryRejectionResult, setBoundaryRejectionResult] = useState<string | null>(null);
 
@@ -120,6 +131,55 @@ export function SectorPackTab({ currentTenant, token, sectorProfile }: SectorPac
     }
   };
 
+  // Run an interactive multi-sector simulation preset
+  const runSimulationPreset = async (presetKey: string) => {
+    const preset: SimulationPreset = SIMULATION_PRESETS[presetKey] || {
+      sectorKey: sectorProfile.sectorKey,
+      badge: `⚡ ${ui.navLabel}`,
+      title: `${vocab.workItem} Shift Pattern Simulation`,
+      description: `Simulate consecutive evening work sessions during ${vocab.demandWindow.toLowerCase()}.`,
+      simulatedRef: `SIM-${sectorProfile.sectorKey.slice(0, 4)}-001`,
+      unit: sectorProfile.workItemUnits?.[0] || "DEFAULT_UNIT",
+      demandWindow: sectorProfile.highDemandWindows?.[0] || sectorProfile.demandWindows?.[0] || "SURGE",
+      intervals: [
+        { startUtc: "2026-03-01T08:00:00Z", endUtc: "2026-03-01T21:00:00Z" },
+        { startUtc: "2026-03-02T08:00:00Z", endUtc: "2026-03-02T21:00:00Z" },
+        { startUtc: "2026-03-03T08:00:00Z", endUtc: "2026-03-03T21:00:00Z" }
+      ]
+    };
+    if (!token) return;
+    setSimulatedScenario(preset);
+    setAnalyzingFatigue(true);
+    setErrorMsg(null);
+    setFatigueAssessment(null);
+    setConsultationSigned(false);
+
+    const virtualItem: SectorWorkItemView = {
+      externalRef: preset.simulatedRef,
+      title: preset.title,
+      unit: preset.unit,
+      demandWindow: preset.demandWindow,
+      accountableReviewerId: "00000000-0000-4000-a000-000000000001",
+      activeWindowStart: preset.intervals[0].startUtc,
+      activeWindowEnd: preset.intervals[preset.intervals.length - 1].endUtc
+    };
+    setSelected(virtualItem);
+
+    try {
+      const assessment = await checkSectorFatigue(preset.simulatedRef, token, preset.intervals, {
+        simulatedItem: { unit: preset.unit, demandWindow: preset.demandWindow }
+      });
+      setFatigueAssessment(assessment);
+      setSuccessMsg(
+        `Simulation '${preset.title}' evaluated: ${assessment.hasFatigueSurge ? "SURGE DETECTED (Gate: " + assessment.applicableGate + ")" : "WITHIN THRESHOLD"}.`
+      );
+    } catch (err: any) {
+      setErrorMsg(`Simulation evaluation failed: ${fmtSectorErr(err)}`);
+    } finally {
+      setAnalyzingFatigue(false);
+    }
+  };
+
   // Sign the consultation gate (simulation preview, client-side state only)
   const handleSignConsultation = () => {
     setConsultationSigned(true);
@@ -135,11 +195,13 @@ export function SectorPackTab({ currentTenant, token, sectorProfile }: SectorPac
     setMappingLoading(true);
     setErrorMsg(null);
     setSuccessMsg(null);
-    const activeDecoys = ui.decoyFields.filter(d => injected[d.field]);
-    const expectsRefusal = activeDecoys.length > 0;
+    const activePackDecoys = ui.decoyFields.filter(d => injected[d.field]);
+    const crossSectorDecoys = CROSS_SECTOR_DECOY_CATALOG.filter(d => injected[d.field]);
+    const allActiveDecoys = [...activePackDecoys, ...crossSectorDecoys];
+    const expectsRefusal = allActiveDecoys.length > 0;
     try {
       const payload: any = { ...selected };
-      for (const d of activeDecoys) payload[d.field] = d.value;
+      for (const d of allActiveDecoys) payload[d.field] = d.value;
 
       const res = await mapSectorWorkItem(payload, token);
       setMappingResult(res);
@@ -201,94 +263,184 @@ export function SectorPackTab({ currentTenant, token, sectorProfile }: SectorPac
       </div>
 
       <div className="tab-grid" style={{ display: "grid", gridTemplateColumns: "1.2fr 1fr", gap: "1.5rem", marginTop: "1.5rem" }}>
-        {/* Left column: work item explorer */}
-        <div className="card">
-          <div className="card-header" style={{ display: "flex", justifyContent: "space-between", alignItems: "center" }}>
-            <h3 className="card-title">{ui.listTitle}</h3>
-            <div style={{ display: "flex", gap: "0.5rem" }}>
-              {unitOptions.length > 0 && (
-                <select
-                  className="select-control"
-                  value={filterUnit}
-                  onChange={(e) => setFilterUnit(e.target.value)}
-                  aria-label={ui.unitFilterLabel}
-                  style={{ fontSize: "0.85rem", padding: "0.25rem 0.5rem" }}
+        {/* Left column: work item explorer & interactive multi-sector simulation lab */}
+        <div style={{ display: "flex", flexDirection: "column", gap: "1.5rem" }}>
+          <div className="card">
+            <div className="card-header" style={{ display: "flex", justifyContent: "space-between", alignItems: "center" }}>
+              <h3 className="card-title">{ui.listTitle}</h3>
+              <div style={{ display: "flex", gap: "0.5rem" }}>
+                {unitOptions.length > 0 && (
+                  <select
+                    className="select-control"
+                    value={filterUnit}
+                    onChange={(e) => setFilterUnit(e.target.value)}
+                    aria-label={ui.unitFilterLabel}
+                    style={{ fontSize: "0.85rem", padding: "0.25rem 0.5rem" }}
+                  >
+                    <option value="ALL">{ui.allUnitsLabel}</option>
+                    {unitOptions.map((u) => (
+                      <option key={u} value={u}>{labelFor(u, ui.unitLabels)}</option>
+                    ))}
+                  </select>
+                )}
+                <button
+                  type="button"
+                  className="btn btn-secondary btn-sm"
+                  onClick={loadItems}
+                  disabled={loading}
                 >
-                  <option value="ALL">{ui.allUnitsLabel}</option>
-                  {unitOptions.map((u) => (
-                    <option key={u} value={u}>{labelFor(u, ui.unitLabels)}</option>
-                  ))}
-                </select>
+                  {loading ? "Refreshing..." : "↻ Refresh"}
+                </button>
+              </div>
+            </div>
+
+            <div className="card-body">
+              {loading && items.length === 0 ? (
+                <p>Loading active {workItemsLower} for {currentTenant.name}...</p>
+              ) : filteredItems.length === 0 ? (
+                <p>No {workItemsLower} found matching the current {vocab.unit.toLowerCase()} filter.</p>
+              ) : (
+                <div className="work-item-list" style={{ display: "flex", flexDirection: "column", gap: "0.75rem" }}>
+                  {filteredItems.map((m) => {
+                    const isSelected = selected?.externalRef === m.externalRef;
+                    const isHighStakes = highDemand.includes(m.demandWindow);
+                    return (
+                      <div
+                        key={m.externalRef}
+                        className={`work-item-card ${isSelected ? "selected" : ""}`}
+                        style={{
+                          padding: "1rem",
+                          border: isSelected ? "2px solid var(--abate-aubergine, #2B1B38)" : "1px solid var(--abate-border, #E2E8F0)",
+                          borderRadius: "8px",
+                          backgroundColor: isSelected ? "#F8F5FA" : "#FFFFFF",
+                          transition: "all 0.2s ease"
+                        }}
+                      >
+                        <div style={{ display: "flex", justifyContent: "space-between", alignItems: "flex-start", marginBottom: "0.5rem" }}>
+                          <div>
+                            <span style={{ fontFamily: "monospace", fontWeight: 700, color: "var(--abate-aubergine, #2B1B38)" }}>{m.externalRef}</span>
+                            <h4 style={{ margin: "0.2rem 0 0 0", fontSize: "1rem" }}>{m.title}</h4>
+                          </div>
+                          <span
+                            className={`badge ${isHighStakes ? "badge-danger" : "badge-secondary"}`}
+                            style={{ fontSize: "0.75rem" }}
+                          >
+                            {m.demandWindow.replace(/_/g, " ")}
+                          </span>
+                        </div>
+
+                        <div style={{ display: "flex", gap: "1rem", fontSize: "0.82rem", color: "#4A5568", flexWrap: "wrap" }}>
+                          <span><strong>{vocab.unit}:</strong> {labelFor(m.unit, ui.unitLabels)}</span>
+                          {m.jurisdiction && <span><strong>Jurisdiction:</strong> {m.jurisdiction}</span>}
+                        </div>
+
+                        <div style={{ marginTop: "0.5rem", display: "flex", justifyContent: "space-between", alignItems: "center" }}>
+                          <span style={{ fontSize: "0.78rem", color: "#4A5568" }}>
+                            Window: {m.activeWindowStart.slice(0, 10)} to {m.activeWindowEnd.slice(0, 10)}
+                          </span>
+                          <button
+                            type="button"
+                            className="btn btn-primary btn-sm"
+                            onClick={() => handleAnalyzeFatigue(m)}
+                            style={{ padding: "0.25rem 0.6rem", fontSize: "0.8rem" }}
+                          >
+                            ⚡ {ui.fatigueButtonLabel}
+                          </button>
+                        </div>
+                      </div>
+                    );
+                  })}
+                </div>
               )}
-              <button
-                type="button"
-                className="btn btn-secondary btn-sm"
-                onClick={loadItems}
-                disabled={loading}
-              >
-                {loading ? "Refreshing..." : "↻ Refresh"}
-              </button>
             </div>
           </div>
 
-          <div className="card-body">
-            {loading && items.length === 0 ? (
-              <p>Loading active {workItemsLower} for {currentTenant.name}...</p>
-            ) : filteredItems.length === 0 ? (
-              <p>No {workItemsLower} found matching the current {vocab.unit.toLowerCase()} filter.</p>
-            ) : (
-              <div className="work-item-list" style={{ display: "flex", flexDirection: "column", gap: "0.75rem" }}>
-                {filteredItems.map((m) => {
-                  const isSelected = selected?.externalRef === m.externalRef;
-                  const isHighStakes = highDemand.includes(m.demandWindow);
-                  return (
-                    <div
-                      key={m.externalRef}
-                      className={`work-item-card ${isSelected ? "selected" : ""}`}
-                      style={{
-                        padding: "1rem",
-                        border: isSelected ? "2px solid var(--abate-aubergine, #2B1B38)" : "1px solid var(--abate-border, #E2E8F0)",
-                        borderRadius: "8px",
-                        backgroundColor: isSelected ? "#F8F5FA" : "#FFFFFF",
-                        transition: "all 0.2s ease"
-                      }}
-                    >
-                      <div style={{ display: "flex", justifyContent: "space-between", alignItems: "flex-start", marginBottom: "0.5rem" }}>
-                        <div>
-                          <span style={{ fontFamily: "monospace", fontWeight: 700, color: "var(--abate-aubergine, #2B1B38)" }}>{m.externalRef}</span>
-                          <h4 style={{ margin: "0.2rem 0 0 0", fontSize: "1rem" }}>{m.title}</h4>
-                        </div>
-                        <span
-                          className={`badge ${isHighStakes ? "badge-danger" : "badge-secondary"}`}
-                          style={{ fontSize: "0.75rem" }}
-                        >
-                          {m.demandWindow.replace(/_/g, " ")}
-                        </span>
-                      </div>
+          {/* Interactive Multi-Sector Work-Pattern Simulation Console */}
+          <div className="card" data-testid="sector-simulation-console">
+            <div className="card-header" style={{ display: "flex", justifyContent: "space-between", alignItems: "center" }}>
+              <h3 className="card-title">⚡ Interactive Sector Work-Pattern Simulator</h3>
+              <span className="badge badge-secondary" style={{ fontSize: "0.72rem" }}>
+                Multi-Sector Simulation Lab
+              </span>
+            </div>
+            <div className="card-body">
+              <p style={{ fontSize: "0.85rem", color: "#4A5568", marginTop: 0 }}>
+                Test and verify industry-specific shift rotas, on-call schedules, and surge windows in real time.
+                Proves deterministic multi-rule evaluation without individual scoring or PII/PHI leakage.
+              </p>
 
-                      <div style={{ display: "flex", gap: "1rem", fontSize: "0.82rem", color: "#4A5568", flexWrap: "wrap" }}>
-                        <span><strong>{vocab.unit}:</strong> {labelFor(m.unit, ui.unitLabels)}</span>
-                        {m.jurisdiction && <span><strong>Jurisdiction:</strong> {m.jurisdiction}</span>}
-                      </div>
+              <div style={{ display: "flex", flexWrap: "wrap", gap: "0.45rem", marginBottom: "0.85rem", alignItems: "center" }}>
+                {SIMULATION_PRESETS[sectorProfile.sectorKey] ? (
+                  <button
+                    type="button"
+                    className="btn btn-primary btn-sm"
+                    data-testid={`sim-preset-${sectorProfile.sectorKey.toLowerCase()}`}
+                    onClick={() => runSimulationPreset(sectorProfile.sectorKey)}
+                    disabled={analyzingFatigue}
+                    style={{ fontSize: "0.76rem" }}
+                  >
+                    ⚡ {SIMULATION_PRESETS[sectorProfile.sectorKey].badge}
+                  </button>
+                ) : (
+                  <button
+                    type="button"
+                    className="btn btn-primary btn-sm"
+                    data-testid="sim-preset-active-sector"
+                    onClick={() => runSimulationPreset(sectorProfile.sectorKey)}
+                    disabled={analyzingFatigue}
+                    style={{ fontSize: "0.76rem" }}
+                  >
+                    ⚡ Simulate {vocab.workItem} Shift Pattern
+                  </button>
+                )}
 
-                      <div style={{ marginTop: "0.5rem", display: "flex", justifyContent: "space-between", alignItems: "center" }}>
-                        <span style={{ fontSize: "0.78rem", color: "#4A5568" }}>
-                          Window: {m.activeWindowStart.slice(0, 10)} to {m.activeWindowEnd.slice(0, 10)}
-                        </span>
+                <button
+                  type="button"
+                  className="btn btn-secondary btn-sm"
+                  data-testid="sim-toggle-all-presets"
+                  onClick={() => setShowAllPresets((prev) => !prev)}
+                  style={{ fontSize: "0.74rem" }}
+                >
+                  {showAllPresets ? "Hide Cross-Sector Presets ▲" : "Explore Cross-Sector Presets ▼"}
+                </button>
+
+                {showAllPresets &&
+                  Object.keys(SIMULATION_PRESETS)
+                    .filter((k) => k !== sectorProfile.sectorKey)
+                    .map((key) => {
+                      const p = SIMULATION_PRESETS[key];
+                      const isActive = simulatedScenario?.sectorKey === p.sectorKey;
+                      return (
                         <button
+                          key={key}
                           type="button"
-                          className="btn btn-primary btn-sm"
-                          onClick={() => handleAnalyzeFatigue(m)}
-                          style={{ padding: "0.25rem 0.6rem", fontSize: "0.8rem" }}
+                          className={`btn btn-sm ${isActive ? "btn-primary" : "btn-secondary"}`}
+                          data-testid={`sim-preset-${key.toLowerCase()}`}
+                          onClick={() => runSimulationPreset(key)}
+                          disabled={analyzingFatigue}
+                          style={{ fontSize: "0.76rem" }}
                         >
-                          ⚡ {ui.fatigueButtonLabel}
+                          {p.badge}
                         </button>
-                      </div>
-                    </div>
-                  );
-                })}
+                      );
+                    })}
               </div>
-            )}
+
+              {simulatedScenario && (
+                <div style={{ backgroundColor: "#F7FAFC", border: "1px solid #E2E8F0", padding: "0.75rem", borderRadius: "6px", fontSize: "0.82rem" }}>
+                  <div style={{ display: "flex", justifyContent: "space-between", alignItems: "center", marginBottom: "0.35rem" }}>
+                    <strong style={{ color: "var(--abate-aubergine, #2B1B38)" }}>Active Scenario: {simulatedScenario.title}</strong>
+                    <span className="badge badge-primary" style={{ fontSize: "0.7rem" }}>{simulatedScenario.sectorKey}</span>
+                  </div>
+                  <p style={{ margin: "0 0 0.4rem 0", color: "#4A5568" }}>{simulatedScenario.description}</p>
+                  <div style={{ display: "flex", gap: "1rem", color: "#718096", fontSize: "0.76rem", flexWrap: "wrap" }}>
+                    <span>Demand Window: <code>{simulatedScenario.demandWindow}</code></span>
+                    <span>Intervals: <code>{simulatedScenario.intervals.length} shift blocks</code></span>
+                    <span>Reference: <code>{simulatedScenario.simulatedRef}</code></span>
+                  </div>
+                </div>
+              )}
+            </div>
           </div>
         </div>
 
@@ -344,6 +496,48 @@ export function SectorPackTab({ currentTenant, token, sectorProfile }: SectorPac
                       {fatigueAssessment.regulatoryNotice}
                     </div>
                   </div>
+
+                  {fatigueAssessment.ruleFindings && fatigueAssessment.ruleFindings.length > 0 && (
+                    <div style={{ marginBottom: "1rem" }} data-testid="sector-rule-findings">
+                      <strong style={{ fontSize: "0.85rem", display: "block", marginBottom: "0.4rem" }}>
+                        Cohort Rule Breakdown ({fatigueAssessment.ruleFindings.length} rules evaluated):
+                      </strong>
+                      <div style={{ display: "flex", flexDirection: "column", gap: "0.45rem" }}>
+                        {fatigueAssessment.ruleFindings.map((rf) => (
+                          <div
+                            key={rf.ruleId}
+                            style={{
+                              padding: "0.55rem 0.7rem",
+                              borderRadius: "6px",
+                              border: rf.triggered ? "1px solid #FEB2B2" : "1px solid #E2E8F0",
+                              backgroundColor: rf.triggered ? "#FFF5F5" : "#F8FAFC",
+                              fontSize: "0.8rem"
+                            }}
+                          >
+                            <div style={{ display: "flex", justifyContent: "space-between", alignItems: "center", gap: "0.5rem" }}>
+                              <strong>{rf.title}</strong>
+                              <span className={`badge ${rf.triggered ? "badge-danger" : "badge-secondary"}`} style={{ fontSize: "0.7rem" }}>
+                                {rf.triggered ? `TRIGGERED (${rf.requiredGate})` : "WITHIN THRESHOLD"}
+                              </span>
+                            </div>
+                            <div style={{ color: "#4A5568", marginTop: "0.2rem" }}>
+                              Observed: <code>{rf.observedValue}</code> / Limit: <code>{rf.thresholdValue}</code> ({rf.unit.replace(/_/g, " ")}) &bull; Citation:{" "}
+                              <code>{rf.citationStatus === "APPROVED" ? "APPROVED" : "PREVIEW — PENDING POLICY REVIEW"}</code>
+                            </div>
+                          </div>
+                        ))}
+                      </div>
+                    </div>
+                  )}
+
+                  {fatigueAssessment.jurisdictionOverlay && (
+                    <div style={{ marginBottom: "1rem", fontSize: "0.8rem", padding: "0.6rem 0.75rem", backgroundColor: "#F7FAFC", borderRadius: "6px", border: "1px solid #E2E8F0" }} data-testid="sector-jurisdiction-overlay">
+                      <strong>Jurisdiction Overlay:</strong>{" "}
+                      <code>{fatigueAssessment.jurisdictionOverlay.overlayKey ?? "UNBOUND"}</code>{" "}
+                      ({fatigueAssessment.jurisdictionOverlay.overlayStatus ?? "UNBOUND"}) &bull;{" "}
+                      <span>{fatigueAssessment.jurisdictionOverlay.retentionNote}</span>
+                    </div>
+                  )}
 
                   {fatigueAssessment.hasFatigueSurge && (
                     <div style={{ borderTop: "1px solid #E2E8F0", paddingTop: "1rem", marginTop: "1rem" }}>
@@ -415,9 +609,30 @@ export function SectorPackTab({ currentTenant, token, sectorProfile }: SectorPac
               </p>
 
               <div style={{ backgroundColor: "#F7FAFC", padding: "0.75rem", borderRadius: "6px", marginBottom: "1rem" }}>
-                <strong style={{ fontSize: "0.82rem", display: "block", marginBottom: "0.5rem" }}>Adversarial Decoy Injection (Physical Minimization Test):</strong>
-                <div style={{ display: "flex", flexDirection: "column", gap: "0.3rem" }}>
-                  {ui.decoyFields.map((d) => (
+                <div style={{ display: "flex", justifyContent: "space-between", alignItems: "center", marginBottom: "0.5rem" }}>
+                  <strong style={{ fontSize: "0.82rem" }}>Adversarial Decoy Injection (Minimization Gate):</strong>
+                  <div style={{ display: "flex", gap: "0.25rem" }}>
+                    <button
+                      type="button"
+                      className={`btn btn-sm ${decoyCategory === "ACTIVE_PACK" ? "btn-primary" : "btn-secondary"}`}
+                      style={{ fontSize: "0.7rem", padding: "0.15rem 0.45rem" }}
+                      onClick={() => setDecoyCategory("ACTIVE_PACK")}
+                    >
+                      Active Pack
+                    </button>
+                    <button
+                      type="button"
+                      className={`btn btn-sm ${decoyCategory === "CROSS_SECTOR" ? "btn-primary" : "btn-secondary"}`}
+                      style={{ fontSize: "0.7rem", padding: "0.15rem 0.45rem" }}
+                      onClick={() => setDecoyCategory("CROSS_SECTOR")}
+                    >
+                      Cross-Sector Decoys
+                    </button>
+                  </div>
+                </div>
+
+                <div style={{ display: "flex", flexDirection: "column", gap: "0.35rem" }}>
+                  {(decoyCategory === "ACTIVE_PACK" ? ui.decoyFields : CROSS_SECTOR_DECOY_CATALOG).map((d) => (
                     <label key={d.field} htmlFor={`inject-${d.field}-check`} style={{ fontSize: "0.82rem", display: "flex", alignItems: "center", gap: "0.5rem" }}>
                       <input
                         id={`inject-${d.field}-check`}
@@ -425,7 +640,12 @@ export function SectorPackTab({ currentTenant, token, sectorProfile }: SectorPac
                         checked={!!injected[d.field]}
                         onChange={(e) => setInjected((prev) => ({ ...prev, [d.field]: e.target.checked }))}
                       />
-                      {d.label} (<code>{typeof d.value === "number" ? `${d.field}: ${d.value}` : d.field}</code>)
+                      <span>{d.label} (<code>{typeof d.value === "number" ? `${d.field}: ${d.value}` : d.field}</code>)</span>
+                      {"category" in d && (
+                        <span className="badge badge-secondary" style={{ fontSize: "0.65rem", marginLeft: "auto" }}>
+                          {(d as any).category}
+                        </span>
+                      )}
                     </label>
                   ))}
                 </div>
@@ -460,6 +680,33 @@ export function SectorPackTab({ currentTenant, token, sectorProfile }: SectorPac
               )}
             </div>
           </div>
+
+          {sectorProfile.rules && sectorProfile.rules.length > 0 && (
+            <div className="card" data-testid="sector-declared-rules-card">
+              <div className="card-header" style={{ display: "flex", justifyContent: "space-between", alignItems: "center" }}>
+                <h3 className="card-title">Active Sector Cohort Rules</h3>
+                {sectorProfile.packStatus && sectorProfile.packStatus !== "LAUNCHED" && (
+                  <span className="badge badge-secondary" style={{ fontSize: "0.72rem" }}>
+                    {sectorProfile.packStatus} — Pending Policy Review
+                  </span>
+                )}
+              </div>
+              <div className="card-body" style={{ display: "flex", flexDirection: "column", gap: "0.55rem" }}>
+                {sectorProfile.rules.map((r) => (
+                  <div key={r.ruleId} style={{ padding: "0.6rem 0.75rem", border: "1px solid #E2E8F0", borderRadius: "6px", fontSize: "0.8rem" }}>
+                    <div style={{ display: "flex", justifyContent: "space-between", gap: "0.5rem", alignItems: "center" }}>
+                      <strong>{r.title}</strong>
+                      <span className="badge badge-secondary" style={{ fontSize: "0.68rem" }}>{r.type.replace(/_/g, " ")}</span>
+                    </div>
+                    <p style={{ margin: "0.25rem 0 0 0", color: "#4A5568" }}>{r.rationale}</p>
+                    <div style={{ marginTop: "0.25rem", color: "#4A5568", fontSize: "0.74rem" }}>
+                      Gate: <code>{r.requiredGate}</code> &bull; Status: <code>{r.citationStatus}</code>
+                    </div>
+                  </div>
+                ))}
+              </div>
+            </div>
+          )}
         </div>
       </div>
     </div>

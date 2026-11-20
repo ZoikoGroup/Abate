@@ -3,7 +3,7 @@
 // Background retention executor that enforces tenant-configured retention classes,
 // honours legal holds, writes tombstones + external tombstone logs, and invalidates derived copies.
 import crypto from "node:crypto";
-import { withTenant, memDb, checkPgHealth } from "../platform/db/with-tenant";
+import { withTenant, withWorker, memDb, checkPgHealth } from "../platform/db/with-tenant";
 import { runRetention } from "../domains/lifecycle/retention";
 import { Actor } from "../platform/command";
 import { GOLDEN_01 } from "../fixtures/golden01";
@@ -40,7 +40,15 @@ export async function runScheduledRetentionPass(opts: {
       }
       targetTenants = Array.from(withPolicy);
     } else {
-      targetTenants = [GOLDEN_01.tenantA.id, GOLDEN_01.tenantB.id];
+      try {
+        const discovered = await withWorker(async (tx) => {
+          const r = await tx.q("SELECT id FROM ops_active_tenants");
+          return r.rows.map((row: any) => String(row.id));
+        });
+        targetTenants = discovered.length > 0 ? discovered : [GOLDEN_01.tenantA.id, GOLDEN_01.tenantB.id];
+      } catch {
+        targetTenants = [GOLDEN_01.tenantA.id, GOLDEN_01.tenantB.id];
+      }
     }
   }
 

@@ -109,7 +109,7 @@ export function IsolationTab({
             </div>
             <div className="data-row">
               <span className="data-label">Jurisdiction Pack:</span>
-              <span className="data-value">{tenantInfo?.jurisdiction_config_ref || "legal-uk-sra"}</span>
+              <span className="data-value">{tenantInfo?.jurisdiction_config_ref || "UNBOUND"}</span>
             </div>
             <div className="data-row">
               <span className="data-label">Data Residency Region:</span>

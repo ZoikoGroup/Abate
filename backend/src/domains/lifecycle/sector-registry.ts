@@ -15,6 +15,7 @@ import { legalPack } from "./packs/legal";
 import { accountingPack } from "./packs/accounting";
 import { healthcarePack } from "./packs/healthcare";
 import { softwareItPack } from "./packs/software-it";
+import { financePack } from "./packs/finance";
 
 export const BASELINE_SECTOR_KEY = "GENERIC";
 
@@ -66,7 +67,7 @@ function defaultUiCopy(def: SectorPackDefinition): SectorUiCopy {
     fatigueButtonLabel: "Fatigue Check",
     fatigueCardTitle: "Workplace Fatigue Audit",
     surgeBadge: "SURGE ALERT: FATIGUE DETECTED",
-    compliantBadge: "COMPLIANT: NORMAL VARIANCE",
+    compliantBadge: "WITHIN THRESHOLD: NORMAL VARIANCE",
     thresholdNote: `Threshold: ≥ ${n} consecutive nights with work past ${hour}:00 UTC during a high-demand window triggers mandatory ${v.supervisor} consultation.`,
     consultationTitle: `Mandatory ${v.supervisor} Consultation Gate`,
     consultationSignerLabel: v.supervisor,
@@ -94,6 +95,7 @@ function buildMapping(def: SectorPackDefinition, launchedNames: string): SectorM
   return {
     sector: def.sectorKey,
     packKey: def.packKey,
+    status: def.status,
     vocabulary: { ...def.vocabulary },
     workItemUnits: [...(def.workItemUnits ?? [])],
     jurisdictions: [...(def.jurisdictions ?? [])],
@@ -109,6 +111,12 @@ function buildMapping(def: SectorPackDefinition, launchedNames: string): SectorM
     demandWindows: [...def.demandWindows],
     highDemandWindows: [...def.highDemandWindows],
     fatigueRule: { ...def.fatigueRule, highDemandWindows: [...def.fatigueRule.highDemandWindows] },
+    rules: (def.rules ?? []).map((r) => ({ ...r })),
+    jurisdictionOverlays: (def.jurisdictionOverlays ?? []).map((o) => ({
+      ...o,
+      statutoryReferences: [...o.statutoryReferences],
+      consultationGates: [...o.consultationGates]
+    })),
     // Core forbidden fields are inherited by every pack and cannot be dropped.
     forbidden: Array.from(new Set([...CORE_FORBIDDEN_FIELDS, ...def.forbidden])),
     requiredGates: [...def.requiredGates],
@@ -159,6 +167,7 @@ registerSectorPack(legalPack);
 registerSectorPack(healthcarePack);
 registerSectorPack(softwareItPack);
 registerSectorPack(accountingPack);
+registerSectorPack(financePack);
 
 export function getSectorMapping(sectorKey: string): SectorMapping | undefined {
   return mappings.get(sectorKey);
@@ -222,7 +231,7 @@ function keyWords(key: string): string[] {
 
 /**
  * Picks a sector from the tenant's active policy bindings, in registration order.
- * Matching is by whole word, so "legal-uk-sra" matches "legal" but "debarment" does not match "bar".
+ * Matching is by whole word, so "sector-uk-pack" matches "sector" but "debarment" does not match "bar".
  */
 export function detectSectorByBindings(activePackKeys: string[]): SectorMapping | undefined {
   for (const def of definitions.values()) {

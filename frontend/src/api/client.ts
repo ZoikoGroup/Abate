@@ -1451,6 +1451,43 @@ export interface SectorWorkItemView {
   activeWindowEnd: string;
 }
 
+export interface SectorRuleSummary {
+  ruleId: string;
+  title: string;
+  type: string;
+  requiredGate: "APPROVAL" | "CONSULTATION" | "REVIEW";
+  citationStatus: "APPROVED" | "PREVIEW_PLACEHOLDER";
+  reference: string;
+  rationale: string;
+}
+
+export interface SectorRuleFindingView {
+  ruleId: string;
+  title: string;
+  type: string;
+  triggered: boolean;
+  observedValue: number;
+  thresholdValue: number;
+  unit: string;
+  requiredGate: "APPROVAL" | "CONSULTATION" | "REVIEW";
+  citationStatus: "APPROVED" | "PREVIEW_PLACEHOLDER";
+  reference: string;
+  rationale: string;
+}
+
+export interface JurisdictionOverlayView {
+  overlayKey: string | null;
+  jurisdictionCode: string | null;
+  overlayStatus?: "APPROVED" | "PREVIEW_PLACEHOLDER" | "DRAFT" | "EXPIRED" | "UNBOUND";
+  approvalStatus?: "APPROVED" | "DRAFT" | "PREVIEW_PLACEHOLDER";
+  supportsComplianceClaim?: boolean;
+  accountableReviewer: string | null;
+  reviewDate: string | null;
+  statutoryReferences: string[];
+  consultationGates: Array<"APPROVAL" | "CONSULTATION" | "REVIEW">;
+  retentionNote: string;
+}
+
 export interface SectorFatigueAssessmentView {
   sectorKey: string;
   workItemId: string;
@@ -1462,6 +1499,8 @@ export interface SectorFatigueAssessmentView {
   statutoryReference: string;
   applicableGate: string;
   regulatoryNotice: string;
+  ruleFindings?: SectorRuleFindingView[];
+  jurisdictionOverlay?: JurisdictionOverlayView;
 }
 
 export async function fetchSectorWorkItems(token?: string): Promise<SectorWorkItemView[]> {
@@ -1469,10 +1508,20 @@ export async function fetchSectorWorkItems(token?: string): Promise<SectorWorkIt
   return res.items || [];
 }
 
-export async function checkSectorFatigue(workItemId: string, token?: string, intervals?: any[]): Promise<SectorFatigueAssessmentView> {
+export async function checkSectorFatigue(
+  workItemId: string,
+  token?: string,
+  intervals?: any[],
+  opts?: { jurisdictionCode?: string; simulatedItem?: { unit?: string; demandWindow?: string } }
+): Promise<SectorFatigueAssessmentView> {
   return api<SectorFatigueAssessmentView>("/api/v2/sector/work-items/fatigue-check", {
     method: "POST",
-    body: JSON.stringify({ workItemId, intervals }),
+    body: JSON.stringify({
+      workItemId,
+      intervals,
+      jurisdictionCode: opts?.jurisdictionCode,
+      simulatedItem: opts?.simulatedItem
+    }),
     token
   });
 }
@@ -1629,6 +1678,7 @@ export interface TenantSectorProfile {
   /** Registered sector key, for example GENERIC, LEGAL or ACCOUNTING. Any registered sector may appear. */
   sectorKey: string;
   packKey?: string;
+  packStatus?: "BASELINE" | "LAUNCHED" | "PREVIEW" | "FIXTURE";
   displayName?: string;
   /** True when a sector pack other than the neutral baseline is active. */
   packActive?: boolean;
@@ -1645,6 +1695,8 @@ export interface TenantSectorProfile {
   demandWindows: string[];
   highDemandWindows?: string[];
   workItemUnits?: string[];
+  rules?: SectorRuleSummary[];
+  jurisdictionOverlays?: JurisdictionOverlayView[];
   /** Screen wording authored by the sector pack. Optional so older backends still render. */
   ui?: SectorUiCopy;
   claimScope: string;

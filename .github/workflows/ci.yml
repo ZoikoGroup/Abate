@@ -72,7 +72,6 @@ jobs:
           npm --prefix backend run verify-pg -- --require-live
           npm --prefix backend run db:audit -- --require-live
           npm --prefix backend run test-pg-parity -- --require-live
-          npm --prefix backend run test-explain -- --require-live
 
       - name: Verify idempotent migration re-run and schema snapshot (no drift)
         env:
@@ -131,9 +130,27 @@ jobs:
         run: |
           npm --prefix backend run seed-demo -- --pg
           npm --prefix backend run verify-pg-smoke
+          npm --prefix backend run test-explain -- --require-live
           npm --prefix backend run test-load -- --http --tcp
           npm --prefix backend run measure-restore
           npm --prefix backend run rehearse:pitr -- --require-live
+
+      - name: Run Live PostgreSQL Additive, Endpoint & 30-Day HTTP Suites (G-01 / T-02)
+        env:
+          ABATE_REQUIRE_PG: "1"
+          DATABASE_URL_MIGRATOR: postgres://abate_migrator:migrator_pw@localhost:5432/abate
+          DATABASE_URL_APP: postgres://abate_app:app_pw@localhost:5432/abate
+          DATABASE_URL_WORKER: postgres://abate_worker:worker_pw@localhost:5432/abate
+          DATABASE_URL_IDENTITY: postgres://abate_identity:identity_pw@localhost:5432/abate
+          DATABASE_URL_PROTECTED_COMPUTE: postgres://abate_protected_compute:protected_compute_pw@localhost:5432/abate
+          DATABASE_URL_RELEASE_COMPILER: postgres://abate_release_compiler:release_compiler_pw@localhost:5432/abate
+          DATABASE_URL_PERFORMANCE: postgres://abate_performance:performance_pw@localhost:5432/abate
+          DATABASE_URL_OPS: postgres://abate_ops:ops_pw@localhost:5432/abate
+        run: |
+          npm --prefix backend run test-additive
+          npm --prefix backend run test-sector-rules
+          npm --prefix backend run check:endpoints
+          npm --prefix backend run sim-30d -- --tcp
 
       - name: Run wording lint, OpenAPI contract check, typecheck and compile backend
         run: |
@@ -156,10 +173,12 @@ jobs:
         run: |
           npm --prefix backend run test-fast
           npm --prefix backend run test-completion
+          npm --prefix backend run test-additive
           npm --prefix backend run test-pilot
           npm --prefix backend run test-legal
           npm --prefix backend run test-sector-registry
           npm --prefix backend run test-sector-work
+          npm --prefix backend run test-sector-rules
           npm --prefix backend run test-hold-reference
           npm --prefix backend run test-boundaries
           npm --prefix backend run test-ingest
@@ -276,24 +295,39 @@ jobs:
             frontend/public/release-dossier.json
 
   e2e-a11y:
-    name: Browser E2E & WCAG 2.1 AA Accessibility (Playwright + Axe)
+    name: Browser E2E & WCAG 2.1 AA Accessibility (Playwright + Axe on Live PostgreSQL)
     runs-on: ubuntu-24.04
+    services:
+      postgres:
+        image: postgres:16.2-alpine
+        env:
+          POSTGRES_USER: abate_migrator
+          POSTGRES_PASSWORD: migrator_pw
+          POSTGRES_DB: abate
+        ports:
+          - 5432:5432
+        options: >-
+          --health-cmd="pg_isready -U abate_migrator -d abate"
+          --health-interval=5s
+          --health-timeout=5s
+          --health-retries=10
     env:
       APP_ENV: test
-      ABATE_REQUIRE_PG: "0"
-      DATABASE_URL_MIGRATOR: postgres://disabled:disabled@127.0.0.1:1/abate
-      DATABASE_URL_APP: postgres://disabled:disabled@127.0.0.1:1/abate
-      DATABASE_URL_WORKER: postgres://disabled:disabled@127.0.0.1:1/abate
-      DATABASE_URL_IDENTITY: postgres://disabled:disabled@127.0.0.1:1/abate
-      DATABASE_URL_PROTECTED_COMPUTE: postgres://disabled:disabled@127.0.0.1:1/abate
-      DATABASE_URL_RELEASE_COMPILER: postgres://disabled:disabled@127.0.0.1:1/abate
-      DATABASE_URL_PERFORMANCE: postgres://disabled:disabled@127.0.0.1:1/abate
-      DATABASE_URL_OPS: postgres://disabled:disabled@127.0.0.1:1/abate
+      ABATE_REQUIRE_PG: "1"
+      DATABASE_URL_MIGRATOR: postgres://abate_migrator:migrator_pw@localhost:5432/abate
+      DATABASE_URL_APP: postgres://abate_app:app_pw@localhost:5432/abate
+      DATABASE_URL_WORKER: postgres://abate_worker:worker_pw@localhost:5432/abate
+      DATABASE_URL_IDENTITY: postgres://abate_identity:identity_pw@localhost:5432/abate
+      DATABASE_URL_PROTECTED_COMPUTE: postgres://abate_protected_compute:protected_compute_pw@localhost:5432/abate
+      DATABASE_URL_RELEASE_COMPILER: postgres://abate_release_compiler:release_compiler_pw@localhost:5432/abate
+      DATABASE_URL_PERFORMANCE: postgres://abate_performance:performance_pw@localhost:5432/abate
+      DATABASE_URL_OPS: postgres://abate_ops:ops_pw@localhost:5432/abate
       AUTH_ISSUER: http://localhost:5000/auth
       AUTH_AUDIENCE: abate-api
       AUTH_SECRET: ci_test_auth_secret_key_abate_minimum_32_characters_long
       SUPPORT_AUTH_SECRET: ci_test_support_secret_key_abate_minimum_32_characters_long
       ACTION_GRANT_SECRET: ci_test_action_grant_secret_key_abate_min_32_chars_long
+      FIXED_CLOCK: 2026-03-02T09:00:00Z
     steps:
       - name: Checkout repository
         uses: actions/checkout@v4
@@ -308,6 +342,11 @@ jobs:
           npm --prefix backend ci
           npm --prefix frontend ci
           npm --prefix tests ci
+
+      - name: Migrate and seed live PostgreSQL for Playwright E2E
+        run: |
+          npm --prefix backend run migrate
+          npm --prefix backend run seed-demo -- --pg
 
       - name: Typecheck Playwright test suite
         run: npm --prefix tests run typecheck
