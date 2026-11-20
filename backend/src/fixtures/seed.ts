@@ -6,6 +6,7 @@ import crypto from "node:crypto";
 import { Pool } from "pg";
 import { packContentHash } from "../domains/lifecycle/jurisdiction";
 import { materialHash } from "../domains/control/material";
+import { PROTOTYPE_OUTCOME_DEFINITIONS, calculateDefinitionHash } from "../domains/performance/definitions";
 
 export interface SeedTwoTenantsOptions {
   clock?: Date;
@@ -57,6 +58,9 @@ export async function seedTwoTenants(opts: SeedTwoTenantsOptions = {}) {
   };
   memDb.memberships.set(membershipA.id, membershipA);
 
+  const principalsA: any[] = [principalA];
+  const membershipsA: any[] = [membershipA];
+
   // Seed 15 additional synthetic cohort members for Tenant A (ABATE-GOLDEN-01 cohortSize: 16 total)
   for (let i = 2; i <= 16; i++) {
     const pad = i.toString().padStart(3, "0");
@@ -68,6 +72,7 @@ export async function seedTwoTenants(opts: SeedTwoTenantsOptions = {}) {
       kind: "USER"
     };
     memDb.principals.set(p.id, p);
+    principalsA.push(p);
 
     const m = {
       id: `00000000-0000-4000-a003-000000000${pad}`,
@@ -80,6 +85,7 @@ export async function seedTwoTenants(opts: SeedTwoTenantsOptions = {}) {
       recorded_at: validFrom
     };
     memDb.memberships.set(m.id, m);
+    membershipsA.push(m);
   }
 
   // Seed Phase 2 Source Contract & Active Connection for Tenant A
@@ -134,6 +140,8 @@ export async function seedTwoTenants(opts: SeedTwoTenantsOptions = {}) {
 
   let principalB: any = null;
   let membershipB: any = null;
+  const principalsB: any[] = [];
+  const membershipsB: any[] = [];
 
   // Seed 12 synthetic cohort members for Tenant B (ABATE-GOLDEN-01 cohortSize: 12)
   for (let i = 1; i <= 12; i++) {
@@ -146,6 +154,7 @@ export async function seedTwoTenants(opts: SeedTwoTenantsOptions = {}) {
       kind: "USER"
     };
     memDb.principals.set(p.id, p);
+    principalsB.push(p);
     if (i === 1) principalB = p;
 
     const m = {
@@ -159,6 +168,7 @@ export async function seedTwoTenants(opts: SeedTwoTenantsOptions = {}) {
       recorded_at: validFrom
     };
     memDb.memberships.set(m.id, m);
+    membershipsB.push(m);
     if (i === 1) membershipB = m;
   }
 
@@ -507,8 +517,8 @@ export async function seedTwoTenants(opts: SeedTwoTenantsOptions = {}) {
       const client = await pool.connect();
       try {
         const tenantBundles = [
-          { tenant: tA, org: orgA, principal: principalA, membership: membershipA, contracts: [contractA, contractCalA], connection: connA },
-          { tenant: tB, org: orgB, principal: principalB, membership: membershipB, contracts: [contractB, contractCalB], connection: connB }
+          { tenant: tA, org: orgA, principals: principalsA, memberships: membershipsA, contracts: [contractA, contractCalA], connection: connA },
+          { tenant: tB, org: orgB, principals: principalsB, memberships: membershipsB, contracts: [contractB, contractCalB], connection: connB }
         ];
 
         for (const b of tenantBundles) {
@@ -527,27 +537,31 @@ export async function seedTwoTenants(opts: SeedTwoTenantsOptions = {}) {
                ON CONFLICT (id) DO NOTHING`,
               [b.org.id, b.org.tenant_id, b.org.parent_id, b.org.name]
             );
-            await client.query(
-              `INSERT INTO principal (id, tenant_id, external_subject, kind)
-               VALUES ($1, $2, $3, $4)
-               ON CONFLICT (id) DO NOTHING`,
-              [b.principal.id, b.principal.tenant_id, b.principal.external_subject, b.principal.kind]
-            );
-            await client.query(
-              `INSERT INTO effective_membership (id, tenant_id, principal_id, organization_id, domain_role, valid_from, valid_to, recorded_at)
-               VALUES ($1, $2, $3, $4, $5, $6, $7, $8)
-               ON CONFLICT (id) DO NOTHING`,
-              [
-                b.membership.id,
-                b.membership.tenant_id,
-                b.membership.principal_id,
-                b.membership.organization_id,
-                b.membership.domain_role,
-                b.membership.valid_from,
-                b.membership.valid_to,
-                b.membership.recorded_at
-              ]
-            );
+            for (const p of b.principals) {
+              await client.query(
+                `INSERT INTO principal (id, tenant_id, external_subject, kind)
+                 VALUES ($1, $2, $3, $4)
+                 ON CONFLICT (id) DO NOTHING`,
+                [p.id, p.tenant_id, p.external_subject, p.kind]
+              );
+            }
+            for (const m of b.memberships) {
+              await client.query(
+                `INSERT INTO effective_membership (id, tenant_id, principal_id, organization_id, domain_role, valid_from, valid_to, recorded_at)
+                 VALUES ($1, $2, $3, $4, $5, $6, $7, $8)
+                 ON CONFLICT (id) DO NOTHING`,
+                [
+                  m.id,
+                  m.tenant_id,
+                  m.principal_id,
+                  m.organization_id,
+                  m.domain_role,
+                  m.valid_from,
+                  m.valid_to,
+                  m.recorded_at
+                ]
+              );
+            }
             for (const c of b.contracts) {
               await client.query(
                 `INSERT INTO source_contract (id, tenant_id, source, version, contract_hash, status)
@@ -693,6 +707,53 @@ export async function seedTwoTenants(opts: SeedTwoTenantsOptions = {}) {
              ON CONFLICT (scope) DO NOTHING`,
             [ks.scope, ks.active, ks.changed_by, ks.changed_at]
           );
+        }
+
+        // Global approved metric and prototype outcome definitions (Plane A & Plane B parity with memDb)
+        await client.query("BEGIN");
+        try {
+          await client.query(
+            `INSERT INTO metric_definition (metric_id, version, tenant_id, definition, definition_hash, status, approved_by, approved_at)
+             VALUES ($1, $2, $3, $4::jsonb, $5, $6, $7, $8)
+             ON CONFLICT (metric_id, version) DO NOTHING`,
+            [
+              metricDef.metric_id,
+              metricDef.version,
+              metricDef.tenant_id,
+              JSON.stringify(metricDef.definition),
+              metricDef.definition_hash,
+              metricDef.status,
+              metricDef.approved_by,
+              metricDef.approved_at
+            ]
+          );
+          for (const od of PROTOTYPE_OUTCOME_DEFINITIONS) {
+            await client.query(
+              `INSERT INTO outcome_definition (
+                outcome_id, version, outcome_class, family, purpose,
+                prohibited_interpretation, unit, definition, quality_rules,
+                privacy_class, status, definition_hash
+              ) VALUES ($1, $2, $3, $4, $5, $6, $7, $8::jsonb, $9::jsonb, $10, 'APPROVED', $11)
+              ON CONFLICT (outcome_id, version) DO NOTHING`,
+              [
+                od.outcomeId,
+                od.version,
+                od.outcomeClass,
+                od.family,
+                od.purpose,
+                od.prohibitedInterpretation,
+                od.unit,
+                JSON.stringify(od.definition),
+                JSON.stringify(od.qualityRules),
+                od.privacyClass,
+                calculateDefinitionHash(od.definition)
+              ]
+            );
+          }
+          await client.query("COMMIT");
+        } catch (defErr) {
+          await client.query("ROLLBACK");
+          throw defErr;
         }
       } finally {
         client.release();

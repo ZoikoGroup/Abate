@@ -13,7 +13,7 @@ const EXTENSIONS = new Set([".ts", ".tsx"]);
 /** Legal-only terms. Generic English such as "that matters" or "legal hold" is deliberately not listed. */
 const LEGAL_TERMS: Array<{ id: string; pattern: RegExp }> = [
   { id: "legal-profession", pattern: /\b(lawyers?|solicitors?|paralegals?|barristers?|attorneys?)\b/i },
-  { id: "sra", pattern: /\bSRA\b/ },
+  { id: "sra", pattern: /\bsra\b/i },
   { id: "litigation", pattern: /\b(litigation|arbitration)\b/i },
   { id: "practice-area", pattern: /\bpractice[ _-]?areas?\b/i },
   { id: "supervisory-partner", pattern: /\bsupervisory[ _-]partner\b/i },
@@ -35,14 +35,15 @@ const ALLOWED: Record<string, string> = {
   "backend/src/contracts/openapi.ts": "documents the legal alias routes",
   "frontend/src/api/client.ts": "deprecated matter_ref field on the hold view, demo tenant names",
   "frontend/src/components/Tabs/RetentionTab.tsx": "falls back to the deprecated matter_ref field",
-  "frontend/src/components/Tabs/OperationsTab.tsx": "kill-switch scope label for the seeded legal jurisdiction pack"
+  "frontend/src/components/Tabs/OperationsTab.tsx": "kill-switch scope label for the seeded legal jurisdiction pack",
+  "frontend/src/utils/sector-simulations.ts": "multi-sector interactive simulation presets and cross-sector boundary decoy fixtures"
 };
 
 function collect(dir: string, out: string[] = []): string[] {
   const full = path.join(REPO_ROOT, dir);
   if (!fs.existsSync(full)) return out;
   for (const item of fs.readdirSync(full, { withFileTypes: true })) {
-    const rel = path.join(dir, item.name);
+    const rel = path.join(dir, item.name).replace(/\\/g, "/");
     if (item.isDirectory()) {
       if (item.name === "node_modules" || item.name === "dist") continue;
       collect(rel, out);

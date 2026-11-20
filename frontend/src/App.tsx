@@ -64,6 +64,7 @@ export default function App() {
   const oidcConfigRef = useRef<OidcConfig | null>(null);
 
   const devTokenEnabled = oidcConfig ? oidcConfig.devTokenEnabled : true;
+  const isNavAllowed = (navKey: string): boolean => !allowedNav || allowedNav.includes(navKey);
 
   const [showDemoConsole, setShowDemoConsole] = useState(() => {
     if (typeof window !== "undefined") {
@@ -366,56 +367,70 @@ export default function App() {
                 ✨ Live Demo Console
               </button>
             )}
-        <button
-          type="button"
-          className={`tab-button ${activeTab === "organizations" ? "active" : ""}`}
-          onClick={() => setActiveTab("organizations")}
-        >
-          Organizations & Idempotency
-        </button>
-        <button
-          type="button"
-          className={`tab-button ${activeTab === "ingestion" ? "active" : ""}`}
-          onClick={() => setActiveTab("ingestion")}
-        >
-          Ingestion & Work Ledger (Phase 2)
-        </button>
-        <button
-          type="button"
-          className={`tab-button ${activeTab === "analytics" ? "active" : ""}`}
-          onClick={() => setActiveTab("analytics")}
-        >
-          Cohort Analytics & Privacy (Phase 3)
-        </button>
-        <button
-          type="button"
-          className={`tab-button ${activeTab === "hazards" ? "active" : ""}`}
-          onClick={() => setActiveTab("hazards")}
-        >
-          Hazards &amp; Controls (Phase 4)
-        </button>
-        <button
-          type="button"
-          className={`tab-button ${activeTab === "retention" ? "active" : ""}`}
-          onClick={() => setActiveTab("retention")}
-        >
-          Retention &amp; Legal Hold (Phase 5)
-        </button>
-        <button
-          type="button"
-          className={`tab-button ${activeTab === "ai" ? "active" : ""}`}
-          onClick={() => setActiveTab("ai")}
-        >
-          Bounded AI &amp; Actions (Phase 6)
-        </button>
-        <button
-          type="button"
-          className={`tab-button ${activeTab === "outcomes" ? "active" : ""}`}
-          onClick={() => setActiveTab("outcomes")}
-        >
-          Outcomes &amp; AI Change (Phase 7)
-        </button>
-        {isSectorPackActive(sectorProfile) && (!allowedNav || allowedNav.includes("SECTOR_PACK") || allowedNav.includes("LEGAL_PRACTICE")) && (
+        {isNavAllowed("ORGANIZATIONS") && (
+          <button
+            type="button"
+            className={`tab-button ${activeTab === "organizations" ? "active" : ""}`}
+            onClick={() => setActiveTab("organizations")}
+          >
+            Organizations & Idempotency
+          </button>
+        )}
+        {isNavAllowed("INGESTION") && (
+          <button
+            type="button"
+            className={`tab-button ${activeTab === "ingestion" ? "active" : ""}`}
+            onClick={() => setActiveTab("ingestion")}
+          >
+            Ingestion & Work Ledger (Phase 2)
+          </button>
+        )}
+        {isNavAllowed("COHORT_ANALYTICS") && (
+          <button
+            type="button"
+            className={`tab-button ${activeTab === "analytics" ? "active" : ""}`}
+            onClick={() => setActiveTab("analytics")}
+          >
+            Cohort Analytics & Privacy (Phase 3)
+          </button>
+        )}
+        {isNavAllowed("HAZARD_CONTROL") && (
+          <button
+            type="button"
+            className={`tab-button ${activeTab === "hazards" ? "active" : ""}`}
+            onClick={() => setActiveTab("hazards")}
+          >
+            Hazards &amp; Controls (Phase 4)
+          </button>
+        )}
+        {isNavAllowed("RETENTION") && (
+          <button
+            type="button"
+            className={`tab-button ${activeTab === "retention" ? "active" : ""}`}
+            onClick={() => setActiveTab("retention")}
+          >
+            Retention &amp; Legal Hold (Phase 5)
+          </button>
+        )}
+        {isNavAllowed("BOUNDED_AI") && (
+          <button
+            type="button"
+            className={`tab-button ${activeTab === "ai" ? "active" : ""}`}
+            onClick={() => setActiveTab("ai")}
+          >
+            Bounded AI &amp; Actions (Phase 6)
+          </button>
+        )}
+        {isNavAllowed("OUTCOMES") && (
+          <button
+            type="button"
+            className={`tab-button ${activeTab === "outcomes" ? "active" : ""}`}
+            onClick={() => setActiveTab("outcomes")}
+          >
+            Outcomes &amp; AI Change (Phase 7)
+          </button>
+        )}
+        {isSectorPackActive(sectorProfile) && (isNavAllowed("SECTOR_PACK") || isNavAllowed("LEGAL_PRACTICE")) && (
           <button
             type="button"
             className={`tab-button ${activeTab === "sector" ? "active" : ""}`}
@@ -424,167 +439,179 @@ export default function App() {
             {getSectorUi(sectorProfile).navLabel}
           </button>
         )}
-        <button
-          type="button"
-          className={`tab-button ${activeTab === "operations" ? "active" : ""}`}
-          onClick={() => setActiveTab("operations")}
-        >
-          Operations &amp; Support (B8)
-        </button>
-        <button
-          type="button"
-          className={`tab-button ${activeTab === "isolation" ? "active" : ""}`}
-          onClick={() => setActiveTab("isolation")}
-        >
-          Tenant Isolation & Attack Lab
-        </button>
-        <button
-          type="button"
-          className={`tab-button ${activeTab === "outbox" ? "active" : ""}`}
-          onClick={() => setActiveTab("outbox")}
-        >
-          Transactional Outbox
-        </button>
-        <button
-          type="button"
-          className={`tab-button ${activeTab === "audit" ? "active" : ""}`}
-          onClick={() => setActiveTab("audit")}
-        >
-          Append-Only Audit Trail
-        </button>
-        <button
-          type="button"
-          className={`tab-button ${activeTab === "verifier" ? "active" : ""}`}
-          onClick={() => setActiveTab("verifier")}
-        >
-          Audit Verifier &amp; Merkle
-        </button>
-        <button
-          type="button"
-          className={`tab-button ${activeTab === "constitutional" ? "active" : ""}`}
-          onClick={() => setActiveTab("constitutional")}
-        >
-          Constitutional Invariants
-        </button>
+        {isNavAllowed("OPS") && (
+          <button
+            type="button"
+            className={`tab-button ${activeTab === "operations" ? "active" : ""}`}
+            onClick={() => setActiveTab("operations")}
+          >
+            Operations &amp; Support (B8)
+          </button>
+        )}
+        {isNavAllowed("ISOLATION") && (
+          <button
+            type="button"
+            className={`tab-button ${activeTab === "isolation" ? "active" : ""}`}
+            onClick={() => setActiveTab("isolation")}
+          >
+            Tenant Isolation & Attack Lab
+          </button>
+        )}
+        {isNavAllowed("OUTBOX") && (
+          <button
+            type="button"
+            className={`tab-button ${activeTab === "outbox" ? "active" : ""}`}
+            onClick={() => setActiveTab("outbox")}
+          >
+            Transactional Outbox
+          </button>
+        )}
+        {isNavAllowed("AUDIT") && (
+          <button
+            type="button"
+            className={`tab-button ${activeTab === "audit" ? "active" : ""}`}
+            onClick={() => setActiveTab("audit")}
+          >
+            Append-Only Audit Trail
+          </button>
+        )}
+        {isNavAllowed("VERIFIER") && (
+          <button
+            type="button"
+            className={`tab-button ${activeTab === "verifier" ? "active" : ""}`}
+            onClick={() => setActiveTab("verifier")}
+          >
+            Audit Verifier &amp; Merkle
+          </button>
+        )}
+        {isNavAllowed("CONSTITUTIONAL") && (
+          <button
+            type="button"
+            className={`tab-button ${activeTab === "constitutional" ? "active" : ""}`}
+            onClick={() => setActiveTab("constitutional")}
+          >
+            Constitutional Invariants
+          </button>
+        )}
       </nav>
 
-      <main className="app-main" id="content">
-        {errorMsg && (
-          <div className="feedback-alert alert-error" role="alert">
-            <div className="feedback-title">Notice</div>
-            <p>{errorMsg}</p>
-          </div>
-        )}
+          <main className="app-main" id="content">
+            {errorMsg && (
+              <div className="feedback-alert alert-error" role="alert">
+                <div className="feedback-title">Notice</div>
+                <p>{errorMsg}</p>
+              </div>
+            )}
 
-        {activeTab === "constitutional" && (
-          <ConstitutionalTab health={health} info={info} />
-        )}
+            {activeTab === "constitutional" && (
+              <ConstitutionalTab health={health} info={info} />
+            )}
 
-        {activeTab === "isolation" && (
-          <IsolationTab
-            currentTenant={currentTenant}
-            token={token}
-            tenantInfo={tenantInfo}
-            organizations={organizations}
-          />
-        )}
+            {activeTab === "isolation" && (
+              <IsolationTab
+                currentTenant={currentTenant}
+                token={token}
+                tenantInfo={tenantInfo}
+                organizations={organizations}
+              />
+            )}
 
-        {activeTab === "organizations" && (
-          <OrganizationsTab
-            currentTenant={currentTenant}
-            token={token}
-            organizations={organizations}
-            sectorProfile={sectorProfile}
-            onSectorProfileChange={setSectorProfile}
-            onRefresh={() => fetchTenantData(activeTenantId, activeRole)}
-          />
-        )}
+            {activeTab === "organizations" && (
+              <OrganizationsTab
+                currentTenant={currentTenant}
+                token={token}
+                organizations={organizations}
+                sectorProfile={sectorProfile}
+                onSectorProfileChange={setSectorProfile}
+                onRefresh={() => fetchTenantData(activeTenantId, activeRole)}
+              />
+            )}
 
-        {activeTab === "ingestion" && (
-          <IngestionTab
-            currentTenant={currentTenant}
-            token={token}
-            sectorProfile={sectorProfile}
-            onRefresh={() => fetchTenantData(activeTenantId, activeRole)}
-          />
-        )}
+            {activeTab === "ingestion" && (
+              <IngestionTab
+                currentTenant={currentTenant}
+                token={token}
+                sectorProfile={sectorProfile}
+                onRefresh={() => fetchTenantData(activeTenantId, activeRole)}
+              />
+            )}
 
-        {activeTab === "analytics" && (
-          <CohortAnalyticsTab
-            currentTenant={currentTenant}
-            token={token}
-            sectorProfile={sectorProfile}
-          />
-        )}
+            {activeTab === "analytics" && (
+              <CohortAnalyticsTab
+                currentTenant={currentTenant}
+                token={token}
+                sectorProfile={sectorProfile}
+              />
+            )}
 
-        {activeTab === "hazards" && (
-          <HazardControlTab
-            currentTenant={currentTenant}
-            token={token}
-            sectorProfile={sectorProfile}
-          />
-        )}
+            {activeTab === "hazards" && (
+              <HazardControlTab
+                currentTenant={currentTenant}
+                token={token}
+                sectorProfile={sectorProfile}
+              />
+            )}
 
-        {activeTab === "retention" && (
-          <RetentionTab
-            currentTenant={currentTenant}
-            token={token}
-          />
-        )}
+            {activeTab === "retention" && (
+              <RetentionTab
+                currentTenant={currentTenant}
+                token={token}
+              />
+            )}
 
-        {activeTab === "ai" && (
-          <BoundedAiTab
-            currentTenant={currentTenant}
-            token={token}
-          />
-        )}
+            {activeTab === "ai" && (
+              <BoundedAiTab
+                currentTenant={currentTenant}
+                token={token}
+              />
+            )}
 
-        {activeTab === "outcomes" && (
-          <OutcomesAiChangeTab
-            currentTenant={currentTenant}
-            token={token}
-          />
-        )}
+            {activeTab === "outcomes" && (
+              <OutcomesAiChangeTab
+                currentTenant={currentTenant}
+                token={token}
+              />
+            )}
 
-        {activeTab === "sector" && sectorProfile && isSectorPackActive(sectorProfile) && (
-          <SectorPackTab
-            key={sectorProfile.sectorKey}
-            currentTenant={currentTenant}
-            token={token}
-            sectorProfile={sectorProfile}
-          />
-        )}
+            {activeTab === "sector" && sectorProfile && isSectorPackActive(sectorProfile) && (
+              <SectorPackTab
+                key={sectorProfile.sectorKey}
+                currentTenant={currentTenant}
+                token={token}
+                sectorProfile={sectorProfile}
+              />
+            )}
 
-        {activeTab === "operations" && (
-          <OperationsTab
-            currentTenant={currentTenant}
-            token={token}
-          />
-        )}
+            {activeTab === "operations" && (
+              <OperationsTab
+                currentTenant={currentTenant}
+                token={token}
+              />
+            )}
 
-        {activeTab === "outbox" && (
-          <OutboxTab
-            token={token}
-            currentTenant={currentTenant}
-            onRefresh={() => fetchTenantData(activeTenantId, activeRole)}
-          />
-        )}
+            {activeTab === "outbox" && (
+              <OutboxTab
+                token={token}
+                currentTenant={currentTenant}
+                onRefresh={() => fetchTenantData(activeTenantId, activeRole)}
+              />
+            )}
 
-        {activeTab === "audit" && (
-          <AuditTab
-            currentTenant={currentTenant}
-            auditEvents={auditEvents}
-            onRefresh={() => fetchTenantData(activeTenantId, activeRole)}
-          />
-        )}
+            {activeTab === "audit" && (
+              <AuditTab
+                currentTenant={currentTenant}
+                auditEvents={auditEvents}
+                onRefresh={() => fetchTenantData(activeTenantId, activeRole)}
+              />
+            )}
 
-        {activeTab === "verifier" && (
-          <AuditVerifierTab
-            currentTenant={currentTenant}
-            token={token}
-          />
-        )}
-      </main>
+            {activeTab === "verifier" && (
+              <AuditVerifierTab
+                currentTenant={currentTenant}
+                token={token}
+              />
+            )}
+          </main>
         </>
       )}
 

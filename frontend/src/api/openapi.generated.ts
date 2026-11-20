@@ -107,6 +107,7 @@ export const OPENAPI_PATHS = {
   "/sector/legal/fatigue-check": ["POST"] as const,
   "/sector/legal/matters": ["GET"] as const,
   "/sector/legal/matters/map": ["POST"] as const,
+  "/sector/rules": ["GET"] as const,
   "/sector/work-items": ["GET"] as const,
   "/sector/work-items/fatigue-check": ["POST"] as const,
   "/sector/work-items/map": ["POST"] as const,

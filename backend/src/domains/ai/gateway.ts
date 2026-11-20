@@ -1,5 +1,6 @@
 // backend/src/domains/ai/gateway.ts
 import { AppError } from "../../platform/errors";
+import { HttpModelProvider } from "./providers/http-model-provider";
 
 export interface ModelMessage {
   role: "system" | "user" | "assistant";
@@ -171,6 +172,31 @@ export class DeterministicMockProvider implements ModelProvider {
 export const providers: Record<string, ModelProvider> = {
   "zoiko-mock": new DeterministicMockProvider()
 };
+
+/**
+ * Additive region-pinned HTTP provider registration from environment variables.
+ * Keeps DeterministicMockProvider intact for local/test and deterministic verification.
+ */
+export function registerConfiguredHttpProvider(
+  env: NodeJS.ProcessEnv = process.env,
+  registry: Record<string, ModelProvider> = providers
+): ModelProvider | null {
+  if ((env.AI_PROVIDER_MODE || "").toLowerCase() !== "live") {
+    return null;
+  }
+  const name = (env.AI_PROVIDER_NAME || "").trim();
+  const region = (env.AI_PROVIDER_REGION || "").trim();
+  const endpointUrl = (env.AI_PROVIDER_ENDPOINT || "").trim();
+  const apiKey = (env.AI_PROVIDER_API_KEY || "").trim();
+  if (!name || !region || !endpointUrl) {
+    return null;
+  }
+  const provider = new HttpModelProvider({ name, region, endpointUrl, apiKey });
+  registry[name] = provider;
+  return provider;
+}
+
+registerConfiguredHttpProvider();
 
 export async function callModel(
   uc: UseCaseConfig,

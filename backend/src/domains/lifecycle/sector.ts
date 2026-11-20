@@ -5,10 +5,13 @@ import { AppError } from "../../platform/errors";
 import { Tx } from "../../platform/db/with-tenant";
 import {
   DEFAULT_NEUTRAL_FATIGUE_RULE,
+  JurisdictionOverlay,
   NeutralFatigueResult,
   NeutralFatigueRule,
   NeutralWorkItemInput,
   SectorMapping,
+  SectorPackStatus,
+  SectorRule,
   SectorUiCopy,
   SectorVocabulary,
   validateSectorPack
@@ -26,23 +29,28 @@ import {
 import { GENERIC_VOCABULARY } from "./packs/generic";
 import { LEGAL_VOCABULARY } from "./packs/legal";
 import { ACCOUNTING_VOCABULARY } from "./packs/accounting";
+import { FINANCE_VOCABULARY } from "./packs/finance";
 
 export type {
+  JurisdictionOverlay,
   NeutralFatigueResult,
   NeutralFatigueRule,
   NeutralWorkItemInput,
   SectorMapping,
+  SectorPackStatus,
+  SectorRule,
   SectorUiCopy,
   SectorVocabulary,
   AvailableSector
 };
-export { DEFAULT_NEUTRAL_FATIGUE_RULE, GENERIC_VOCABULARY, LEGAL_VOCABULARY, ACCOUNTING_VOCABULARY, validateSectorPack };
+export { DEFAULT_NEUTRAL_FATIGUE_RULE, GENERIC_VOCABULARY, LEGAL_VOCABULARY, ACCOUNTING_VOCABULARY, FINANCE_VOCABULARY, validateSectorPack };
 export { registerSectorPack, getSectorMapping, listAvailableSectors, describeSectorScope } from "./sector-registry";
 
 /** Built-in mappings, kept as named exports for existing callers. New code should use getSectorMapping. */
 export const genericMapping: SectorMapping = getBaselineMapping();
 export const legalMapping: SectorMapping = getSectorMapping("LEGAL") as SectorMapping;
 export const accountingMapping: SectorMapping = getSectorMapping("ACCOUNTING") as SectorMapping;
+export const financeMapping: SectorMapping = getSectorMapping("FINANCE") as SectorMapping;
 
 /**
  * Sector-neutral consecutive late-evening fatigue rule.
@@ -99,6 +107,7 @@ export interface TenantSectorProfile {
   /** Registered sector key, for example GENERIC, LEGAL or ACCOUNTING. */
   sectorKey: string;
   packKey: string;
+  packStatus: SectorPackStatus;
   displayName: string;
   /** True when a sector pack other than the neutral baseline is active. */
   packActive: boolean;
@@ -110,6 +119,10 @@ export interface TenantSectorProfile {
   highDemandWindows: string[];
   /** Allowed work item units for the sector. Empty means free-form. */
   workItemUnits: string[];
+  /** Composable cohort work-design rules declared by the active pack. */
+  rules: SectorRule[];
+  /** Effective-dated jurisdiction overlays bound to this sector pack. */
+  jurisdictionOverlays: JurisdictionOverlay[];
   /** Screen wording for the sector, so clients render any sector without sector-specific code. */
   ui: SectorUiCopy;
   claimScope: string;
@@ -171,6 +184,7 @@ export async function resolveTenantSectorProfile(
     tenantId,
     sectorKey: selected.sector,
     packKey: selected.packKey,
+    packStatus: selected.status,
     displayName: getSectorDisplayName(selected.sector),
     packActive: selected.sector !== getBaselineMapping().sector,
     hasLegalPack: selected.sector === "LEGAL",
@@ -179,6 +193,8 @@ export async function resolveTenantSectorProfile(
     demandWindows: selected.demandWindows,
     highDemandWindows: selected.highDemandWindows,
     workItemUnits: selected.workItemUnits,
+    rules: selected.rules,
+    jurisdictionOverlays: selected.jurisdictionOverlays,
     ui: selected.ui,
     claimScope: selected.claimScope,
     enabledSectors: listEnabledSectorTags(),

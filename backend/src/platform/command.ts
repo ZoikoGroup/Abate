@@ -1,6 +1,6 @@
 // backend/src/platform/command.ts
 import crypto from "node:crypto";
-import { withTenant, Tx } from "./db/with-tenant";
+import { withTenant, withPerformance, Tx } from "./db/with-tenant";
 import { AppError } from "./errors";
 import { canonicalJson } from "./canonical";
 
@@ -87,9 +87,11 @@ export async function runCommand<T>(args: {
   requestHash: string;
   actor: Actor;
   expectedVersion?: number;
+  poolRole?: "app" | "performance";
   body: (tx: Tx) => Promise<{ result: T; audit: AuditInput; events: OutboxInput[] }>;
 }): Promise<{ status: number; body: T }> {
-  return withTenant(args.tenantId, async (tx) => {
+  const runner = args.poolRole === "performance" ? withPerformance : withTenant;
+  return runner(args.tenantId, async (tx) => {
     // 1. Claim the key; primary key (tenant_id, operation, idempotency_key) serializes concurrent attempts
     const claim = await tx.q(
       `INSERT INTO idempotency_record (tenant_id, operation, idempotency_key, request_hash, status)

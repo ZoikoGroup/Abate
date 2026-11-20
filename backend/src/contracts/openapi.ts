@@ -789,7 +789,7 @@ export const openApiSpec = {
     "/outcomes/definitions/{id}/approve": {
       post: {
         tags: ["Work-Design & Outcomes (Plane B)"],
-        summary: "Approve outcome definition for production measurement",
+        summary: "Approve outcome definition for active cohort measurement",
         parameters: [
           { name: "id", in: "path", required: true, schema: { type: "string" } }
         ],
@@ -1688,11 +1688,21 @@ export const openApiSpec = {
     "/sector/work-items/fatigue-check": {
       post: {
         tags: ["Sector Packs"],
-        summary: "Evaluate consecutive late-night sessions for a work item using the active pack's rule and wording",
+        summary: "Evaluate consecutive late-night sessions and pack-declared cohort work-design rules with jurisdiction overlay status",
         responses: {
-          "200": { description: "SectorFatigueAssessment" },
+          "200": { description: "SectorFatigueAssessment including ruleFindings and jurisdictionOverlay" },
           "403": { description: "No sector pack is enabled for this tenant" },
           "404": { description: "Work item not found" }
+        }
+      }
+    },
+    "/sector/rules": {
+      get: {
+        tags: ["Sector Packs"],
+        summary: "List active sector pack cohort rules, jurisdiction overlays, forbidden fields, and non-overridable constitutional guardrails",
+        responses: {
+          "200": { description: "Active sector rule catalog and jurisdiction overlay metadata" },
+          "403": { description: "No sector pack is enabled for this tenant" }
         }
       }
     },

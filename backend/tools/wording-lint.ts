@@ -42,6 +42,12 @@ const BANNED_RULES: BannedRule[] = [
     pattern: /\b(production[- ]ready|certified\s+compliant|legally\s+compliant)\b/i,
     allowLinePattern: /\b(not|no|never|no claim of|does not claim|prohibit)\b.{0,40}\b(production[- ]ready|certified\s+compliant|legally\s+compliant)\b/i,
     message: "Overclaiming production readiness or legal certification (G-33)"
+  },
+  {
+    id: "NO_COMPLIANT_BADGE_OVERCLAIM",
+    pattern: /\bCOMPLIANT:\s*NORMAL\s+VARIANCE\b/i,
+    allowLinePattern: /\b(no|not|never|removed|replaced)\b/i,
+    message: "UI badge must not claim 'COMPLIANT' without legal approval; use 'WITHIN THRESHOLD' (G-33 / §7.1)"
   }
 ];
 

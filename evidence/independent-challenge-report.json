@@ -1,6 +1,6 @@
 {
   "schema": "abate.independent-challenge.v1",
-  "generatedAt": "2026-11-19T10:38:27.460Z",
+  "generatedAt": "2026-11-20T11:47:36.792Z",
   "backingMode": "MEMDB_PARITY",
   "status": "NO_OPEN_P0",
   "summary": {
@@ -20,7 +20,7 @@
       "severity": "P0",
       "passed": true,
       "detail": "Verified 9 direct-ID routes, 5 list routes, and bidirectional support/tenant 403 perimeter.",
-      "durationMs": 82
+      "durationMs": 29
     },
     {
       "id": "CHAL-1.2",
@@ -29,7 +29,7 @@
       "severity": "P0",
       "passed": true,
       "detail": "Verified 0-row uncontextualized SQL, Tenant A->B connection reuse isolation, and 6 abate_worker table denials.",
-      "durationMs": 7
+      "durationMs": 3
     },
     {
       "id": "CHAL-2.1",
@@ -38,7 +38,7 @@
       "severity": "P0",
       "passed": true,
       "detail": "Verified n=9 suppression, n=10 single read path, overlap/residual=4 blocks, and concurrent race serialization (1/2 released).",
-      "durationMs": 21
+      "durationMs": 7
     },
     {
       "id": "CHAL-3.1",
@@ -47,7 +47,7 @@
       "severity": "P0",
       "passed": true,
       "detail": "Injected 4 unique decoy canaries across ZoikoTime & CalendarCadence; verified 400 fail-closed and 0 bytes leaked in logs, error tracker, APIs, or DB.",
-      "durationMs": 31
+      "durationMs": 9
     },
     {
       "id": "CHAL-4.1",
@@ -56,7 +56,7 @@
       "severity": "P0",
       "passed": true,
       "detail": "Verified pre-model individual blocking across all 3 AI endpoints, proposal-only injection containment, and 403 on mutated action params.",
-      "durationMs": 36
+      "durationMs": 10
     },
     {
       "id": "CHAL-5.1",
@@ -65,7 +65,7 @@
       "severity": "P0",
       "passed": true,
       "detail": "Verified Plane B->A perimeter (400/disposition unchanged), 200/409/400 idempotency replay, and 0 worker failures across connection transitions.",
-      "durationMs": 101
+      "durationMs": 29
     }
   ]
 }

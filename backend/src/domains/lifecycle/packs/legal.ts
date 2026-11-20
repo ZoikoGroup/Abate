@@ -31,6 +31,73 @@ export const legalPack: SectorPackDefinition = {
     lateEveningUtcHour: 20,
     earlyMorningUtcHour: 6
   },
+  rules: [
+    {
+      ruleId: "LEGAL_LATE_EVENING_SURGE",
+      title: "Consecutive Late-Evening Drafting During Trial / Closing",
+      type: "CONSECUTIVE_LATE_NIGHTS",
+      highDemandWindows: ["TRIAL_PREP", "CLOSING_TRANSACTION"],
+      consecutiveLateNights: 3,
+      lateEveningUtcHour: 20,
+      earlyMorningUtcHour: 6,
+      requiredGate: "CONSULTATION",
+      citationStatus: "APPROVED",
+      reference: "SRA Workplace Culture Guidance 2023 §3.2 & ISO 45003:2021 §6.1.2.1",
+      rationale: "Three or more consecutive late-evening work sessions during trial preparation or transaction closing require supervisory partner consultation and workload re-balancing."
+    },
+    {
+      ruleId: "LEGAL_WEEKEND_REST_DEFICIT",
+      title: "Unbuffered Weekend Drafting During Trial / Closing",
+      type: "CONSECUTIVE_ON_CALL_OR_WEEKEND",
+      maxConsecutiveWeekendDays: 1,
+      minUninterruptedRestHours: 36,
+      appliesToWindows: ["TRIAL_PREP", "CLOSING_TRANSACTION"],
+      requiredGate: "CONSULTATION",
+      citationStatus: "PREVIEW_PLACEHOLDER",
+      reference: "ISO 45003:2021 §6.1.2.1 (UK working-time statutory citation pending Legal & Policy Lead review)",
+      rationale: "Sustained weekend drafting across both Saturday and Sunday without a protected rest buffer indicates unbuffered matter demand."
+    },
+    {
+      ruleId: "LEGAL_SUSTAINED_PEAK_DURATION",
+      title: "Sustained High-Demand Window Duration",
+      type: "HIGH_DEMAND_WINDOW_DURATION",
+      highDemandWindows: ["TRIAL_PREP", "CLOSING_TRANSACTION"],
+      maxConsecutiveDays: 14,
+      requiredGate: "REVIEW",
+      citationStatus: "PREVIEW_PLACEHOLDER",
+      reference: "ISO 45003:2021 §6.1.2.1 (placeholder pending Legal & Policy Lead review)",
+      rationale: "High-demand trial or closing windows running beyond 14 consecutive days require capacity review and rotation planning."
+    }
+  ],
+  jurisdictionOverlays: [
+    {
+      overlayKey: "legal-uk-sra-overlay",
+      jurisdictionCode: "UK",
+      effectiveFrom: "2025-01-01T00:00:00Z",
+      effectiveTo: null,
+      approvalStatus: "DRAFT",
+      accountableReviewer: null,
+      reviewDate: null,
+      statutoryReferences: [
+        "SRA Workplace Culture Guidance 2023 §3.2 (pending formal legal sign-off in open-signoffs.md)",
+        "ISO 45003:2021 §6.1.2.1"
+      ],
+      consultationGates: ["APPROVAL", "CONSULTATION", "REVIEW"],
+      retentionNote: "Synthetic default retention (90d–730d) pending Data Owner & Legal sign-off in docs/governance/open-signoffs.md."
+    },
+    {
+      overlayKey: "legal-eu-preview-overlay",
+      jurisdictionCode: "EU",
+      effectiveFrom: "2025-01-01T00:00:00Z",
+      effectiveTo: null,
+      approvalStatus: "PREVIEW_PLACEHOLDER",
+      accountableReviewer: null,
+      reviewDate: null,
+      statutoryReferences: [],
+      consultationGates: ["APPROVAL", "CONSULTATION", "REVIEW"],
+      retentionNote: "No EU statutory retention schedule approved yet; zero automated deletion until configured."
+    }
+  ],
   forbidden: ["clientConfidentialNotes", "privilegedAdvice", "billingRate", "feeEarned", "individualLawyerRanking"],
   ui: {
     navLabel: "Legal Sector Pack (SRA 2023)",
@@ -55,7 +122,7 @@ export const legalPack: SectorPackDefinition = {
     fatigueButtonLabel: "SRA Fatigue Check",
     fatigueCardTitle: "SRA 2023 Workplace Culture Fatigue Audit",
     surgeBadge: "SRA SURGE ALERT: FATIGUE DETECTED",
-    compliantBadge: "COMPLIANT: NORMAL VARIANCE",
+    compliantBadge: "WITHIN THRESHOLD: NORMAL VARIANCE",
     thresholdNote: "SRA Threshold: ≥ 3 consecutive nights with unbuffered work past 20:00 during trial/closing triggers mandatory supervisory intervention.",
     consultationTitle: "Mandatory Supervisory Partner Consultation Gate",
     consultationSignerLabel: "Supervisory Partner",

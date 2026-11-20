@@ -17,6 +17,7 @@ import {
   withProtectedCompute,
   withReleaseCompiler,
   withPerformance,
+  withOps,
   resetPgHealthCache
 } from "../src/platform/db/with-tenant";
 import { GOLDEN_01 } from "../src/fixtures/golden01";
@@ -412,6 +413,35 @@ async function main() {
     // Attempt 2 recovers & marks published; inbox_event prevents duplicate effect for evId
     await drainBatch({ bus, consumerName: consumer, simulateCrashAfterPublish: false });
     assert.strictEqual(handledTargetEvents.length, 1, "Consumer inbox_event on live PG must deduplicate redelivered event");
+  });
+
+  await check("Migration 0087: async_job forced RLS, ops_active_tenants view, and abate_performance read policies on live PG", async () => {
+    const jobId = crypto.randomUUID();
+    await withTenant(tenantA, async (tx) => {
+      await tx.q(
+        `INSERT INTO async_job (id, tenant_id, job_type, state, progress, result_summary, error_code)
+         VALUES ($1, $2, 'METRIC_RECALCULATION', 'COMPLETED', 100, $3::jsonb, NULL)`,
+        [jobId, tenantA, JSON.stringify({ count: 1 })]
+      );
+    });
+
+    await withTenant(tenantB, async (tx) => {
+      const foreign = await tx.q(`SELECT id FROM async_job WHERE id = $1`, [jobId]);
+      assert.strictEqual(foreign.rowCount, 0, "Tenant B must see 0 rows for Tenant A async_job");
+    });
+
+    const activeTenants = await withOps(async (tx) => {
+      const r = await tx.q(`SELECT id, state FROM ops_active_tenants`);
+      return r.rows;
+    });
+    assert.ok(activeTenants.some((t: any) => t.id === tenantA), "ops_active_tenants must list Tenant A for abate_ops");
+
+    const perfReadable = await withPerformance(tenantA, async (tx) => {
+      const defs = await tx.q(`SELECT count(*)::int AS c FROM outcome_definition`);
+      const rels = await tx.q(`SELECT count(*)::int AS c FROM privacy_release`);
+      return { defs: defs.rows[0].c, rels: rels.rows[0].c };
+    });
+    assert.ok(perfReadable.defs >= 0 && perfReadable.rels >= 0, "abate_performance must read outcome_definition and tenant-scoped privacy_release");
   });
 
   console.log(`\n\x1b[32m✔ Live PostgreSQL Parity & Role Isolation Suite PASSED (${passed} checks).\x1b[0m\n`);

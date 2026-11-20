@@ -35,8 +35,75 @@ export const softwareItPack: SectorPackDefinition = {
     lateEveningUtcHour: 20,
     earlyMorningUtcHour: 6
   },
+  rules: [
+    {
+      ruleId: "SW_LATE_EVENING_CUTOVER",
+      title: "Consecutive Late-Evening Release / Incident Work",
+      type: "CONSECUTIVE_LATE_NIGHTS",
+      highDemandWindows: ["RELEASE_CUTOVER", "INCIDENT_RESPONSE"],
+      consecutiveLateNights: 3,
+      lateEveningUtcHour: 20,
+      earlyMorningUtcHour: 6,
+      requiredGate: "CONSULTATION",
+      citationStatus: "PREVIEW_PLACEHOLDER",
+      reference: "ISO 45003:2021 §6.1.2.1 (pending Policy & Governance Lead review)",
+      rationale: "Three or more consecutive late-evening sessions during release cutovers or active incidents trigger engineering manager consultation."
+    },
+    {
+      ruleId: "SW_ON_CALL_WEEKEND_RECOVERY",
+      title: "On-Call / Incident Weekend Rest Deficit",
+      type: "CONSECUTIVE_ON_CALL_OR_WEEKEND",
+      maxConsecutiveWeekendDays: 1,
+      minUninterruptedRestHours: 36,
+      appliesToWindows: ["ON_CALL_ROTATION", "INCIDENT_RESPONSE", "RELEASE_CUTOVER"],
+      requiredGate: "CONSULTATION",
+      citationStatus: "PREVIEW_PLACEHOLDER",
+      reference: "ISO 45003:2021 §6.1.2.1 (on-call rest guidance pending Policy & Governance Lead review)",
+      rationale: "Detects unbuffered weekend on-call or incident load lacking an uninterrupted 36-hour recovery window."
+    },
+    {
+      ruleId: "SW_INCIDENT_INTER_SHIFT_REST",
+      title: "Post-Incident Inter-Shift Recovery Gap (< 11h)",
+      type: "MIN_INTER_SHIFT_REST",
+      minRestHours: 11,
+      maxShortRestTransitions: 0,
+      appliesToWindows: ["INCIDENT_RESPONSE", "RELEASE_CUTOVER"],
+      requiredGate: "REVIEW",
+      citationStatus: "PREVIEW_PLACEHOLDER",
+      reference: "ISO 45003:2021 §6.1.2.1 (pending Policy & Governance Lead review)",
+      rationale: "Flags short overnight turnarounds following late incident response so protected recovery time is scheduled."
+    }
+  ],
+  jurisdictionOverlays: [
+    {
+      overlayKey: "software-uk-preview",
+      jurisdictionCode: "UK",
+      effectiveFrom: "2025-01-01T00:00:00Z",
+      effectiveTo: null,
+      approvalStatus: "PREVIEW_PLACEHOLDER",
+      accountableReviewer: null,
+      reviewDate: null,
+      statutoryReferences: [],
+      consultationGates: ["APPROVAL", "CONSULTATION", "REVIEW"],
+      retentionNote: "Preview pack only: zero retention policy active until Policy & Governance Lead approves jurisdiction pack."
+    },
+    {
+      overlayKey: "software-eu-preview",
+      jurisdictionCode: "EU",
+      effectiveFrom: "2025-01-01T00:00:00Z",
+      effectiveTo: null,
+      approvalStatus: "PREVIEW_PLACEHOLDER",
+      accountableReviewer: null,
+      reviewDate: null,
+      statutoryReferences: [],
+      consultationGates: ["APPROVAL", "CONSULTATION", "REVIEW"],
+      retentionNote: "Preview pack only: works-council / right-to-disconnect citations pending Policy & Governance Lead review."
+    }
+  ],
   forbidden: [
     "sourceCode",
+    "commitDiff",
+    "prCount",
     "customerData",
     "individualVelocity",
     "individualCommitCount",

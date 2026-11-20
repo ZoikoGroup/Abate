@@ -113,7 +113,9 @@ function runStaticMigrationAudit(): void {
     { label: "REVOKE ALL ON disclosure_ledger FROM abate_app", re: /REVOKE ALL ON disclosure_ledger FROM abate_app/i },
     { label: "REVOKE ALL ON identity_map FROM abate_app", re: /REVOKE ALL ON identity_map FROM abate_app/i },
     { label: "evidence_item_tenant_isolation policy", re: /CREATE POLICY evidence_item_tenant_isolation ON evidence_item/i },
-    { label: "tenant_sector_setting FORCE RLS", re: /ALTER TABLE tenant_sector_setting FORCE ROW LEVEL SECURITY/i }
+    { label: "tenant_sector_setting FORCE RLS", re: /ALTER TABLE tenant_sector_setting FORCE ROW LEVEL SECURITY/i },
+    { label: "async_job FORCE RLS", re: /ALTER TABLE async_job FORCE ROW LEVEL SECURITY/i },
+    { label: "ops_active_tenants view", re: /CREATE OR REPLACE VIEW ops_active_tenants/i }
   ];
 
   let failures = 0;

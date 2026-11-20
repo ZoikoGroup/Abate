@@ -9,6 +9,8 @@ import {
   type EvidencePackage,
   fetchHazards,
   fetchHazardDetail,
+  fetchRelease,
+  queryRelease,
   createHazard,
   proposeCause,
   reviewCause,
@@ -205,6 +207,35 @@ export function HazardControlTab({ currentTenant, token, sectorProfile }: Hazard
       });
   }, [selectedHazardId, token]);
 
+  const ensureValidOriginatingReleaseId = async (candidateId: string): Promise<string> => {
+    if (!token || candidateId !== BASELINE_RELEASE_ID) return candidateId;
+    try {
+      const existing = await fetchRelease(candidateId, token);
+      if (existing && existing.status === "RELEASED") {
+        return candidateId;
+      }
+    } catch {
+      // Fallback below when the seeded baseline release was superseded (e.g., after metric recalculation)
+    }
+    const compiled = await queryRelease(
+      {
+        metricId: "BOUNDARY_INTRUSION_SHARE",
+        metricVersion: 1,
+        cohortRef: "org:hazard-baseline-recompiled",
+        periodStart: "2026-01-01T00:00:00.000Z",
+        periodEnd: "2026-02-05T00:00:00.000Z",
+        releaseClass: "CLASS_B"
+      },
+      Array.from({ length: 10 }, (_, i) => `emp-hazard-baseline-${i + 1}`),
+      token
+    );
+    if (compiled.status === "RELEASED") {
+      setNewOriginatingReleaseId(compiled.releaseId);
+      return compiled.releaseId;
+    }
+    return candidateId;
+  };
+
   // 1. Create Hazard
   const handleCreateHazard = async (e: React.FormEvent) => {
     e.preventDefault();
@@ -212,17 +243,20 @@ export function HazardControlTab({ currentTenant, token, sectorProfile }: Hazard
     try {
       setLoading(true);
       setFeedback(null);
+      const originatingReleaseId = await ensureValidOriginatingReleaseId(newOriginatingReleaseId);
       const res = await createHazard(
-        { title: newHazardTitle, originatingReleaseId: newOriginatingReleaseId },
+        { title: newHazardTitle, originatingReleaseId },
         token
       );
+      await loadHazards();
+      setSelectedHazardId(res.id);
+      const detail = await fetchHazardDetail(res.id, token);
+      setHazardDetail(detail);
       setFeedback({
         type: "success",
         title: "✔ HAZARD REGISTERED IN AUTHORITATIVE STATE",
-        details: `Hazard ID: ${res.id}. Anchor to originating release ${newOriginatingReleaseId} verified.`
+        details: `Hazard ID: ${res.id}. Anchor to originating release ${originatingReleaseId} verified.`
       });
-      await loadHazards();
-      setSelectedHazardId(res.id);
     } catch (err: any) {
       setFeedback({
         type: "error",

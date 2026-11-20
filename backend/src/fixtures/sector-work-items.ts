@@ -62,6 +62,30 @@ export const SEEDED_WORK_ITEMS: Record<string, SeededWorkItem[]> = {
         activeWindowStart: "2026-03-02T08:00:00Z",
         activeWindowEnd: "2026-03-13T18:00:00Z"
       }
+    },
+    {
+      sectorKey: "ACCOUNTING",
+      item: {
+        externalRef: "ENG-DEMO-001",
+        title: "Synthetic Annual Statutory Audit Filing",
+        unit: "STATUTORY_AUDIT",
+        demandWindow: "AUDIT_SEASON",
+        accountableReviewerId: "00000000-0000-4000-a000-000000000001",
+        activeWindowStart: "2026-01-15T08:00:00Z",
+        activeWindowEnd: "2026-03-31T20:00:00Z"
+      }
+    },
+    {
+      sectorKey: "FINANCE",
+      item: {
+        externalRef: "DESK-DEMO-001",
+        title: "Synthetic Global Macro & FX Trading Desk",
+        unit: "GLOBAL_MACRO",
+        demandWindow: "MARKET_VOLATILITY",
+        accountableReviewerId: "00000000-0000-4000-a000-000000000001",
+        activeWindowStart: "2026-02-01T07:00:00Z",
+        activeWindowEnd: "2026-03-31T21:00:00Z"
+      }
     }
   ],
   [GOLDEN_01.tenantB.id]: [

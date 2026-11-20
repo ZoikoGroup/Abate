@@ -42,7 +42,7 @@ const STEPS: StepConfig[] = [
     badge: "POST /api/v2/auth/token",
     whatShowing: "Identity cryptographically dictates tenant context, not user-modifiable request parameters.",
     whatYouSay: "“The tenant comes from the token.”",
-    whyUsed: "Tenants are isolated legal firms (Apex Legal Partners vs. Beacon Chambers). Binding tenant_id inside verified token claims stops callers from spoofing another firm's ID in URLs or JSON payloads.",
+    whyUsed: "Tenants are isolated organizations (for example Apex Legal Partners vs. Beacon Chambers). Binding tenant_id inside verified token claims stops callers from spoofing another organization's ID in URLs or JSON payloads.",
     buttonLabel: "Sign in as Tenant A"
   },
   {

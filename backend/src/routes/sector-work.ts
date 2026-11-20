@@ -37,7 +37,12 @@ const IntervalsSchema = z.array(
 
 const GenericFatigueBody = z.object({
   workItemId: z.string().min(1).max(128),
-  intervals: IntervalsSchema
+  intervals: IntervalsSchema,
+  jurisdictionCode: z.string().regex(/^[A-Z][A-Z0-9_-]{1,31}$/).optional(),
+  simulatedItem: z.object({
+    unit: z.string().min(1).max(128).optional(),
+    demandWindow: z.string().min(1).max(128).optional()
+  }).optional()
 }).strict();
 
 const LegalFatigueBody = z.object({
@@ -111,13 +116,44 @@ export function registerSectorWorkRoutes(app: Express, deps: SectorWorkRouteDeps
       const who = await authenticate(getHeader(req, "authorization"));
       await resolveActor(who.tenantId, who.subject, new Date(), who.role);
       const { profile, mapping } = await requireActiveSector(who);
-      const { workItemId, intervals } = GenericFatigueBody.parse(req.body ?? {});
-      const item = listSeededWorkItems(who.tenantId, profile.sectorKey).find(i => i.externalRef === workItemId);
+      const { workItemId, intervals, jurisdictionCode, simulatedItem } = GenericFatigueBody.parse(req.body ?? {});
+      let item = listSeededWorkItems(who.tenantId, profile.sectorKey).find(i => i.externalRef === workItemId);
+      if (!item && (simulatedItem || workItemId.startsWith("SIM-"))) {
+        item = {
+          externalRef: workItemId,
+          title: `Simulated ${profile.vocabulary.workItem}`,
+          unit: simulatedItem?.unit || profile.workItemUnits?.[0] || "DEFAULT_UNIT",
+          demandWindow: simulatedItem?.demandWindow || profile.highDemandWindows?.[0] || profile.demandWindows?.[0] || "SURGE_CAPACITY",
+          accountableReviewerId: "00000000-0000-4000-a000-000000000001",
+          activeWindowStart: new Date(Date.now() - 14 * 86400000).toISOString(),
+          activeWindowEnd: new Date().toISOString()
+        };
+      }
       if (!item) {
         throw new AppError("NOT_FOUND", "Work item not found for this tenant.");
       }
       const used = Array.isArray(intervals) && intervals.length > 0 ? intervals : DEFAULT_SURGE_INTERVALS;
-      res.status(200).json(evaluateSectorFatigue(mapping, item, used));
+      res.status(200).json(evaluateSectorFatigue(mapping, item, used, { jurisdictionCode }));
+    } catch (err) {
+      toErrorResponse(err, res);
+    }
+  });
+
+  app.get("/api/v2/sector/rules", async (req: Request, res: Response) => {
+    try {
+      const who = await authenticate(getHeader(req, "authorization"));
+      await resolveActor(who.tenantId, who.subject, new Date(), who.role);
+      const { profile, mapping } = await requireActiveSector(who);
+      res.status(200).json({
+        sectorKey: profile.sectorKey,
+        packKey: mapping.packKey,
+        packStatus: mapping.status,
+        claimScope: mapping.claimScope,
+        rules: mapping.rules,
+        jurisdictionOverlays: mapping.jurisdictionOverlays,
+        forbiddenFields: mapping.forbidden,
+        cannotOverride: mapping.cannotOverride
+      });
     } catch (err) {
       toErrorResponse(err, res);
     }

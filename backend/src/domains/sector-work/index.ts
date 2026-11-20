@@ -5,6 +5,16 @@ import { z } from "zod";
 import { AppError } from "../../platform/errors";
 import { evaluateNeutralFatigueSurge } from "../lifecycle/sector";
 import type { SectorMapping } from "../lifecycle/sector-pack";
+import {
+  evaluateSectorRules,
+  resolveJurisdictionOverlay,
+  type ResolvedJurisdictionOverlay,
+  type SectorRuleEvaluationReport,
+  type SectorRuleFinding
+} from "./rule-engine";
+
+export { evaluateSectorRules, resolveJurisdictionOverlay };
+export type { ResolvedJurisdictionOverlay, SectorRuleEvaluationReport, SectorRuleFinding };
 
 /** Fields rejected for every sector, on top of the pack's own forbidden list. */
 export const UNIVERSAL_FORBIDDEN_FIELDS = ["individualScore", "keystrokeLogs", "substantiveWorkProduct"] as const;
@@ -39,6 +49,10 @@ export interface SectorFatigueAssessment {
   statutoryReference: string;
   applicableGate: string;
   regulatoryNotice: string;
+  /** Structured per-rule evaluation findings from the multi-rule sector engine. */
+  ruleFindings: SectorRuleFinding[];
+  /** Effective jurisdiction overlay status (fails closed if expired or preview). */
+  jurisdictionOverlay: ResolvedJurisdictionOverlay;
 }
 
 /**
@@ -101,19 +115,26 @@ export function mapToNeutralWorkItem(item: SectorWorkItem): NeutralWorkItem {
   };
 }
 
-/** Evaluates late-evening fatigue for a work item using the pack's rule and pack-authored wording. */
+/** Evaluates late-evening fatigue and all pack-declared deep rules using pack-authored wording. */
 export function evaluateSectorFatigue(
   mapping: SectorMapping,
   item: Pick<SectorWorkItem, "externalRef" | "unit" | "demandWindow">,
-  intervals: Array<{ startUtc: string; endUtc: string }>
+  intervals: Array<{ startUtc: string; endUtc: string }>,
+  opts?: { jurisdictionCode?: string; at?: Date }
 ): SectorFatigueAssessment {
   const neutral = evaluateNeutralFatigueSurge(
     { workItemId: item.externalRef, unit: item.unit, demandWindow: item.demandWindow },
     intervals,
     mapping.fatigueRule
   );
+  const report = evaluateSectorRules(
+    mapping,
+    { workItemId: item.externalRef, unit: item.unit, demandWindow: item.demandWindow },
+    intervals,
+    opts
+  );
   const n = mapping.fatigueNotice;
-  const surge = neutral.hasFatigueSurge;
+  const surge = neutral.hasFatigueSurge || report.anyTriggered;
   return {
     sectorKey: mapping.sector,
     workItemId: item.externalRef,
@@ -124,6 +145,8 @@ export function evaluateSectorFatigue(
     thresholdUsed: neutral.thresholdUsed,
     statutoryReference: surge ? n.surgeReference : n.baselineReference,
     applicableGate: surge ? n.surgeGateLabel : n.standardGateLabel,
-    regulatoryNotice: surge ? n.surgeNotice : n.baselineNotice
+    regulatoryNotice: surge ? n.surgeNotice : n.baselineNotice,
+    ruleFindings: report.rules,
+    jurisdictionOverlay: report.jurisdictionOverlay
   };
 }
