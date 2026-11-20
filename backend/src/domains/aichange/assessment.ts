@@ -192,10 +192,10 @@ export async function createAssessment(
       input.profileId,
       input.profileVersion,
       stage,
-      [],
-      [],
-      [],
-      [],
+      JSON.stringify([]),
+      JSON.stringify([]),
+      JSON.stringify([]),
+      JSON.stringify([]),
       version
     ]
   );
@@ -242,7 +242,8 @@ export async function advanceAssessment(
   await assertStageGuards(tx, actor.tenantId, current, to, payload);
 
   // Merge updated lists
-  const parseJsonArray = (val: any) => (Array.isArray(val) ? val : JSON.parse(val || "[]"));
+  const parseJsonArray = (val: any): string[] =>
+    Array.isArray(val) ? val : (typeof val === "string" ? JSON.parse(val || "[]") : []);
   const newHazards = Array.from(new Set([...parseJsonArray(current.hazard_ids), ...(payload?.hazardIds || [])]));
   const newControls = Array.from(new Set([...parseJsonArray(current.control_ids), ...(payload?.controlIds || [])]));
   const newBaselines = Array.from(new Set([...parseJsonArray(current.baseline_release_ids), ...(payload?.baselineReleaseIds || [])]));
@@ -256,10 +257,10 @@ export async function advanceAssessment(
      WHERE id = $7 AND tenant_id = $8`,
     [
       to,
-      newHazards,
-      newControls,
-      newBaselines,
-      newVerifications,
+      JSON.stringify(newHazards),
+      JSON.stringify(newControls),
+      JSON.stringify(newBaselines),
+      JSON.stringify(newVerifications),
       nextVersion,
       id,
       actor.tenantId
@@ -286,7 +287,8 @@ export async function getAssessment(
   }
 
   const r = res.rows[0];
-  const parseJsonArray = (val: any) => (Array.isArray(val) ? val : JSON.parse(val || "[]"));
+  const parseJsonArray = (val: any): string[] =>
+    Array.isArray(val) ? val : (typeof val === "string" ? JSON.parse(val || "[]") : []);
   const hazardIds = parseJsonArray(r.hazard_ids);
   const controlIds = parseJsonArray(r.control_ids);
   const baselineReleaseIds = parseJsonArray(r.baseline_release_ids);

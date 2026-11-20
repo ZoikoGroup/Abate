@@ -56,9 +56,25 @@ CREATE POLICY hazard_performance_read ON hazard
   FOR SELECT TO abate_performance
   USING (tenant_id = NULLIF(current_setting('app.tenant_id', true), '')::uuid);
 
+GRANT SELECT ON cause, evaluation TO abate_performance;
+
+DROP POLICY IF EXISTS cause_performance_read ON cause;
+CREATE POLICY cause_performance_read ON cause
+  FOR SELECT TO abate_performance
+  USING (tenant_id = NULLIF(current_setting('app.tenant_id', true), '')::uuid);
+
+DROP POLICY IF EXISTS evaluation_performance_read ON evaluation;
+CREATE POLICY evaluation_performance_read ON evaluation
+  FOR SELECT TO abate_performance
+  USING (tenant_id = NULLIF(current_setting('app.tenant_id', true), '')::uuid);
+
 -- 3. Narrow content-free operational view for multi-tenant worker & ops discovery (zero workforce/business data)
 CREATE OR REPLACE VIEW ops_active_tenants AS
   SELECT id, region, 'ACTIVE'::text AS state
   FROM tenant;
 
 GRANT SELECT ON ops_active_tenants TO abate_ops, abate_worker;
+
+-- 4. Track stale derived metric snapshots invalidated by revision corrections or retention purges (G-21)
+ALTER TABLE metric_snapshot
+  ADD COLUMN IF NOT EXISTS is_stale boolean NOT NULL DEFAULT false;
