@@ -210,8 +210,8 @@ function main() {
       g.status === "PASS"
         ? "\x1b[32m✔ PASS\x1b[0m"
         : g.status === "FAIL"
-        ? "\x1b[31m✖ FAIL\x1b[0m"
-        : `\x1b[33m⏳ ${g.status}\x1b[0m`;
+          ? "\x1b[31m✖ FAIL\x1b[0m"
+          : `\x1b[33m⏳ ${g.status}\x1b[0m`;
     console.log(`  [${g.gate}] ${g.name.padEnd(24)} ${icon}`);
     console.log(`       Owner: ${g.owner} | ${g.detail}`);
     if (g.status === "FAIL") failed++;

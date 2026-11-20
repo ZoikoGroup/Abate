@@ -12,7 +12,7 @@ import { PassThrough, Writable } from "node:stream";
 import { app } from "../src/index";
 import { seedTwoTenants } from "../src/fixtures/seed";
 import { GOLDEN_01 } from "../src/fixtures/golden01";
-import { memDb } from "../src/platform/db/with-tenant";
+import { memDb, isPostgresRequired } from "../src/platform/db/with-tenant";
 
 interface StepResult {
   dayRange: string;
@@ -177,7 +177,7 @@ export async function run30DayHttpSimulation(
     if (!opts.quiet) console.log(msg);
   };
 
-  await seedTwoTenants();
+  await seedTwoTenants({ persistToPostgres: isPostgresRequired() });
 
   const useTcp = opts.tcp ?? (process.argv.includes("--tcp") || process.env.SIM_TCP === "1");
   const baseUrlArg = process.argv.find((a) => a.startsWith("--base-url="))?.split("=")[1];
