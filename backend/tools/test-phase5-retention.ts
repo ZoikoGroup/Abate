@@ -18,7 +18,7 @@ import crypto from "node:crypto";
 import { GOLDEN_01 } from "../src/fixtures/golden01";
 import { seedTwoTenants } from "../src/fixtures/seed";
 import { createDevToken, authenticate, resolveActor } from "../src/domains/tenant/auth";
-import { checkPgHealth, withTenant } from "../src/platform/db/with-tenant";
+import { checkPgHealth, withMigrator, withTenant } from "../src/platform/db/with-tenant";
 import { publishPackVersion } from "../src/domains/lifecycle/jurisdiction";
 import { resolveEffectivePack } from "../src/domains/lifecycle/policy";
 import {
@@ -128,7 +128,7 @@ async function main() {
 
   // Test 1: Effective-dated jurisdiction pack resolution
   await runTest("Test 1: Effective-dated jurisdiction pack resolution fails closed outside coverage", async () => {
-    await withTenant(tenantAId, async (tx) => {
+    await withMigrator(async (tx) => {
       await publishPackVersion(tx, {
         ...packMeta,
         packKey: datingPackKey,
@@ -143,7 +143,9 @@ async function main() {
         effectiveFrom: "2026-06-01T00:00:00.000Z",
         content: packContent(120)
       });
+    });
 
+    await withTenant(tenantAId, async (tx) => {
       const rows = (await tx.q("SELECT * FROM policy_pack WHERE pack_key = $1", [datingPackKey])).rows;
       const v1EffectiveTo = rows.find((r: any) => r.version === 1)?.effective_to;
       assert.strictEqual(new Date(v1EffectiveTo).toISOString(), "2026-06-01T00:00:00.000Z", "v1 must be closed where v2 starts");
@@ -155,22 +157,33 @@ async function main() {
 
   // Test 2: Published pack versions are strictly immutable and sequential
   await runTest("Test 2: Published pack versions are strictly immutable and sequential", async () => {
-    await withTenant(tenantAId, async (tx) => {
-      const v1Before = (await tx.q("SELECT * FROM policy_pack WHERE pack_key = $1", [datingPackKey])).rows
-        .find((r: any) => r.version === 1)?.content_hash;
-      const base = { ...packMeta, packKey: datingPackKey, content: packContent(1) };
+    const v1Before = await withTenant(tenantAId, async (tx) =>
+      (await tx.q("SELECT * FROM policy_pack WHERE pack_key = $1", [datingPackKey])).rows
+        .find((r: any) => r.version === 1)?.content_hash
+    );
+    const base = { ...packMeta, packKey: datingPackKey, content: packContent(1) };
 
-      // Duplicate version 2
-      await assert.rejects(() => publishPackVersion(tx, { ...base, version: 2, effectiveFrom: "2026-09-01T00:00:00.000Z" }), isCode("CONFLICT"));
-      // Out of order version 5 (must be strictly sequential)
-      await assert.rejects(() => publishPackVersion(tx, { ...base, version: 5, effectiveFrom: "2026-09-01T00:00:00.000Z" }), isCode("CONFLICT"));
-      // Overlapping earlier timestamp
-      await assert.rejects(() => publishPackVersion(tx, { ...base, version: 3, effectiveFrom: "2026-05-01T00:00:00.000Z" }), isCode("CONFLICT"));
+    // Duplicate version 2
+    await assert.rejects(
+      () => withMigrator((tx) => publishPackVersion(tx, { ...base, version: 2, effectiveFrom: "2026-09-01T00:00:00.000Z" })),
+      isCode("CONFLICT")
+    );
+    // Out of order version 5 (must be strictly sequential)
+    await assert.rejects(
+      () => withMigrator((tx) => publishPackVersion(tx, { ...base, version: 5, effectiveFrom: "2026-09-01T00:00:00.000Z" })),
+      isCode("CONFLICT")
+    );
+    // Overlapping earlier timestamp
+    await assert.rejects(
+      () => withMigrator((tx) => publishPackVersion(tx, { ...base, version: 3, effectiveFrom: "2026-05-01T00:00:00.000Z" })),
+      isCode("CONFLICT")
+    );
 
-      const v1After = (await tx.q("SELECT * FROM policy_pack WHERE pack_key = $1", [datingPackKey])).rows
-        .find((r: any) => r.version === 1)?.content_hash;
-      assert.strictEqual(v1After, v1Before, "Approved content hash must be strictly immutable");
-    });
+    const v1After = await withTenant(tenantAId, async (tx) =>
+      (await tx.q("SELECT * FROM policy_pack WHERE pack_key = $1", [datingPackKey])).rows
+        .find((r: any) => r.version === 1)?.content_hash
+    );
+    assert.strictEqual(v1After, v1Before, "Approved content hash must be strictly immutable");
   });
 
   // Ingest baseline facts for retention testing

@@ -10,6 +10,7 @@ import {
   withTenant,
   withWorker,
   withOps,
+  withMigrator,
   withProtectedCompute,
   withReleaseCompiler
 } from "../src/platform/db/with-tenant";
@@ -785,7 +786,7 @@ async function run() {
 
   // 22. Effective-dated jurisdiction pack resolution
   await test("Phase 5 Jurisdiction: Pack resolution is effective-dated and fails closed outside coverage", async () => {
-    await withTenant(tenantAId, async (tx) => {
+    await withMigrator(async (tx) => {
       await publishPackVersion(tx, {
         ...packMeta, packKey: datingPackKey, version: 1,
         effectiveFrom: "2026-01-01T00:00:00.000Z", content: packContent(90)
@@ -794,7 +795,9 @@ async function run() {
         ...packMeta, packKey: datingPackKey, version: 2,
         effectiveFrom: "2026-06-01T00:00:00.000Z", content: packContent(120)
       });
+    });
 
+    await withTenant(tenantAId, async (tx) => {
       const rows = (await tx.q("SELECT * FROM policy_pack WHERE pack_key = $1", [datingPackKey])).rows;
       assert.strictEqual(new Date(rows.find(r => r.version === 1)?.effective_to).toISOString(), "2026-06-01T00:00:00.000Z", "v1 must be closed where v2 starts");
       assert.strictEqual(resolveEffectivePack(rows, new Date("2026-03-01T00:00:00Z"))?.version, 1);
@@ -805,19 +808,21 @@ async function run() {
 
   // 23. Published pack versions are immutable and sequential
   await test("Phase 5 Jurisdiction: Published versions are immutable; out-of-sequence or overlapping versions are refused", async () => {
-    await withTenant(tenantAId, async (tx) => {
-      const v1Before = (await tx.q("SELECT * FROM policy_pack WHERE pack_key = $1", [datingPackKey])).rows
-        .find(r => r.version === 1)?.content_hash;
-      const base = { ...packMeta, packKey: datingPackKey, content: packContent(1) };
+    const v1Before = await withTenant(tenantAId, async (tx) =>
+      (await tx.q("SELECT * FROM policy_pack WHERE pack_key = $1", [datingPackKey])).rows
+        .find(r => r.version === 1)?.content_hash
+    );
+    const base = { ...packMeta, packKey: datingPackKey, content: packContent(1) };
 
-      await assert.rejects(() => publishPackVersion(tx, { ...base, version: 2, effectiveFrom: "2026-09-01T00:00:00.000Z" }), isCode("CONFLICT"));
-      await assert.rejects(() => publishPackVersion(tx, { ...base, version: 5, effectiveFrom: "2026-09-01T00:00:00.000Z" }), isCode("CONFLICT"));
-      await assert.rejects(() => publishPackVersion(tx, { ...base, version: 3, effectiveFrom: "2026-05-01T00:00:00.000Z" }), isCode("CONFLICT"));
+    await assert.rejects(() => withMigrator(tx => publishPackVersion(tx, { ...base, version: 2, effectiveFrom: "2026-09-01T00:00:00.000Z" })), isCode("CONFLICT"));
+    await assert.rejects(() => withMigrator(tx => publishPackVersion(tx, { ...base, version: 5, effectiveFrom: "2026-09-01T00:00:00.000Z" })), isCode("CONFLICT"));
+    await assert.rejects(() => withMigrator(tx => publishPackVersion(tx, { ...base, version: 3, effectiveFrom: "2026-05-01T00:00:00.000Z" })), isCode("CONFLICT"));
 
-      const v1After = (await tx.q("SELECT * FROM policy_pack WHERE pack_key = $1", [datingPackKey])).rows
-        .find(r => r.version === 1)?.content_hash;
-      assert.strictEqual(v1After, v1Before, "Approved content must never change");
-    });
+    const v1After = await withTenant(tenantAId, async (tx) =>
+      (await tx.q("SELECT * FROM policy_pack WHERE pack_key = $1", [datingPackKey])).rows
+        .find(r => r.version === 1)?.content_hash
+    );
+    assert.strictEqual(v1After, v1Before, "Approved content must never change");
   });
 
   // Facts used by the retention tests: two expired (one per connection) and one recent
@@ -996,7 +1001,7 @@ async function run() {
 
   // 32. A newer pack invalidating the configured duration blocks deletion
   await test("Phase 5 Fail Closed: A class outside a newer pack version's floor blocks the run instead of deleting", async () => {
-    await withTenant(tenantAId, async (tx) => {
+    await withMigrator(async (tx) => {
       await publishPackVersion(tx, {
         ...packMeta, packKey: "legal-uk-sra", version: 2,
         effectiveFrom: daysAgo(1, 0), content: packContent(400)
@@ -1371,9 +1376,11 @@ async function run() {
     const before = await withTenant(tenantAId, tx => resolveTenantCoverage(tx, new Date("2024-01-01T00:00:00Z")));
     assert.strictEqual(before.coverage.status, "NOT_COVERED", "No binding in effect yet: not covered");
 
-    await withTenant(tenantBId, async (tx) => {
-      const secondPackKey = `test-second-jurisdiction-${crypto.randomUUID().slice(0, 8)}`;
+    const secondPackKey = `test-second-jurisdiction-${crypto.randomUUID().slice(0, 8)}`;
+    await withMigrator(async (tx) => {
       await publishPackVersion(tx, { ...packMeta, packKey: secondPackKey, version: 1, effectiveFrom: "2025-01-01T00:00:00.000Z", content: packContent(90) });
+    });
+    await withTenant(tenantBId, async (tx) => {
       await tx.q(
         "INSERT INTO tenant_policy_binding (tenant_id, pack_key, pack_version, applies_to, bound_from, bound_to) VALUES ($1, $2, $3, $4, $5, $6)",
         [tenantBId, secondPackKey, 1, JSON.stringify({}), "2025-01-01T00:00:00.000Z", null]

@@ -200,6 +200,31 @@ export async function withOps<T>(fn: (tx: Tx) => Promise<T>): Promise<T> {
 }
 
 /**
+ * withMigrator: Platform-side catalog publication helper (abate_migrator role).
+ * Used only by platform publication workflows and test harnesses (e.g. policy_pack),
+ * never exposed to tenant HTTP routes (abate_app holds SELECT only on policy_pack).
+ */
+export async function withMigrator<T>(fn: (tx: Tx) => Promise<T>): Promise<T> {
+  const usePg = await checkPgHealth();
+  if (usePg && migratorPool) {
+    const client: PoolClient = await migratorPool.connect();
+    try {
+      await client.query("BEGIN");
+      await client.query("SET LOCAL statement_timeout = '15000ms'");
+      const out = await fn({ q: client.query.bind(client) as QueryFn, tenantId: "" });
+      await client.query("COMMIT");
+      return out;
+    } catch (e) {
+      await client.query("ROLLBACK").catch(() => { });
+      throw e;
+    } finally {
+      client.release();
+    }
+  }
+  return withPlatform(fn);
+}
+
+/**
  * withPlatform: Transaction with NO tenant context, for platform-global tables (e.g. ai_kill_switch).
  * Tenant tables stay invisible here (RLS fails closed), so this cannot be used to reach tenant data.
  */
