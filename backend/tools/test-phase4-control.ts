@@ -21,7 +21,7 @@ import { canTransition, computeAllowedActions } from "../src/domains/control/sta
 import { materialHash, InterventionDraft, stableStringify } from "../src/domains/control/material";
 import { evaluateSuggestion } from "../src/domains/control/verify";
 import { exportEvidencePackage } from "../src/domains/control/evidence";
-import { withTenant } from "../src/platform/db/with-tenant";
+import { checkPgHealth, withTenant } from "../src/platform/db/with-tenant";
 import { AppError } from "../src/platform/errors";
 
 console.log("\x1b[36m=== Abate Task Runner: test-phase4-control (BE-007 Hazard & Control Governance) ===\x1b[0m\n");
@@ -45,7 +45,8 @@ async function runTest(name: string, fn: () => void | Promise<void>) {
 async function main() {
   // Step 1: Seed base multi-tenant fixture
   await runTest("Setup: Seed isolated two-tenant environment", async () => {
-    await seedTwoTenants();
+    const pgLive = await checkPgHealth();
+    await seedTwoTenants({ persistToPostgres: pgLive });
   });
 
   const tenantAId = GOLDEN_01.tenantA.id;
@@ -159,7 +160,7 @@ async function main() {
       await withTenant(tenantAId, async (tx) => {
         await tx.q(
           "INSERT INTO hazard (id, tenant_id, title, owner_principal_id, originating_release_id, disposition, version) VALUES ($1, $2, $3, $4, $5, 'OPEN', 1)",
-          [hazardId, tenantAId, "Chronic Late-Night Boundary Intrusion", actorA.principalId, "rel-baseline-1"]
+          [hazardId, tenantAId, "Chronic Late-Night Boundary Intrusion", actorA.principalId, "00000000-0000-4000-a003-000000000001"]
         );
 
         await tx.q(
@@ -300,7 +301,7 @@ async function main() {
         // Create complete hazard vertical slice
         await tx.q(
           "INSERT INTO hazard (id, tenant_id, title, owner_principal_id, originating_release_id, disposition, version) VALUES ($1, $2, $3, $4, $5, 'CONTROLLED', 1)",
-          [hazardId, tenantAId, "Audited Hazard for Evidence Sealing", actorA.principalId, "rel-baseline-1"]
+          [hazardId, tenantAId, "Audited Hazard for Evidence Sealing", actorA.principalId, "00000000-0000-4000-a003-000000000001"]
         );
 
         const causeId = crypto.randomUUID();
@@ -359,7 +360,7 @@ async function main() {
       await withTenant(tenantAId, async (tx) => {
         await tx.q(
           "INSERT INTO hazard (id, tenant_id, title, owner_principal_id, originating_release_id, disposition, version) VALUES ($1, $2, $3, $4, $5, 'OPEN', 1)",
-          [hazardId, tenantAId, "Plane A Safety Obligation", actorA.principalId, "rel-baseline-1"]
+          [hazardId, tenantAId, "Plane A Safety Obligation", actorA.principalId, "00000000-0000-4000-a003-000000000001"]
         );
       });
 

@@ -1106,6 +1106,8 @@ export interface KillSwitchRecord {
   active: boolean;
   changed_by: string | null;
   changed_at: string;
+  reason?: string | null;
+  canToggle?: boolean;
 }
 
 export interface ActionAttemptView {
@@ -1203,13 +1205,30 @@ export async function fetchKillSwitchesOps(supportToken: string): Promise<KillSw
 export async function setKillSwitch(
   scope: string,
   active: boolean,
-  supportToken: string
+  supportToken: string,
+  reason?: string
 ): Promise<KillSwitchRecord> {
+  const payload: { scope: string; active: boolean; reason?: string } = { scope, active };
+  if (reason && reason.trim().length >= 5) {
+    payload.reason = reason.trim();
+  }
   return api<KillSwitchRecord>("/api/v2/ops/kill-switches", {
     method: "POST",
-    body: JSON.stringify({ scope, active }),
+    body: JSON.stringify(payload),
     token: supportToken
   });
+}
+
+export async function fetchReleaseDossier(): Promise<any | null> {
+  try {
+    return await apiV2<any, "/release/dossier">("/release/dossier");
+  } catch {
+    try {
+      return await api<any>("/release-dossier.json");
+    } catch {
+      return null;
+    }
+  }
 }
 
 export async function proposeAction(

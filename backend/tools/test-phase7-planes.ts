@@ -14,7 +14,12 @@ import crypto from "node:crypto";
 import { GOLDEN_01 } from "../src/fixtures/golden01";
 import { seedTwoTenants } from "../src/fixtures/seed";
 import { createDevToken, authenticate, resolveActor } from "../src/domains/tenant/auth";
-import { withTenant } from "../src/platform/db/with-tenant";
+import {
+  checkPgHealth,
+  withTenant,
+  withProtectedCompute,
+  withReleaseCompiler
+} from "../src/platform/db/with-tenant";
 import { setFeatureFlag, evaluateOutcome } from "../src/domains/performance";
 import { getRelease } from "../src/domains/privacy";
 import {
@@ -47,7 +52,8 @@ const isCode = (code: string) => (err: any) => err?.code === code || (err instan
 async function main() {
   // Step 0: Seed base multi-tenant environment
   await runTest("Setup: Seed isolated two-tenant environment", async () => {
-    await seedTwoTenants();
+    const pgLive = await checkPgHealth();
+    await seedTwoTenants({ persistToPostgres: pgLive });
   });
 
   const tenantAId = GOLDEN_01.tenantA.id;
@@ -60,20 +66,66 @@ async function main() {
   const whoA = await authenticate(`Bearer ${tokenA}`);
   const actorA = await resolveActor(whoA.tenantId, whoA.subject);
 
+  const seedTestRelease = async (args: {
+    releaseId: string;
+    metricId: string;
+    value: number;
+    unit: string;
+    interpretation: string;
+    artifactHash: string;
+    plane: "A" | "B";
+  }) => {
+    const snapId = crypto.randomUUID();
+    const decId = crypto.randomUUID();
+    const periodEnd = new Date().toISOString();
+    const periodStart = new Date(Date.now() - 28 * 24 * 3600 * 1000).toISOString();
+    await withProtectedCompute(tenantAId, async (tx) => {
+      await tx.q(
+        `INSERT INTO metric_snapshot (
+           id, tenant_id, metric_id, metric_version, cohort_ref, period_start, period_end,
+           source_cutoff, code_digest, membership_version, value, quality, contributor_count, lineage
+         ) VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12, $13, $14)`,
+        [
+          snapId, tenantAId, args.metricId, 1, "cohort:phase7", periodStart, periodEnd,
+          periodEnd, "sha256-phase7", "1", args.value, "VALID", 16, JSON.stringify({})
+        ]
+      );
+    });
+    await withReleaseCompiler(tenantAId, async (tx) => {
+      await tx.q(
+        `INSERT INTO privacy_decision (id, tenant_id, semantic_query_hash, outcome, reason_code, policy_version)
+         VALUES ($1, $2, $3, $4, $5, $6)`,
+        [decId, tenantAId, `phase7-${args.releaseId}`, "RELEASED", "APPROVED", "v1.0"]
+      );
+      await tx.q(
+        `INSERT INTO privacy_release (id, tenant_id, decision_id, snapshot_id, metric_id, metric_version, release_class, status, plane)
+         VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9)`,
+        [args.releaseId, tenantAId, decId, snapId, args.metricId, 1, "CLASS_B", "RELEASED", args.plane]
+      );
+      await tx.q(
+        `INSERT INTO released_artifact (
+           release_id, tenant_id, metric_id, metric_version, value, unit,
+           period_start, period_end, quality, interpretation, status, artifact_hash, plane
+         ) VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12, $13)`,
+        [
+          args.releaseId, tenantAId, args.metricId, 1, args.value, args.unit,
+          periodStart, periodEnd, "VALID", args.interpretation, "RELEASED", args.artifactHash, args.plane
+        ]
+      );
+    });
+  };
+
   // Test 1: Performance outcome write cannot close an open hazard (Plane B cannot mutate Plane A)
   await runTest("Test 1: Performance outcome write cannot mutate or close an open hazard", async () => {
     const p7ReleaseId = crypto.randomUUID();
-    await withTenant(tenantAId, async (tx) => {
-      await tx.q(
-        `INSERT INTO privacy_release (id, tenant_id, decision_id, snapshot_id, metric_id, metric_version, release_class, status, plane)
-         VALUES ($1, $2, $3, $4, 'BOUNDARY_INTRUSION_SHARE', 1, 'CLASS_B', 'RELEASED', 'A')`,
-        [p7ReleaseId, tenantAId, crypto.randomUUID(), crypto.randomUUID()]
-      );
-      await tx.q(
-        `INSERT INTO released_artifact (release_id, tenant_id, metric_id, metric_version, value, unit, period_start, period_end, quality, interpretation, status, artifact_hash, plane)
-         VALUES ($1, $2, 'BOUNDARY_INTRUSION_SHARE', 1, 20.0, 'percent', now() - interval '28 days', now(), 'VALID', 'Intervention verification', 'RELEASED', 'hash-p7', 'A')`,
-        [p7ReleaseId, tenantAId]
-      );
+    await seedTestRelease({
+      releaseId: p7ReleaseId,
+      metricId: "BOUNDARY_INTRUSION_SHARE",
+      value: 20.0,
+      unit: "percent",
+      interpretation: "Intervention verification",
+      artifactHash: "hash-p7",
+      plane: "A"
     });
 
     const hazardId = crypto.randomUUID();
@@ -116,17 +168,14 @@ async function main() {
   // Test 2: Prohibited causal claims in outcome evaluation are strictly rejected
   await runTest("Test 2: Prohibited claims in outcome evaluation are rejected (VALIDATION)", async () => {
     const claimRelId = crypto.randomUUID();
-    await withTenant(tenantAId, async (tx) => {
-      await tx.q(
-        `INSERT INTO privacy_release (id, tenant_id, decision_id, snapshot_id, metric_id, metric_version, release_class, status, plane)
-         VALUES ($1, $2, $3, $4, 'WORKLOAD_SUSTAINABILITY', 1, 'CLASS_B', 'RELEASED', 'A')`,
-        [claimRelId, tenantAId, crypto.randomUUID(), crypto.randomUUID()]
-      );
-      await tx.q(
-        `INSERT INTO released_artifact (release_id, tenant_id, metric_id, metric_version, value, unit, period_start, period_end, quality, interpretation, status, artifact_hash, plane)
-         VALUES ($1, $2, 'WORKLOAD_SUSTAINABILITY', 1, 20.0, 'percent', now() - interval '28 days', now(), 'VALID', 'Claims test', 'RELEASED', 'hash-claim', 'A')`,
-        [claimRelId, tenantAId]
-      );
+    await seedTestRelease({
+      releaseId: claimRelId,
+      metricId: "WORKLOAD_SUSTAINABILITY",
+      value: 20.0,
+      unit: "percent",
+      interpretation: "Claims test",
+      artifactHash: "hash-claim",
+      plane: "A"
     });
 
     await withTenant(tenantAId, async (tx) => {
@@ -152,24 +201,21 @@ async function main() {
       await withTenant(tenantAId, async (tx) => {
         await tx.q("UPDATE hazard SET disposition = 'CONTROLLED'");
       }, { writePlane: "B" });
-    }, isCode("FORBIDDEN"));
+    }, (err: any) => isCode("FORBIDDEN")(err) || /assurance state may only be written by plane A commands/i.test(String(err?.message || "")));
   });
 
   // Test 4: Cross-plane release endpoint isolation
   await runTest("Test 4: Cross-plane release endpoint isolation (Plane B hidden from Plane A reader)", async () => {
     const relBId = crypto.randomUUID();
-    await withTenant(tenantAId, async (tx) => {
-      await tx.q(
-        `INSERT INTO privacy_release (id, tenant_id, decision_id, snapshot_id, metric_id, metric_version, release_class, status, plane)
-         VALUES ($1, $2, $3, $4, 'WORKLOAD_SUSTAINABILITY', 1, 'CLASS_B', 'RELEASED', 'B')`,
-        [relBId, tenantAId, crypto.randomUUID(), crypto.randomUUID()]
-      );
-      await tx.q(
-        `INSERT INTO released_artifact (release_id, tenant_id, metric_id, metric_version, value, unit, period_start, period_end, quality, interpretation, status, artifact_hash, plane)
-         VALUES ($1, $2, 'WORKLOAD_SUSTAINABILITY', 1, 88.5, 'score', now() - interval '28 days', now(), 'VALID', 'Workload sustainability score', 'RELEASED', 'hash-rel-b', 'B')`,
-        [relBId, tenantAId]
-      );
-    }, { writePlane: "B" });
+    await seedTestRelease({
+      releaseId: relBId,
+      metricId: "WORKLOAD_SUSTAINABILITY",
+      value: 88.5,
+      unit: "score",
+      interpretation: "Workload sustainability score",
+      artifactHash: "hash-rel-b",
+      plane: "B"
+    });
 
     // Plane A reader rejects Plane B release with NOT_FOUND
     await assert.rejects(async () => {
@@ -185,17 +231,14 @@ async function main() {
   // Test 5: AI Change assessment workflow blocks closure while hazard obligations remain open
   await runTest("Test 5: AI Change assessment blocks closure while hazard obligations remain open (CONFLICT)", async () => {
     const aiBaselineReleaseId = crypto.randomUUID();
-    await withTenant(tenantAId, async (tx) => {
-      await tx.q(
-        `INSERT INTO privacy_release (id, tenant_id, decision_id, snapshot_id, metric_id, metric_version, release_class, status, plane)
-         VALUES ($1, $2, $3, $4, 'BOUNDARY_INTRUSION_SHARE', 1, 'CLASS_B', 'RELEASED', 'A')`,
-        [aiBaselineReleaseId, tenantAId, crypto.randomUUID(), crypto.randomUUID()]
-      );
-      await tx.q(
-        `INSERT INTO released_artifact (release_id, tenant_id, metric_id, metric_version, value, unit, period_start, period_end, quality, interpretation, status, artifact_hash, plane)
-         VALUES ($1, $2, 'BOUNDARY_INTRUSION_SHARE', 1, 18.5, 'percent', now() - interval '28 days', now(), 'VALID', 'Baseline for AI rollout', 'RELEASED', 'hash-ai-base', 'A')`,
-        [aiBaselineReleaseId, tenantAId]
-      );
+    await seedTestRelease({
+      releaseId: aiBaselineReleaseId,
+      metricId: "BOUNDARY_INTRUSION_SHARE",
+      value: 18.5,
+      unit: "percent",
+      interpretation: "Baseline for AI rollout",
+      artifactHash: "hash-ai-base",
+      plane: "A"
     });
 
     // 1. Register AI Change Profile
@@ -270,8 +313,15 @@ async function main() {
     const testInterventionId = crypto.randomUUID();
     await withTenant(tenantAId, async (tx) => {
       await tx.q(
-        "INSERT INTO intervention (id, tenant_id, hazard_id, scope, objective, target_date, state, version) VALUES ($1, $2, $3, 'Scope', 'Objective', '2026-06-01', 'IMPLEMENTED', 1)",
-        [testInterventionId, tenantAId, testHazardId]
+        `INSERT INTO intervention (
+           id, tenant_id, hazard_id, cause_id, state, version, scope, objective,
+           owner_principal_id, due_date, verification_plan, material_hash
+         ) VALUES ($1, $2, $3, $4, 'IMPLEMENTED', 1, $5, $6, $7, $8, $9, $10)`,
+        [
+          testInterventionId, tenantAId, testHazardId, testCauseId,
+          "Scope", "Objective", actorA.principalId, "2026-06-01",
+          JSON.stringify({}), "hash-p7-control"
+        ]
       );
     });
 

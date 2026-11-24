@@ -1,6 +1,5 @@
 // frontend/src/components/Tabs/HazardControlTab.tsx
 import { useState, useEffect } from "react";
-import { AiPanel } from "../AiPanel";
 import {
   ApiError,
   type Hazard,
@@ -32,6 +31,12 @@ import {
 } from "../../api/client";
 import { getSectorUi, getSectorVocabulary, isSectorPackActive, labelFor } from "../../utils/vocabulary";
 import { StateView } from "../StateView";
+import { HazardWorkspaceCard } from "./hazards/HazardWorkspaceCard";
+import { HazardCausesCard } from "./hazards/HazardCausesCard";
+import { HazardControlLifecycleCard } from "./hazards/HazardControlLifecycleCard";
+import { HazardVerificationCard, type VerificationOutcome } from "./hazards/HazardVerificationCard";
+import { HazardEvidenceExportCard } from "./hazards/HazardEvidenceExportCard";
+import { HazardRefusalLabCard } from "./hazards/HazardRefusalLabCard";
 
 function fmtHazardErr(err: unknown): string {
   if (err instanceof ApiError) {
@@ -1456,113 +1461,22 @@ export function HazardControlTab({ currentTenant, token, sectorProfile }: Hazard
             )}
           </div>
 
-          {/* Cryptographic Evidence Package Viewer */}
-          <div className="card">
-            <div className="card-header">
-              <div>
-                <h3>Cryptographic Evidence Package</h3>
-                <p className="card-desc">Verifiable SHA-256 package allowing external audit of the entire risk slice.</p>
-              </div>
-            </div>
-            <div style={{ display: "flex", gap: "0.5rem", marginBottom: "1rem" }}>
-              <button
-                type="button"
-                onClick={handleExportEvidence}
-                disabled={loading || !selectedHazardId}
-                className="btn btn-primary"
-              >
-                📦 Export Evidence Package
-              </button>
-              {evidencePackage && (
-                <button
-                  type="button"
-                  onClick={handleDownloadPackageJson}
-                  className="btn btn-secondary"
-                >
-                  Download JSON
-                </button>
-              )}
-            </div>
-
-            {evidencePackage && (
-              <div style={{ background: "var(--aubergine)", color: "#FFFFFF", padding: "1rem", borderRadius: "8px", fontSize: "0.8rem" }}>
-                <div style={{ marginBottom: "0.5rem", fontWeight: 700, color: "var(--coral)" }}>
-                  MANIFEST SHA-256: {evidencePackage.manifest.manifestHash}
-                </div>
-                <div style={{ marginBottom: "0.5rem", color: "#D1D5DB" }}>
-                  Package ID: {evidencePackage.manifest.packageId} | Items: {evidencePackage.artifacts.length}
-                </div>
-                <div style={{ maxHeight: "150px", overflowY: "auto", borderTop: "1px solid rgba(255,255,255,0.2)", paddingTop: "0.5rem" }}>
-                  {evidencePackage.artifacts.map((a, i) => (
-                    <div key={i} style={{ marginBottom: "0.25rem", display: "flex", justifyContent: "space-between" }}>
-                      <span>[{a.type}] {a.id.slice(0, 8)}...</span>
-                      <span className="monospace" style={{ color: "var(--sage)" }}>{a.sha256.slice(0, 16)}...</span>
-                    </div>
-                  ))}
-                </div>
-              </div>
-            )}
-          </div>
+          <HazardEvidenceExportCard
+            loading={loading}
+            selectedHazardId={selectedHazardId}
+            evidencePackage={evidencePackage}
+            onExportEvidence={handleExportEvidence}
+            onDownloadPackageJson={handleDownloadPackageJson}
+          />
 
         </div>
       </div>
 
-      {/* Phase 4 Refusal Lab (Adversarial Suite) */}
-      <div className="card" style={{ background: "var(--aubergine)", color: "#FFFFFF" }}>
-        <div className="card-header" style={{ borderBottom: "1px solid rgba(255,255,255,0.15)" }}>
-          <div>
-            <div style={{ display: "flex", alignItems: "center", gap: "0.5rem", marginBottom: "0.25rem" }}>
-              <span className="pulse-indicator"></span>
-              <h3 style={{ color: "#FFFFFF" }}>Phase 4 Governance &amp; Refusal Lab (Adversarial Gates)</h3>
-            </div>
-            <p className="card-desc" style={{ color: "#D1D5DB" }}>
-              Playbook B4 §8 verification: State machine transitions, version-bound approval invalidation, and transfer-of-risk detection.
-            </p>
-          </div>
-          <span className="badge badge-coral">ZAB-ENG-001 §8</span>
-        </div>
-
-        <div style={{ display: "grid", gridTemplateColumns: "repeat(3, 1fr)", gap: "1rem", marginTop: "1rem" }}>
-          <button
-            type="button"
-            onClick={handleTestStateRejection}
-            className="lab-card-btn border-rose"
-          >
-            <div className="lab-btn-title" style={{ color: "#FCA5A5" }}>
-              1. Skip Approval Attack
-            </div>
-            <div className="lab-btn-desc">
-              Attempts PROPOSED &rarr; IMPLEMENTING jump directly. State machine enforces strict approval gate.
-            </div>
-          </button>
-
-          <button
-            type="button"
-            onClick={handleTestVersionBoundRejection}
-            className="lab-card-btn border-amber"
-          >
-            <div className="lab-btn-title" style={{ color: "#FCD34D" }}>
-              2. &ldquo;v4 Cannot Approve v5&rdquo;
-            </div>
-            <div className="lab-btn-desc">
-              Sends If-Match with stale target version. Rejects with 409 CONFLICT on version mismatch.
-            </div>
-          </button>
-
-          <button
-            type="button"
-            onClick={handleTestTransferOfRisk}
-            className="lab-card-btn border-cyan"
-          >
-            <div className="lab-btn-title" style={{ color: "#7DD3FC" }}>
-              3. Transfer of Risk Flag (Simulation)
-            </div>
-            <div className="lab-btn-desc">
-              Simulation preview: illustrates adjacent cohort degradation &gt; tolerance blocking clean EFFECTIVE conclusion.
-            </div>
-          </button>
-        </div>
-      </div>
+      <HazardRefusalLabCard
+        onTestStateRejection={handleTestStateRejection}
+        onTestVersionBoundRejection={handleTestVersionBoundRejection}
+        onTestTransferOfRisk={handleTestTransferOfRisk}
+      />
     </div>
   );
 }

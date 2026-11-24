@@ -87,7 +87,8 @@ export type DraftControlInput = z.infer<typeof DraftControlInput>;
 
 export const KillSwitchInput = z.object({
   scope: z.string().min(1),
-  active: z.boolean()
+  active: z.boolean(),
+  reason: z.string().min(5).max(500).optional()
 }).strict();
 export type KillSwitchInput = z.infer<typeof KillSwitchInput>;
 

@@ -18,7 +18,7 @@ import crypto from "node:crypto";
 import { GOLDEN_01 } from "../src/fixtures/golden01";
 import { seedTwoTenants } from "../src/fixtures/seed";
 import { createDevToken, authenticate, resolveActor } from "../src/domains/tenant/auth";
-import { withTenant, memDb } from "../src/platform/db/with-tenant";
+import { checkPgHealth, withTenant } from "../src/platform/db/with-tenant";
 import { publishPackVersion } from "../src/domains/lifecycle/jurisdiction";
 import { resolveEffectivePack } from "../src/domains/lifecycle/policy";
 import {
@@ -54,7 +54,8 @@ const isCode = (code: string) => (err: any) => err?.code === code || (err instan
 async function main() {
   // Step 0: Seed base multi-tenant environment
   await runTest("Setup: Seed isolated two-tenant environment", async () => {
-    await seedTwoTenants();
+    const pgLive = await checkPgHealth();
+    await seedTwoTenants({ persistToPostgres: pgLive });
   });
 
   const tenantAId = GOLDEN_01.tenantA.id;
@@ -80,14 +81,13 @@ async function main() {
 
   const connAId = "00000000-0000-4000-a004-000000000001";
   const connA2Id = "00000000-0000-4000-a004-000000000002";
-  memDb.connections.set(connA2Id, {
-    id: connA2Id,
-    tenant_id: tenantAId,
-    source: "ZoikoTime",
-    contract_id: "00000000-0000-4000-a005-000000000001",
-    state: "ACTIVE",
-    last_success_at: new Date().toISOString(),
-    expected_cadence_seconds: 3600
+  await withTenant(tenantAId, async (tx) => {
+    await tx.q(
+      `INSERT INTO connection (id, tenant_id, source, contract_id, state, expected_cadence_seconds)
+       VALUES ($1, $2, $3, $4, $5, $6)
+       ON CONFLICT (id) DO NOTHING`,
+      [connA2Id, tenantAId, "ZoikoTime", "00000000-0000-4000-a005-000000000001", "ACTIVE", 3600]
+    );
   });
 
   const NOW = new Date();
@@ -118,29 +118,35 @@ async function main() {
     reviewDate: "2027-01-01"
   };
 
-  const factBySource = (recordId: string) =>
-    Array.from(memDb.workFactRevisions.values()).find(f => f.source_record_id === recordId);
+  const factBySource = async (recordId: string) =>
+    withTenant(tenantAId, async (tx) => (await tx.q("SELECT * FROM work_fact_revision WHERE source_record_id = $1", [recordId])).rows[0]);
+
+  const countWorkFacts = async () =>
+    withTenant(tenantAId, async (tx) => Number((await tx.q("SELECT COUNT(*)::int AS count FROM work_fact_revision")).rows[0]?.count ?? 0));
+
+  const datingPackKey = `test-dating-pack-${crypto.randomUUID().slice(0, 8)}`;
 
   // Test 1: Effective-dated jurisdiction pack resolution
   await runTest("Test 1: Effective-dated jurisdiction pack resolution fails closed outside coverage", async () => {
     await withTenant(tenantAId, async (tx) => {
       await publishPackVersion(tx, {
         ...packMeta,
-        packKey: "test-dating-pack",
+        packKey: datingPackKey,
         version: 1,
         effectiveFrom: "2026-01-01T00:00:00.000Z",
         content: packContent(90)
       });
       await publishPackVersion(tx, {
         ...packMeta,
-        packKey: "test-dating-pack",
+        packKey: datingPackKey,
         version: 2,
         effectiveFrom: "2026-06-01T00:00:00.000Z",
         content: packContent(120)
       });
 
-      const rows = (await tx.q("SELECT * FROM policy_pack WHERE pack_key = $1", ["test-dating-pack"])).rows;
-      assert.strictEqual(rows.find((r: any) => r.version === 1)?.effective_to, "2026-06-01T00:00:00.000Z", "v1 must be closed where v2 starts");
+      const rows = (await tx.q("SELECT * FROM policy_pack WHERE pack_key = $1", [datingPackKey])).rows;
+      const v1EffectiveTo = rows.find((r: any) => r.version === 1)?.effective_to;
+      assert.strictEqual(new Date(v1EffectiveTo).toISOString(), "2026-06-01T00:00:00.000Z", "v1 must be closed where v2 starts");
       assert.strictEqual(resolveEffectivePack(rows, new Date("2026-03-01T00:00:00Z"))?.version, 1, "Date inside v1 window returns v1");
       assert.strictEqual(resolveEffectivePack(rows, new Date("2026-06-01T00:00:00Z"))?.version, 2, "Boundary instant belongs to new version");
       assert.strictEqual(resolveEffectivePack(rows, new Date("2025-12-31T23:59:59Z")), null, "Instant prior to coverage fails closed");
@@ -150,9 +156,9 @@ async function main() {
   // Test 2: Published pack versions are strictly immutable and sequential
   await runTest("Test 2: Published pack versions are strictly immutable and sequential", async () => {
     await withTenant(tenantAId, async (tx) => {
-      const v1Before = (await tx.q("SELECT * FROM policy_pack WHERE pack_key = $1", ["test-dating-pack"])).rows
+      const v1Before = (await tx.q("SELECT * FROM policy_pack WHERE pack_key = $1", [datingPackKey])).rows
         .find((r: any) => r.version === 1)?.content_hash;
-      const base = { ...packMeta, packKey: "test-dating-pack", content: packContent(1) };
+      const base = { ...packMeta, packKey: datingPackKey, content: packContent(1) };
 
       // Duplicate version 2
       await assert.rejects(() => publishPackVersion(tx, { ...base, version: 2, effectiveFrom: "2026-09-01T00:00:00.000Z" }), isCode("CONFLICT"));
@@ -161,7 +167,7 @@ async function main() {
       // Overlapping earlier timestamp
       await assert.rejects(() => publishPackVersion(tx, { ...base, version: 3, effectiveFrom: "2026-05-01T00:00:00.000Z" }), isCode("CONFLICT"));
 
-      const v1After = (await tx.q("SELECT * FROM policy_pack WHERE pack_key = $1", ["test-dating-pack"])).rows
+      const v1After = (await tx.q("SELECT * FROM policy_pack WHERE pack_key = $1", [datingPackKey])).rows
         .find((r: any) => r.version === 1)?.content_hash;
       assert.strictEqual(v1After, v1Before, "Approved content hash must be strictly immutable");
     });
@@ -189,7 +195,7 @@ async function main() {
 
   // Test 3: No invented platform default retention duration
   await runTest("Test 3: Zero invented defaults (runs without tenant class delete nothing)", async () => {
-    const before = memDb.workFactRevisions.size;
+    const before = await countWorkFacts();
     const res = await runRetention({
       who: whoA,
       actor: actorA,
@@ -199,7 +205,7 @@ async function main() {
     });
     assert.strictEqual(res.body.status, "NO_POLICY");
     assert.strictEqual(res.body.purged, 0);
-    assert.strictEqual(memDb.workFactRevisions.size, before, "No records may be deleted without configured tenant class");
+    assert.strictEqual(await countWorkFacts(), before, "No records may be deleted without configured tenant class");
   });
 
   // Test 4: Tenant retention duration bounds enforcement
@@ -223,7 +229,9 @@ async function main() {
       input: { dataCategory: "WORK_FACT", retentionDays: 365, basis: "Boundary test duration" }
     }), isCode("VALIDATION"));
 
-    assert.strictEqual(Array.from(memDb.retentionClasses.values()).length, 0, "Refused configurations leave no class behind");
+    const classesA = await withTenant(tenantAId, async (tx) => (await tx.q("SELECT id FROM retention_class")).rows);
+    const classesB = await withTenant(tenantBId, async (tx) => (await tx.q("SELECT id FROM retention_class")).rows);
+    assert.strictEqual(classesA.length + classesB.length, 0, "Refused configurations leave no class behind");
   });
 
   let scopedHoldId = "";
@@ -264,16 +272,16 @@ async function main() {
     assert.ok(run.body.held >= 1, "Held item count must be positive");
     assert.strictEqual(replay.body.runId, run.body.runId, "Idempotent execution returns identical receipt");
 
-    assert.strictEqual(factBySource("ret-old-a"), undefined, "Expired, unheld fact must be purged");
-    assert.ok(factBySource("ret-old-a2"), "Fact under legal hold must survive purge");
-    assert.ok(factBySource("ret-new-a"), "Recent fact within retention window must survive purge");
+    assert.strictEqual(await factBySource("ret-old-a"), undefined, "Expired, unheld fact must be purged");
+    assert.ok(await factBySource("ret-old-a2"), "Fact under legal hold must survive purge");
+    assert.ok(await factBySource("ret-new-a"), "Recent fact within retention window must survive purge");
   });
 
   // Test 6: Cryptographic tombstones hold zero employee identifiers
   await runTest("Test 6: Tombstones hold cryptographic digests only (zero pseudonyms or source IDs)", async () => {
-    const tombstones = Array.from(memDb.deletionTombstones.values());
+    const tombstones = await withTenant(tenantAId, async (tx) => (await tx.q("SELECT * FROM deletion_tombstone")).rows);
     assert.ok(tombstones.length > 0, "Deletion tombstones must be present");
-    assert.ok(tombstones.every(t => t.verified_at), "All tombstones must have verified_at timestamp");
+    assert.ok(tombstones.every((t: any) => t.verified_at), "All tombstones must have verified_at timestamp");
 
     const dump = JSON.stringify(tombstones);
     assert.ok(!dump.includes("emp-ret-old-a"), "Tombstones must NEVER leak subject pseudonym");
@@ -298,7 +306,7 @@ async function main() {
       now: NOW
     });
     assert.strictEqual(runAfterRelease.body.held, 0, "No records held after release");
-    assert.strictEqual(factBySource("ret-old-a2"), undefined, "Previously held fact is now purged");
+    assert.strictEqual(await factBySource("ret-old-a2"), undefined, "Previously held fact is now purged");
 
     await assert.rejects(() => releaseLegalHold({
       who: whoA,
@@ -322,12 +330,12 @@ async function main() {
     });
     assert.strictEqual(res.body.accepted, 0, "Purged record must never be accepted again");
     assert.strictEqual(res.body.duplicate, 1, "Purged record must be counted as duplicate");
-    assert.strictEqual(factBySource("ret-old-a"), undefined, "Fact must not exist in ledger");
+    assert.strictEqual(await factBySource("ret-old-a"), undefined, "Fact must not exist in ledger");
   });
 
   // Test 9: Storage-layer purge guard
   await runTest("Test 9: Direct SQL DELETE without tombstone or under active hold is refused", async () => {
-    const recent = factBySource("ret-new-a");
+    const recent = await factBySource("ret-new-a");
     assert.ok(recent, "Recent fact must exist for storage guard check");
 
     // Attempt direct delete without tombstone
@@ -356,7 +364,7 @@ async function main() {
       await tx.q("DELETE FROM work_fact_revision WHERE id = $1", [recent!.id]);
     }), /under legal hold/);
 
-    assert.ok(factBySource("ret-new-a"), "Fact must remain intact after refused delete");
+    assert.ok(await factBySource("ret-new-a"), "Fact must remain intact after refused delete");
 
     // Clean up hold
     await releaseLegalHold({

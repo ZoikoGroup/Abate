@@ -71,10 +71,10 @@ function main() {
     for (const norm of normalizeRouteTemplate(raw)) {
       const wildcardRegex = new RegExp(
         "^" +
-          norm
-            .replace(/[.*+?^${}()|[\]\\]/g, "\\$&")
-            .replace(/\\\{id\\\}/g, "\\{[^}]+\\}") +
-          "$"
+        norm
+          .replace(/[.*+?^${}()|[\]\\]/g, "\\$&")
+          .replace(/\\\{id\\\}/g, "\\{[^}]+\\}") +
+        "$"
       );
       const matched = Array.from(specPaths).some((p) => wildcardRegex.test(p));
       if (!matched) {

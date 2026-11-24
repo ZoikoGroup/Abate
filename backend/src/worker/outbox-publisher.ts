@@ -102,6 +102,37 @@ export function toEnvelope(event: any): EventEnvelopeType {
   };
 }
 
+export async function getConsumerHighWaterVersion(
+  consumer: string,
+  aggregateId: string
+): Promise<number | undefined> {
+  return withWorker(async (tx) => {
+    const res = await tx.q(
+      `SELECT last_version FROM worker_consumer_version WHERE consumer = $1 AND aggregate_id = $2`,
+      [consumer, aggregateId]
+    );
+    if (!res.rows.length) return undefined;
+    return Number(res.rows[0].last_version);
+  });
+}
+
+export async function recordConsumerHighWaterVersion(
+  consumer: string,
+  aggregateId: string,
+  version: number
+): Promise<void> {
+  await withWorker(async (tx) => {
+    await tx.q(
+      `INSERT INTO worker_consumer_version (consumer, aggregate_id, last_version, updated_at)
+       VALUES ($1, $2, $3, now())
+       ON CONFLICT (consumer, aggregate_id)
+       DO UPDATE SET last_version = GREATEST(worker_consumer_version.last_version, EXCLUDED.last_version),
+                     updated_at = now()`,
+      [consumer, aggregateId, version]
+    );
+  });
+}
+
 /** Delivery succeeded (or the event was deliberately dropped): finish the row. Guarded so a lost lease cannot clobber a newer owner. */
 export async function markPublished(eventId: string, note: string | null = null): Promise<void> {
   await withWorker(async (tx) => {

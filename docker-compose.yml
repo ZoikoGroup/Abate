@@ -39,6 +39,7 @@ services:
     build:
       context: ./backend
       dockerfile: Dockerfile
+      target: tools
     container_name: abate-migrator
     depends_on:
       postgres:
@@ -114,7 +115,7 @@ services:
       ABATE_REQUIRE_PG: "1"
       DATABASE_URL_WORKER: postgres://abate_worker:worker_pw@postgres:5432/abate
       ACTION_GRANT_SECRET: compose_dev_action_grant_secret_abate_minimum_32_chars
-    command: ["npm", "run", "worker"]
+    command: ["npm", "run", "start:worker"]
     restart: unless-stopped
 
   frontend:

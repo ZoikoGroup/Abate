@@ -161,24 +161,130 @@ export async function resolveActor(
   });
 }
 
+export interface PermissionRule {
+  allowedRoles: readonly string[];
+  deniedPurposes?: readonly string[];
+}
+
+export const PROHIBITED_PURPOSES: readonly string[] = [
+  "INDIVIDUAL_SCORING",
+  "INDIVIDUAL_EVALUATION",
+  "PERFORMANCE_RANKING",
+  "EMPLOYEE_SURVEILLANCE",
+  "DISCIPLINARY_ACTION"
+];
+
+const CORE_GOVERNANCE_ROLES = ["RISK_OWNER", "CONTROL_OWNER", "REVIEWER", "EMPLOYER_ADMIN"] as const;
+const READ_ROLES = [
+  "RISK_OWNER",
+  "CONTROL_OWNER",
+  "APPROVER",
+  "REVIEWER",
+  "EMPLOYER_ADMIN",
+  "IMPLEMENTATION_OWNER",
+  "DPO",
+  "PRIVACY_OFFICER",
+  "VIEWER",
+  "WORKER_REP"
+] as const;
+const ADMIN_ROLES = ["RISK_OWNER", "EMPLOYER_ADMIN"] as const;
+const RETENTION_ROLES = ["RISK_OWNER", "EMPLOYER_ADMIN", "DPO", "PRIVACY_OFFICER"] as const;
+const INGEST_ROLES = ["RISK_OWNER", "CONTROL_OWNER", "REVIEWER", "EMPLOYER_ADMIN", "INGESTION_OPERATOR"] as const;
+const ACTION_ROLES = ["RISK_OWNER", "CONTROL_OWNER"] as const;
+const APPROVAL_ROLES = ["RISK_OWNER", "APPROVER", "EMPLOYER_ADMIN"] as const;
+
 /**
- * authorize: Pure authorization function checking role, command, and resource ownership.
+ * Single RBAC permission registry (BE-004 / CR-01 / Completion Plan §6).
+ * Every domain command maps explicitly to allowed roles and prohibited purposes;
+ * unknown commands fail closed.
+ */
+export const PERMISSION_REGISTRY: Record<string, PermissionRule> = {
+  "organization.create": { allowedRoles: CORE_GOVERNANCE_ROLES },
+  "org.create": { allowedRoles: CORE_GOVERNANCE_ROLES },
+  "tenant.sector_profile.set": { allowedRoles: ADMIN_ROLES },
+  "connection.read": { allowedRoles: READ_ROLES },
+  "connection.admin": { allowedRoles: INGEST_ROLES },
+  "receipt.read": { allowedRoles: READ_ROLES },
+  "work_fact.read": { allowedRoles: CORE_GOVERNANCE_ROLES },
+  "ingest.batch": { allowedRoles: INGEST_ROLES },
+  "correction.record": { allowedRoles: CORE_GOVERNANCE_ROLES },
+  "correction.acknowledge": { allowedRoles: CORE_GOVERNANCE_ROLES },
+  "jurisdiction.read": { allowedRoles: READ_ROLES },
+  "entitlements.read": { allowedRoles: READ_ROLES },
+  "policy.read": { allowedRoles: READ_ROLES },
+  "evidence_package.read": { allowedRoles: READ_ROLES },
+  "retention.read": { allowedRoles: READ_ROLES },
+  "retention.class.set": { allowedRoles: RETENTION_ROLES },
+  "retention.run": { allowedRoles: RETENTION_ROLES },
+  "legal_hold.place": { allowedRoles: RETENTION_ROLES },
+  "legal_hold.release": { allowedRoles: RETENTION_ROLES },
+  "rights_request.erase": { allowedRoles: RETENTION_ROLES },
+  "ai.run.read": { allowedRoles: READ_ROLES },
+  "ai.kill_switch.read": { allowedRoles: READ_ROLES },
+  "action.propose": { allowedRoles: ACTION_ROLES },
+  "action.dispatch": { allowedRoles: ACTION_ROLES },
+  "control.approve": { allowedRoles: APPROVAL_ROLES },
+  "control.create": { allowedRoles: CORE_GOVERNANCE_ROLES },
+  "control.implement": { allowedRoles: ["RISK_OWNER", "CONTROL_OWNER", "IMPLEMENTATION_OWNER", "EMPLOYER_ADMIN"] },
+  "control.verify": { allowedRoles: ["RISK_OWNER", "REVIEWER", "APPROVER", "EMPLOYER_ADMIN"] },
+  "hazard.create": { allowedRoles: CORE_GOVERNANCE_ROLES },
+  "hazard.disposition": { allowedRoles: APPROVAL_ROLES },
+  "support.diagnostic.generate": { allowedRoles: CORE_GOVERNANCE_ROLES }
+};
+
+export function getPermissionRule(command: string): PermissionRule | null {
+  return PERMISSION_REGISTRY[command] ?? null;
+}
+
+export function canActorPerform(
+  actor: Actor,
+  command: string,
+  purpose?: string
+): boolean {
+  const rule = getPermissionRule(command);
+  if (!rule) return false;
+  if (purpose) {
+    const upperPurpose = purpose.toUpperCase();
+    if (
+      PROHIBITED_PURPOSES.includes(upperPurpose) ||
+      (rule.deniedPurposes && rule.deniedPurposes.includes(upperPurpose))
+    ) {
+      return false;
+    }
+  }
+  return actor.memberships.some((m) => rule.allowedRoles.includes(m.domain_role));
+}
+
+/**
+ * authorize: Pure authorization function checking tenant scope, single permission registry,
+ * command-to-role mapping, and prohibited purpose guards. Fails closed on unknown commands.
  */
 export function authorize(
   actor: Actor,
-  _command: string,
-  resource?: { tenantId?: string; organizationId?: string }
+  command: string,
+  resource?: { tenantId?: string; organizationId?: string },
+  purpose?: string
 ): void {
   // Tenant scope check: actor cannot act on a resource belonging to a different tenant
   if (resource?.tenantId && resource.tenantId !== actor.tenantId) {
     throw new AppError("NOT_FOUND", "Not found."); // Never reveal foreign existence
   }
 
-  // Domain role check
-  const allowedRoles = ["RISK_OWNER", "CONTROL_OWNER", "REVIEWER", "EMPLOYER_ADMIN"];
-  const hasValidRole = actor.memberships.some(m => allowedRoles.includes(m.domain_role));
+  if (purpose) {
+    const upperPurpose = purpose.toUpperCase();
+    if (PROHIBITED_PURPOSES.includes(upperPurpose)) {
+      throw new AppError("FORBIDDEN", `Prohibited purpose '${purpose}' is refused by constitutional boundary.`);
+    }
+  }
+
+  const rule = getPermissionRule(command);
+  if (!rule) {
+    throw new AppError("FORBIDDEN", `Command '${command}' is not registered in the authorization policy.`);
+  }
+
+  const hasValidRole = actor.memberships.some((m) => rule.allowedRoles.includes(m.domain_role));
   if (!hasValidRole) {
-    throw new AppError("FORBIDDEN", "Insufficient role privileges to execute this command.");
+    throw new AppError("FORBIDDEN", `Insufficient role privileges to execute '${command}'.`);
   }
 }
 

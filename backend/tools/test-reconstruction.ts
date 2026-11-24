@@ -19,7 +19,12 @@ import { compileRelease } from "../src/domains/privacy/compile-release";
 import { registerConnection } from "../src/domains/ingest/connections";
 import { ingestBatch } from "../src/domains/ingest/ingest-batch";
 import { resolveActor } from "../src/domains/tenant/auth";
-import { withTenant, withWorker } from "../src/platform/db/with-tenant";
+import {
+  checkPgHealth,
+  withTenant,
+  withWorker,
+  withReleaseCompiler
+} from "../src/platform/db/with-tenant";
 import { SemanticQuery } from "../src/contracts/release";
 
 console.log("\x1b[36m=== Abate Task Runner: test-reconstruction (Reconstruction Attack Lab) ===\x1b[0m\n");
@@ -43,7 +48,8 @@ async function runTest(name: string, fn: () => void | Promise<void>) {
 async function main() {
   // Step 1: Seed base two-tenant environment
   await runTest("Setup: Seed isolated two-tenant environment", async () => {
-    await seedTwoTenants();
+    const pgLive = await checkPgHealth();
+    await seedTwoTenants({ persistToPostgres: pgLive });
   });
 
   const tenantAId = GOLDEN_01.tenantA.id;
@@ -73,7 +79,7 @@ async function main() {
       assert.strictEqual(res9.releaseId, undefined, "No releaseId must be issued on suppression");
 
       // Verify privacy decision recorded reason internally but disclosed nothing
-      await withTenant(tenantAId, async (tx) => {
+      await withReleaseCompiler(tenantAId, async (tx) => {
         const dec = await tx.q(
           "SELECT outcome, reason_code FROM privacy_decision WHERE tenant_id = $1 ORDER BY decided_at DESC LIMIT 1",
           [tenantAId]
@@ -138,7 +144,7 @@ async function main() {
       );
 
       // Verify internal reason was RESIDUAL
-      await withTenant(tenantAId, async (tx) => {
+      await withReleaseCompiler(tenantAId, async (tx) => {
         const dec = await tx.q(
           "SELECT reason_code FROM privacy_decision WHERE tenant_id = $1 ORDER BY decided_at DESC LIMIT 1",
           [tenantAId]
@@ -190,7 +196,7 @@ async function main() {
       );
 
       // Verify internal reason was OVERLAP
-      await withTenant(tenantAId, async (tx) => {
+      await withReleaseCompiler(tenantAId, async (tx) => {
         const dec = await tx.q(
           "SELECT reason_code FROM privacy_decision WHERE tenant_id = $1 ORDER BY decided_at DESC LIMIT 1",
           [tenantAId]
@@ -278,7 +284,7 @@ async function main() {
         assert(!keys.includes("subject_pseudonym"), "Columns must not include subject_pseudonym");
 
         // Confirm value is present and valid
-        assert.strictEqual(typeof row.value, "number");
+        assert.ok(Number.isFinite(Number(row.value)), "Artifact value must be numeric");
         assert.strictEqual(row.quality, "VALID");
         assert.ok(row.artifact_hash, "Artifact hash must be present");
       });
@@ -291,29 +297,21 @@ async function main() {
   await runTest(
     "Role Boundary: abate_worker fails closed on all privacy tables (metric_snapshot, disclosure_ledger, privacy_decision)",
     async () => {
-      // 1. Worker tries to query metric_snapshot
-      const snapRes = await withWorker(async (tx) => {
-        return (await tx.q("SELECT * FROM metric_snapshot")).rows;
-      });
-      assert.strictEqual(snapRes.length, 0, "abate_worker MUST NOT be able to read metric_snapshot");
+      const assertWorkerDenied = async (table: string) => {
+        let denied = false;
+        try {
+          const rows = await withWorker(async (tx) => (await tx.q(`SELECT * FROM ${table}`)).rows);
+          denied = rows.length === 0;
+        } catch (err: any) {
+          denied = err?.code === "42501" || /permission denied/i.test(String(err?.message || ""));
+        }
+        assert.strictEqual(denied, true, `abate_worker MUST NOT be able to read ${table}`);
+      };
 
-      // 2. Worker tries to query disclosure_ledger
-      const ledgerRes = await withWorker(async (tx) => {
-        return (await tx.q("SELECT * FROM disclosure_ledger")).rows;
-      });
-      assert.strictEqual(ledgerRes.length, 0, "abate_worker MUST NOT be able to read disclosure_ledger");
-
-      // 3. Worker tries to query privacy_decision
-      const decRes = await withWorker(async (tx) => {
-        return (await tx.q("SELECT * FROM privacy_decision")).rows;
-      });
-      assert.strictEqual(decRes.length, 0, "abate_worker MUST NOT be able to read privacy_decision");
-
-      // 4. Worker tries to query privacy_release
-      const relRes = await withWorker(async (tx) => {
-        return (await tx.q("SELECT * FROM privacy_release")).rows;
-      });
-      assert.strictEqual(relRes.length, 0, "abate_worker MUST NOT be able to read privacy_release");
+      await assertWorkerDenied("metric_snapshot");
+      await assertWorkerDenied("disclosure_ledger");
+      await assertWorkerDenied("privacy_decision");
+      await assertWorkerDenied("privacy_release");
     }
   );
 
@@ -339,7 +337,7 @@ async function main() {
 
       // Count disclosure ledger entries before replay
       let countBefore = 0;
-      await withTenant(tenantAId, async (tx) => {
+      await withReleaseCompiler(tenantAId, async (tx) => {
         const rows = await tx.q("SELECT id FROM disclosure_ledger WHERE tenant_id = $1", [tenantAId]);
         countBefore = rows.rowCount ?? 0;
       });
@@ -350,7 +348,7 @@ async function main() {
       assert.strictEqual(res2.releaseId, res1.releaseId, "Must return identical release ID on cache replay");
 
       // Count disclosure ledger entries after replay: must not increase
-      await withTenant(tenantAId, async (tx) => {
+      await withReleaseCompiler(tenantAId, async (tx) => {
         const rows = await tx.q("SELECT id FROM disclosure_ledger WHERE tenant_id = $1", [tenantAId]);
         assert.strictEqual(rows.rowCount, countBefore, "Disclosure ledger must not grow on query replay");
       });

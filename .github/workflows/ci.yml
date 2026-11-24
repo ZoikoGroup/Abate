@@ -135,7 +135,7 @@ jobs:
           npm --prefix backend run measure-restore
           npm --prefix backend run rehearse:pitr -- --require-live
 
-      - name: Run Live PostgreSQL Additive, Endpoint & 30-Day HTTP Suites (G-01 / T-02)
+      - name: Run Live PostgreSQL Constitutional, Sector, Challenge, Drill & 30-Day HTTP Suites (G-01 / T-02)
         env:
           ABATE_REQUIRE_PG: "1"
           DATABASE_URL_MIGRATOR: postgres://abate_migrator:migrator_pw@localhost:5432/abate
@@ -147,8 +147,36 @@ jobs:
           DATABASE_URL_PERFORMANCE: postgres://abate_performance:performance_pw@localhost:5432/abate
           DATABASE_URL_OPS: postgres://abate_ops:ops_pw@localhost:5432/abate
         run: |
+          reset_pg_db() {
+            psql "postgres://abate_migrator:migrator_pw@localhost:5432/postgres" -c "SELECT pg_terminate_backend(pid) FROM pg_stat_activity WHERE datname = 'abate' AND pid <> pg_backend_pid();" >/dev/null
+            psql "postgres://abate_migrator:migrator_pw@localhost:5432/postgres" -c "DROP DATABASE IF EXISTS abate;" >/dev/null
+            psql "postgres://abate_migrator:migrator_pw@localhost:5432/postgres" -c "CREATE DATABASE abate OWNER abate_migrator;" >/dev/null
+            npm --prefix backend run migrate >/dev/null
+          }
+          reset_pg_db
+          npm --prefix backend run test-retention
+          npm --prefix backend run test-ingest
+          npm --prefix backend run test-privacy
+          npm --prefix backend run test-control
+          npm --prefix backend run test-ai
+          npm --prefix backend run test-planes
+          npm --prefix backend run test-completion
+          reset_pg_db
+          npm --prefix backend run test-boundaries
+          reset_pg_db
+          npm --prefix backend run seed-demo -- --pg
           npm --prefix backend run test-additive
+          npm --prefix backend run test-legal
+          npm --prefix backend run test-sector-registry
+          npm --prefix backend run test-sector-work
           npm --prefix backend run test-sector-rules
+          npm --prefix backend run test-hold-reference
+          npm --prefix backend run test-ai-evals
+          npm --prefix backend run test-worker
+          npm --prefix backend run drill-kill-switches
+          npm --prefix backend run drill:incident
+          npm --prefix backend run rehearse:key-rotation
+          npm --prefix backend run challenge
           npm --prefix backend run check:endpoints
           npm --prefix backend run sim-30d -- --tcp
 
@@ -219,8 +247,8 @@ jobs:
       - name: Generate SBOM and run dependency security audit
         run: |
           npm --prefix backend run generate:sbom
-          npm --prefix backend audit --omit=dev --audit-level=high || true
-          npm --prefix frontend audit --omit=dev --audit-level=high || true
+          npm --prefix backend audit --omit=dev --audit-level=high
+          npm --prefix frontend audit --omit=dev --audit-level=high
 
       - name: Validate Docker Compose configs, build container images and record digests
         run: |
@@ -233,18 +261,18 @@ jobs:
           echo "ABATE_IMAGE_DIGESTS={\"backend\":\"${BACKEND_ID}\",\"frontend\":\"${FRONTEND_ID}\"}" >> "$GITHUB_ENV"
 
       - name: Scan backend and frontend container images with Trivy (G-28 / T-25)
-        continue-on-error: true
         run: |
           mkdir -p evidence
-          TRIVY_IMAGE="ghcr.io/aquasecurity/trivy:latest"
-          docker pull "$TRIVY_IMAGE" || { TRIVY_IMAGE="aquasec/trivy:latest"; docker pull "$TRIVY_IMAGE"; }
+          TRIVY_IMAGE="ghcr.io/aquasecurity/trivy:0.58.2"
+          docker pull "$TRIVY_IMAGE" || { TRIVY_IMAGE="aquasec/trivy:0.58.2"; docker pull "$TRIVY_IMAGE"; }
           docker run --rm \
             -v /var/run/docker.sock:/var/run/docker.sock \
             -v "$PWD/evidence:/evidence" \
             "$TRIVY_IMAGE" image \
             --format table \
             --severity CRITICAL,HIGH \
-            --exit-code 0 \
+            --ignore-unfixed \
+            --exit-code 1 \
             --output /evidence/trivy-backend.txt \
             abate-backend:ci
           docker run --rm \
@@ -253,7 +281,8 @@ jobs:
             "$TRIVY_IMAGE" image \
             --format table \
             --severity CRITICAL,HIGH \
-            --exit-code 0 \
+            --ignore-unfixed \
+            --exit-code 1 \
             --output /evidence/trivy-frontend.txt \
             abate-frontend:ci
 

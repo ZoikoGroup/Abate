@@ -1,11 +1,12 @@
 // frontend/src/App.tsx
-import { useState, useEffect, useCallback, useRef, type FormEvent } from "react";
+import { useState, useEffect, useCallback, useRef, lazy, Suspense, type FormEvent } from "react";
 import {
   api,
   ApiError,
   requestToken,
   fetchOidcConfig,
   fetchCurrentPrincipal,
+  fetchTenants,
   fetchTenantSectorProfile,
   exchangeOidcAuth,
   logoutSession,
@@ -14,6 +15,7 @@ import {
   PRESET_TENANTS,
   type OidcConfig,
   type TenantSectorProfile,
+  type TenantWorkspaceItem,
   type SystemHealth,
   type SystemInfo,
   type TenantInfo,
@@ -21,30 +23,69 @@ import {
   type AuditEvent
 } from "./api/client";
 import { Navbar } from "./components/Navbar";
-import { ConstitutionalTab } from "./components/Tabs/ConstitutionalTab";
-import { IsolationTab } from "./components/Tabs/IsolationTab";
+import { StateView } from "./components/StateView";
 import { OrganizationsTab } from "./components/Tabs/OrganizationsTab";
-import { IngestionTab } from "./components/Tabs/IngestionTab";
-import { CohortAnalyticsTab } from "./components/Tabs/CohortAnalyticsTab";
-import { HazardControlTab } from "./components/Tabs/HazardControlTab";
-import { RetentionTab } from "./components/Tabs/RetentionTab";
-import { BoundedAiTab } from "./components/Tabs/BoundedAiTab";
-import { OutcomesAiChangeTab } from "./components/Tabs/OutcomesAiChangeTab";
-import { SectorPackTab } from "./components/Tabs/SectorPackTab";
 import { getSectorUi, isSectorPackActive } from "./utils/vocabulary";
-import { OperationsTab } from "./components/Tabs/OperationsTab";
-import { OutboxTab } from "./components/Tabs/OutboxTab";
-import { AuditTab } from "./components/Tabs/AuditTab";
-import { AuditVerifierTab } from "./components/Tabs/AuditVerifierTab";
-import { LiveDemoConsole } from "./components/Demo/LiveDemoConsole";
 import "./index.css";
 
-type TabKey = "constitutional" | "isolation" | "organizations" | "ingestion" | "analytics" | "hazards" | "retention" | "ai" | "outcomes" | "sector" | "operations" | "outbox" | "audit" | "verifier";
+const DashboardTab = lazy(() => import("./components/Tabs/DashboardTab").then((m) => ({ default: m.DashboardTab })));
+const ConstitutionalTab = lazy(() => import("./components/Tabs/ConstitutionalTab").then((m) => ({ default: m.ConstitutionalTab })));
+const IsolationTab = lazy(() => import("./components/Tabs/IsolationTab").then((m) => ({ default: m.IsolationTab })));
+const IngestionTab = lazy(() => import("./components/Tabs/IngestionTab").then((m) => ({ default: m.IngestionTab })));
+const CohortAnalyticsTab = lazy(() => import("./components/Tabs/CohortAnalyticsTab").then((m) => ({ default: m.CohortAnalyticsTab })));
+const HazardControlTab = lazy(() => import("./components/Tabs/HazardControlTab").then((m) => ({ default: m.HazardControlTab })));
+const RetentionTab = lazy(() => import("./components/Tabs/RetentionTab").then((m) => ({ default: m.RetentionTab })));
+const BoundedAiTab = lazy(() => import("./components/Tabs/BoundedAiTab").then((m) => ({ default: m.BoundedAiTab })));
+const OutcomesAiChangeTab = lazy(() => import("./components/Tabs/OutcomesAiChangeTab").then((m) => ({ default: m.OutcomesAiChangeTab })));
+const SectorPackTab = lazy(() => import("./components/Tabs/SectorPackTab").then((m) => ({ default: m.SectorPackTab })));
+const OperationsTab = lazy(() => import("./components/Tabs/OperationsTab").then((m) => ({ default: m.OperationsTab })));
+const OutboxTab = lazy(() => import("./components/Tabs/OutboxTab").then((m) => ({ default: m.OutboxTab })));
+const AuditTab = lazy(() => import("./components/Tabs/AuditTab").then((m) => ({ default: m.AuditTab })));
+const AuditVerifierTab = lazy(() => import("./components/Tabs/AuditVerifierTab").then((m) => ({ default: m.AuditVerifierTab })));
+const LiveDemoConsole = lazy(() => import("./components/Demo/LiveDemoConsole").then((m) => ({ default: m.LiveDemoConsole })));
+
+type TabKey = "dashboard" | "constitutional" | "isolation" | "organizations" | "ingestion" | "analytics" | "hazards" | "retention" | "ai" | "outcomes" | "sector" | "operations" | "outbox" | "audit" | "verifier";
+
+const VALID_TAB_KEYS: readonly TabKey[] = [
+  "dashboard",
+  "constitutional",
+  "isolation",
+  "organizations",
+  "ingestion",
+  "analytics",
+  "hazards",
+  "retention",
+  "ai",
+  "outcomes",
+  "sector",
+  "operations",
+  "outbox",
+  "audit",
+  "verifier"
+];
+
+function parseTabFromHash(): TabKey | null {
+  if (typeof window === "undefined") return null;
+  const match = window.location.hash.match(/^#tab=([a-z]+)$/i);
+  if (!match) return null;
+  const candidate = match[1].toLowerCase() as TabKey;
+  return VALID_TAB_KEYS.includes(candidate) ? candidate : null;
+}
 
 export default function App() {
   const [activeTenantId, setActiveTenantId] = useState(PRESET_TENANTS[0].id);
   const [activeRole, setActiveRole] = useState("RISK_OWNER");
-  const [activeTab, setActiveTab] = useState<TabKey>("organizations");
+  const [activeTab, setActiveTabState] = useState<TabKey>(() => parseTabFromHash() || "organizations");
+
+  const setActiveTab = useCallback((next: TabKey | ((prev: TabKey) => TabKey)) => {
+    setActiveTabState((prev) => {
+      const resolved = typeof next === "function" ? next(prev) : next;
+      if (typeof window !== "undefined" && window.location.hash !== `#tab=${resolved}` && !window.location.pathname.startsWith("/demo")) {
+        window.history.replaceState(null, "", `${window.location.pathname}#tab=${resolved}`);
+      }
+      return resolved;
+    });
+  }, []);
 
   const [health, setHealth] = useState<SystemHealth | null>(null);
   const [info, setInfo] = useState<SystemInfo | null>(null);
@@ -55,6 +96,7 @@ export default function App() {
   const [oidcJwtInput, setOidcJwtInput] = useState("");
   const [oidcLoginError, setOidcLoginError] = useState<string | null>(null);
   const [tenantInfo, setTenantInfo] = useState<TenantInfo | null>(null);
+  const [availableTenants, setAvailableTenants] = useState<TenantWorkspaceItem[]>([]);
   const [sectorProfile, setSectorProfile] = useState<TenantSectorProfile | null>(null);
   const [allowedNav, setAllowedNav] = useState<string[] | null>(null);
   const [organizations, setOrganizations] = useState<Organization[]>([]);
@@ -88,9 +130,15 @@ export default function App() {
       setShowDemoConsole(
         window.location.pathname.startsWith("/demo") || window.location.hash === "#demo"
       );
+      const fromHash = parseTabFromHash();
+      if (fromHash) setActiveTabState(fromHash);
     };
     window.addEventListener("popstate", onPopState);
-    return () => window.removeEventListener("popstate", onPopState);
+    window.addEventListener("hashchange", onPopState);
+    return () => {
+      window.removeEventListener("popstate", onPopState);
+      window.removeEventListener("hashchange", onPopState);
+    };
   }, []);
 
   const currentTenant = PRESET_TENANTS.find(t => t.id === activeTenantId) || PRESET_TENANTS[0];
@@ -121,24 +169,26 @@ export default function App() {
   }, []);
 
   const loadTenantWorkspace = useCallback(async (sessionToken: string) => {
-    const [currTenant, orgs, audits, secProfile, me] = await Promise.all([
+    const [currTenant, orgs, audits, secProfile, me, tenantsList] = await Promise.all([
       api<TenantInfo>("/api/v2/tenants/current", { token: sessionToken }),
       api<Organization[]>("/api/v2/organizations", { token: sessionToken }),
       api<AuditEvent[]>("/api/v2/audit-events", { token: sessionToken }),
       fetchTenantSectorProfile(sessionToken).catch(() => null),
-      fetchCurrentPrincipal(sessionToken).catch(() => null)
+      fetchCurrentPrincipal(sessionToken).catch(() => null),
+      fetchTenants(sessionToken).catch(() => [])
     ]);
 
     setTenantInfo(currTenant);
     setOrganizations(orgs);
     setAuditEvents(audits);
     setSectorProfile(secProfile);
+    setAvailableTenants(tenantsList);
     setAllowedNav(Array.isArray(me?.allowedNav) ? me.allowedNav : null);
     if (secProfile && !isSectorPackActive(secProfile)) {
       setActiveTab(prev => (prev === "sector" ? "organizations" : prev));
     }
     setErrorMsg(null);
-  }, []);
+  }, [setActiveTab]);
 
   // Authenticate (dev token in local/test, or OIDC PKCE/HttpOnly session cookie outside local/test) and load tenant-scoped data
   const fetchTenantData = useCallback(async (tenantId: string, role: string, resolvedAuthCfg?: OidcConfig | null) => {
@@ -285,7 +335,9 @@ export default function App() {
   if (showDemoConsole && devTokenEnabled) {
     return (
       <div className="app-container">
-        <LiveDemoConsole onClose={() => handleToggleDemo(false)} />
+        <Suspense fallback={<StateView state={{ kind: "loading", message: "Loading live demo console..." }} />}>
+          <LiveDemoConsole onClose={() => handleToggleDemo(false)} />
+        </Suspense>
       </div>
     );
   }
@@ -304,6 +356,8 @@ export default function App() {
         devTokenEnabled={devTokenEnabled}
         authenticatedSubject={authenticatedSubject}
         onSignOut={handleSignOut}
+        availableTenants={availableTenants}
+        activeTenantName={tenantInfo?.name || null}
       />
 
       {!devTokenEnabled && requiresOidcLogin ? (
@@ -367,133 +421,142 @@ export default function App() {
                 ✨ Live Demo Console
               </button>
             )}
-        {isNavAllowed("ORGANIZATIONS") && (
-          <button
-            type="button"
-            className={`tab-button ${activeTab === "organizations" ? "active" : ""}`}
-            onClick={() => setActiveTab("organizations")}
-          >
-            Organizations & Idempotency
-          </button>
-        )}
-        {isNavAllowed("INGESTION") && (
-          <button
-            type="button"
-            className={`tab-button ${activeTab === "ingestion" ? "active" : ""}`}
-            onClick={() => setActiveTab("ingestion")}
-          >
-            Ingestion & Work Ledger (Phase 2)
-          </button>
-        )}
-        {isNavAllowed("COHORT_ANALYTICS") && (
-          <button
-            type="button"
-            className={`tab-button ${activeTab === "analytics" ? "active" : ""}`}
-            onClick={() => setActiveTab("analytics")}
-          >
-            Cohort Analytics & Privacy (Phase 3)
-          </button>
-        )}
-        {isNavAllowed("HAZARD_CONTROL") && (
-          <button
-            type="button"
-            className={`tab-button ${activeTab === "hazards" ? "active" : ""}`}
-            onClick={() => setActiveTab("hazards")}
-          >
-            Hazards &amp; Controls (Phase 4)
-          </button>
-        )}
-        {isNavAllowed("RETENTION") && (
-          <button
-            type="button"
-            className={`tab-button ${activeTab === "retention" ? "active" : ""}`}
-            onClick={() => setActiveTab("retention")}
-          >
-            Retention &amp; Legal Hold (Phase 5)
-          </button>
-        )}
-        {isNavAllowed("BOUNDED_AI") && (
-          <button
-            type="button"
-            className={`tab-button ${activeTab === "ai" ? "active" : ""}`}
-            onClick={() => setActiveTab("ai")}
-          >
-            Bounded AI &amp; Actions (Phase 6)
-          </button>
-        )}
-        {isNavAllowed("OUTCOMES") && (
-          <button
-            type="button"
-            className={`tab-button ${activeTab === "outcomes" ? "active" : ""}`}
-            onClick={() => setActiveTab("outcomes")}
-          >
-            Outcomes &amp; AI Change (Phase 7)
-          </button>
-        )}
-        {isSectorPackActive(sectorProfile) && (isNavAllowed("SECTOR_PACK") || isNavAllowed("LEGAL_PRACTICE")) && (
-          <button
-            type="button"
-            className={`tab-button ${activeTab === "sector" ? "active" : ""}`}
-            onClick={() => setActiveTab("sector")}
-          >
-            {getSectorUi(sectorProfile).navLabel}
-          </button>
-        )}
-        {isNavAllowed("OPS") && (
-          <button
-            type="button"
-            className={`tab-button ${activeTab === "operations" ? "active" : ""}`}
-            onClick={() => setActiveTab("operations")}
-          >
-            Operations &amp; Support (B8)
-          </button>
-        )}
-        {isNavAllowed("ISOLATION") && (
-          <button
-            type="button"
-            className={`tab-button ${activeTab === "isolation" ? "active" : ""}`}
-            onClick={() => setActiveTab("isolation")}
-          >
-            Tenant Isolation & Attack Lab
-          </button>
-        )}
-        {isNavAllowed("OUTBOX") && (
-          <button
-            type="button"
-            className={`tab-button ${activeTab === "outbox" ? "active" : ""}`}
-            onClick={() => setActiveTab("outbox")}
-          >
-            Transactional Outbox
-          </button>
-        )}
-        {isNavAllowed("AUDIT") && (
-          <button
-            type="button"
-            className={`tab-button ${activeTab === "audit" ? "active" : ""}`}
-            onClick={() => setActiveTab("audit")}
-          >
-            Append-Only Audit Trail
-          </button>
-        )}
-        {isNavAllowed("VERIFIER") && (
-          <button
-            type="button"
-            className={`tab-button ${activeTab === "verifier" ? "active" : ""}`}
-            onClick={() => setActiveTab("verifier")}
-          >
-            Audit Verifier &amp; Merkle
-          </button>
-        )}
-        {isNavAllowed("CONSTITUTIONAL") && (
-          <button
-            type="button"
-            className={`tab-button ${activeTab === "constitutional" ? "active" : ""}`}
-            onClick={() => setActiveTab("constitutional")}
-          >
-            Constitutional Invariants
-          </button>
-        )}
-      </nav>
+            {isNavAllowed("DASHBOARD") && (
+              <button
+                type="button"
+                className={`tab-button ${activeTab === "dashboard" ? "active" : ""}`}
+                onClick={() => setActiveTab("dashboard")}
+              >
+                Dashboard
+              </button>
+            )}
+            {isNavAllowed("ORGANIZATIONS") && (
+              <button
+                type="button"
+                className={`tab-button ${activeTab === "organizations" ? "active" : ""}`}
+                onClick={() => setActiveTab("organizations")}
+              >
+                {devTokenEnabled ? "Organizations & Idempotency" : "Organizations"}
+              </button>
+            )}
+            {isNavAllowed("INGESTION") && (
+              <button
+                type="button"
+                className={`tab-button ${activeTab === "ingestion" ? "active" : ""}`}
+                onClick={() => setActiveTab("ingestion")}
+              >
+                {devTokenEnabled ? "Ingestion & Work Ledger (Phase 2)" : "Connections & Work Ledger"}
+              </button>
+            )}
+            {isNavAllowed("COHORT_ANALYTICS") && (
+              <button
+                type="button"
+                className={`tab-button ${activeTab === "analytics" ? "active" : ""}`}
+                onClick={() => setActiveTab("analytics")}
+              >
+                {devTokenEnabled ? "Cohort Analytics & Privacy (Phase 3)" : "Cohort Analytics & Privacy"}
+              </button>
+            )}
+            {isNavAllowed("HAZARD_CONTROL") && (
+              <button
+                type="button"
+                className={`tab-button ${activeTab === "hazards" ? "active" : ""}`}
+                onClick={() => setActiveTab("hazards")}
+              >
+                {devTokenEnabled ? "Hazards & Controls (Phase 4)" : "Hazards & Controls"}
+              </button>
+            )}
+            {isNavAllowed("RETENTION") && (
+              <button
+                type="button"
+                className={`tab-button ${activeTab === "retention" ? "active" : ""}`}
+                onClick={() => setActiveTab("retention")}
+              >
+                {devTokenEnabled ? "Retention & Legal Hold (Phase 5)" : "Retention, Holds & Rights"}
+              </button>
+            )}
+            {isNavAllowed("BOUNDED_AI") && (
+              <button
+                type="button"
+                className={`tab-button ${activeTab === "ai" ? "active" : ""}`}
+                onClick={() => setActiveTab("ai")}
+              >
+                {devTokenEnabled ? "Bounded AI & Actions (Phase 6)" : "Bounded AI & Actions"}
+              </button>
+            )}
+            {isNavAllowed("OUTCOMES") && (
+              <button
+                type="button"
+                className={`tab-button ${activeTab === "outcomes" ? "active" : ""}`}
+                onClick={() => setActiveTab("outcomes")}
+              >
+                {devTokenEnabled ? "Outcomes & AI Change (Phase 7)" : "Work-Design Outcomes & AI Change"}
+              </button>
+            )}
+            {isSectorPackActive(sectorProfile) && (isNavAllowed("SECTOR_PACK") || isNavAllowed("LEGAL_PRACTICE")) && (
+              <button
+                type="button"
+                className={`tab-button ${activeTab === "sector" ? "active" : ""}`}
+                onClick={() => setActiveTab("sector")}
+              >
+                {getSectorUi(sectorProfile).navLabel}
+              </button>
+            )}
+            {isNavAllowed("OPS") && (
+              <button
+                type="button"
+                className={`tab-button ${activeTab === "operations" ? "active" : ""}`}
+                onClick={() => setActiveTab("operations")}
+              >
+                {devTokenEnabled ? "Operations & Support (B8)" : "Operations & Support"}
+              </button>
+            )}
+            {devTokenEnabled && isNavAllowed("ISOLATION") && (
+              <button
+                type="button"
+                className={`tab-button ${activeTab === "isolation" ? "active" : ""}`}
+                onClick={() => setActiveTab("isolation")}
+              >
+                Tenant Isolation & Attack Lab
+              </button>
+            )}
+            {devTokenEnabled && isNavAllowed("OUTBOX") && (
+              <button
+                type="button"
+                className={`tab-button ${activeTab === "outbox" ? "active" : ""}`}
+                onClick={() => setActiveTab("outbox")}
+              >
+                Transactional Outbox
+              </button>
+            )}
+            {isNavAllowed("AUDIT") && (
+              <button
+                type="button"
+                className={`tab-button ${activeTab === "audit" ? "active" : ""}`}
+                onClick={() => setActiveTab("audit")}
+              >
+                Append-Only Audit Trail
+              </button>
+            )}
+            {isNavAllowed("VERIFIER") && (
+              <button
+                type="button"
+                className={`tab-button ${activeTab === "verifier" ? "active" : ""}`}
+                onClick={() => setActiveTab("verifier")}
+              >
+                Audit Verifier &amp; Merkle
+              </button>
+            )}
+            {isNavAllowed("CONSTITUTIONAL") && (
+              <button
+                type="button"
+                className={`tab-button ${activeTab === "constitutional" ? "active" : ""}`}
+                onClick={() => setActiveTab("constitutional")}
+              >
+                Constitutional Invariants
+              </button>
+            )}
+          </nav>
 
           <main className="app-main" id="content">
             {errorMsg && (
@@ -501,6 +564,23 @@ export default function App() {
                 <div className="feedback-title">Notice</div>
                 <p>{errorMsg}</p>
               </div>
+            )}
+
+            <Suspense fallback={<StateView state={{ kind: "loading", message: "Loading workspace view..." }} />}>
+            {activeTab === "dashboard" && (
+              <DashboardTab
+                health={health}
+                info={info}
+                tenantInfo={tenantInfo}
+                sectorProfile={sectorProfile}
+                allowedNav={allowedNav}
+                organizationCount={organizations.length}
+                auditCount={auditEvents.length}
+                loading={loading}
+                errorMsg={errorMsg}
+                devTokenEnabled={devTokenEnabled}
+                onNavigate={(next) => setActiveTab(next as TabKey)}
+              />
             )}
 
             {activeTab === "constitutional" && (
@@ -563,6 +643,7 @@ export default function App() {
               <BoundedAiTab
                 currentTenant={currentTenant}
                 token={token}
+                devTokenEnabled={devTokenEnabled}
               />
             )}
 
@@ -586,6 +667,7 @@ export default function App() {
               <OperationsTab
                 currentTenant={currentTenant}
                 token={token}
+                devTokenEnabled={devTokenEnabled}
               />
             )}
 
@@ -611,6 +693,7 @@ export default function App() {
                 token={token}
               />
             )}
+            </Suspense>
           </main>
         </>
       )}

@@ -13,7 +13,7 @@ import { GOLDEN_01 } from "../src/fixtures/golden01";
 import { seedTwoTenants } from "../src/fixtures/seed";
 import { createDevToken } from "../src/domains/tenant/auth";
 import { createSupportToken } from "../src/domains/support";
-import { withWorker, memDb } from "../src/platform/db/with-tenant";
+import { checkPgHealth, withTenant, withWorker } from "../src/platform/db/with-tenant";
 import { setRateLimitOverridesForTest } from "../src/platform/rate-limit";
 import { signConnectorWebhook, clearWebhookReplayCache } from "../src/domains/ingest/webhook-auth";
 import { scrubTelemetryAttributes, telemetry, logSafeError } from "../src/platform/telemetry";
@@ -45,7 +45,8 @@ async function check(name: string, fn: () => Promise<void> | void) {
 
 async function main() {
   console.log("\x1b[36m=== Abate Completion Gates Verification (Rate Limits, Webhooks, Telemetry, Connection States) ===\x1b[0m\n");
-  await seedTwoTenants();
+  const pgLive = await checkPgHealth();
+  await seedTwoTenants({ persistToPostgres: pgLive });
 
   const tokenA = createDevToken({
     tenantId: GOLDEN_01.tenantA.id,
@@ -256,24 +257,31 @@ async function main() {
   await check("Human-Approved Dead-Letter Replay: requires support role & reason, resets outbox row, blocks replay twice (409)", async () => {
     const outboxId = crypto.randomUUID();
     const deadLetterId = crypto.randomUUID();
+    const aggregateId = crypto.randomUUID();
+    await withTenant(GOLDEN_01.tenantA.id, async (tx) => {
+      await tx.q(
+        `INSERT INTO outbox_event (
+           id, tenant_id, aggregate, aggregate_id, aggregate_version,
+           event_type, schema_version, purpose, refs
+         ) VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9)`,
+        [
+          outboxId,
+          GOLDEN_01.tenantA.id,
+          "Hazard",
+          aggregateId,
+          1,
+          "HazardCreated",
+          "v1",
+          "WORKPLACE_RISK_ASSESSMENT",
+          JSON.stringify([])
+        ]
+      );
+    });
     await withWorker(async (tx) => {
-      memDb.outboxEvents.push({
-        id: outboxId,
-        tenant_id: GOLDEN_01.tenantA.id,
-        aggregate: "Hazard",
-        aggregate_id: crypto.randomUUID(),
-        aggregate_version: 1,
-        event_type: "HazardCreated",
-        schema_version: "v1",
-        purpose: "WORKPLACE_RISK_ASSESSMENT",
-        refs: [],
-        state: "DEAD_LETTER",
-        attempts: 5,
-        next_retry_at: new Date().toISOString(),
-        last_error: "Simulated delivery exhaustion",
-        created_at: new Date().toISOString(),
-        published_at: null
-      });
+      await tx.q(
+        `UPDATE outbox_event SET state = 'DEAD_LETTER', attempts = $1, last_error = $2 WHERE id = $3`,
+        [5, "Simulated delivery exhaustion", outboxId]
+      );
       await tx.q(
         `INSERT INTO dead_letter_event (
            id, outbox_id, tenant_id, aggregate, aggregate_id, schema_version,
@@ -284,7 +292,7 @@ async function main() {
           outboxId,
           GOLDEN_01.tenantA.id,
           "Hazard",
-          crypto.randomUUID(),
+          aggregateId,
           "v1",
           "WORKPLACE_RISK_ASSESSMENT",
           JSON.stringify([]),
@@ -318,9 +326,11 @@ async function main() {
     assert.strictEqual(replayed.status, 200);
     assert.strictEqual(replayed.body.state, "PENDING");
     assert.strictEqual(replayed.body.replayedBy, "ops.replay.reviewer");
-    const restoredOutbox = memDb.outboxEvents.find(e => e.id === outboxId);
+    const restoredOutbox = await withWorker(
+      async (tx) => (await tx.q("SELECT * FROM outbox_event WHERE id = $1", [outboxId])).rows[0]
+    );
     assert.strictEqual(restoredOutbox?.state, "PENDING");
-    assert.strictEqual(restoredOutbox?.attempts, 0);
+    assert.strictEqual(Number(restoredOutbox?.attempts), 0);
 
     // 4. Replaying an already replayed dead-letter returns 409 CONFLICT
     const duplicate = await expressCall("POST", `/api/v2/ops/dead-letters/${deadLetterId}/replay`, {

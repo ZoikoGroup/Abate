@@ -29,13 +29,12 @@ services:
       APP_ENV: staging
       NODE_ENV: production
       ABATE_REQUIRE_PG: "1"
-      DISABLE_DEV_TOKEN: "true"
+      ABATE_DISABLE_DEV_TOKEN: "1"
       OBJECT_STORE_MODE: s3
       OBJECT_STORE_ENDPOINT: http://objectstore:9000
       OBJECT_STORE_BUCKET: ${OBJECT_STORE_BUCKET:-abate-artifacts}
       ABATE_SECRETS_FILE: /run/secrets/abate-secrets.json
-      STRUCTURED_LOGS: "true"
-      COOKIE_SECURE: "true"
+      ABATE_STRUCTURED_LOGS: "1"
     volumes:
       - ${ABATE_STAGING_SECRETS_FILE:-../ops/pilot-secrets.example.json}:/run/secrets/abate-secrets.json:ro
 

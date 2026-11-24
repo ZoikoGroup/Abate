@@ -56,3 +56,43 @@ WHERE n.nspname = 'public'
     WHERE p.schemaname = 'public'
       AND p.tablename = c.relname
   );
+
+-- 6. Missing Section 5.1 least-privilege roles (expect 0 rows)
+SELECT expected_role
+FROM unnest(ARRAY[
+  'abate_migrator',
+  'abate_app',
+  'abate_worker',
+  'abate_identity',
+  'abate_protected_compute',
+  'abate_release_compiler',
+  'abate_performance',
+  'abate_ops'
+]) AS expected_role
+WHERE NOT EXISTS (
+  SELECT 1 FROM pg_roles r WHERE r.rolname = expected_role
+);
+
+-- 7. Narrow operational views missing SELECT grant for abate_ops (expect 0 rows)
+SELECT expected_view
+FROM unnest(ARRAY['ops_active_tenants', 'ops_connector_health']) AS expected_view
+WHERE NOT EXISTS (
+  SELECT 1
+  FROM information_schema.role_table_grants g
+  WHERE g.grantee = 'abate_ops'
+    AND g.table_schema = 'public'
+    AND g.table_name = expected_view
+    AND g.privilege_type = 'SELECT'
+);
+
+-- 8. Durable worker consumer high-water table missing abate_worker privileges (expect 0 rows)
+SELECT expected_priv
+FROM unnest(ARRAY['SELECT', 'INSERT', 'UPDATE']) AS expected_priv
+WHERE NOT EXISTS (
+  SELECT 1
+  FROM information_schema.role_table_grants g
+  WHERE g.grantee = 'abate_worker'
+    AND g.table_schema = 'public'
+    AND g.table_name = 'worker_consumer_version'
+    AND g.privilege_type = expected_priv
+);
