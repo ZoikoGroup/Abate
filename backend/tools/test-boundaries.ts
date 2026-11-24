@@ -1070,6 +1070,12 @@ async function run() {
   // Phase 6 Bounded AI & Safe Action Execution Labs (Playbook B6)
   // -------------------------------------------------------------
 
+  // Phase 5 retention purges above deleted expired March 2026 work facts and marked overlapping releases STALE;
+  // restore the seeded baseline release to RELEASED so Phase 6 AI & Phase 5 correction labs can evaluate it cleanly.
+  await withReleaseCompiler(tenantAId, async (tx) => {
+    await tx.q("UPDATE privacy_release SET status = $1 WHERE id = $2", ["RELEASED", "00000000-0000-4000-a003-000000000001"]);
+  });
+
   // 35. Prompt Injection in Retrieved Content
   await test("Phase 6 AI Lab 1: Injected instruction in knowledge cannot cause individual disclosure (rejected by validator)", async () => {
     seedApprovedKnowledge({

@@ -1440,9 +1440,15 @@ export class MemoryClient {
 
     // Privacy Release Update status
     if (upper.includes("UPDATE PRIVACY_RELEASE SET STATUS")) {
-      const [status, releaseId] = params;
+      const status = params.length >= 2
+        ? params[0]
+        : (upper.includes("'STALE'") ? "STALE" : upper.includes("'SUPERSEDED'") ? "SUPERSEDED" : "RELEASED");
+      const releaseId = params.length >= 2 ? params[1] : params[0];
       const r = memDb.privacyReleases.get(releaseId);
       if (r && r.tenant_id === this.tenantContext) {
+        if (upper.includes("AND STATUS = 'RELEASED'") && r.status !== "RELEASED") {
+          return { rows: [], rowCount: 0, command: "UPDATE", oid: 0, fields: [] };
+        }
         r.status = status;
         return { rows: [r], rowCount: 1, command: "UPDATE", oid: 0, fields: [] };
       }
@@ -1529,6 +1535,17 @@ export class MemoryClient {
 
     // Released Artifact Select (single read path: joins with privacy_release)
     if (upper.includes("FROM RELEASED_ARTIFACT")) {
+      if (upper.includes("PERIOD_START <= $3") && upper.includes("PERIOD_END >= $2")) {
+        const [tId, spanStart, spanEnd] = params;
+        const sStart = new Date(spanStart).getTime();
+        const sEnd = new Date(spanEnd).getTime();
+        const rows = Array.from(memDb.releasedArtifacts.values()).filter(
+          a => a.tenant_id === (tId || this.tenantContext) &&
+            new Date(a.period_start).getTime() <= sEnd &&
+            new Date(a.period_end).getTime() >= sStart
+        );
+        return { rows, rowCount: rows.length, command: "SELECT", oid: 0, fields: [] };
+      }
       if (params.length === 0) {
         const rows = Array.from(memDb.releasedArtifacts.values()).filter(a => a.tenant_id === this.tenantContext);
         return { rows, rowCount: rows.length, command: "SELECT", oid: 0, fields: [] };
