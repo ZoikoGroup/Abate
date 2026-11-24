@@ -2,7 +2,7 @@
 import React from "react";
 
 export type ViewState =
-  | { kind: "loading" }
+  | { kind: "loading"; message?: string }
   | { kind: "empty"; reason: string }
   | { kind: "stale"; asOf: string }
   | { kind: "partial"; note: string }
@@ -23,7 +23,7 @@ export function StateView({ state, children }: StateViewProps) {
       return (
         <div className="state-box state-loading" role="status" aria-live="polite">
           <div className="spinner" aria-hidden="true" />
-          <p>Loading secure tenant data...</p>
+          <p>{state.message || "Loading secure tenant data..."}</p>
         </div>
       );
 

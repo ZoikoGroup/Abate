@@ -11,6 +11,8 @@ import {
   markPublished,
   releaseClaim,
   recordFailure,
+  getConsumerHighWaterVersion,
+  recordConsumerHighWaterVersion,
   DEFAULT_MAX_ATTEMPTS,
   DEFAULT_LEASE_SECONDS
 } from "./outbox-publisher";
@@ -61,21 +63,6 @@ const globalMetrics: WorkerMetrics = {
   retentionPurgedTotal: 0
 };
 
-// In-memory (per-process) map to detect stale versions: `${consumer}:${aggregate_id}` -> highest version consumed
-const consumerVersionMap = new Map<string, number>();
-const MAX_TRACKED_AGGREGATES = 10_000;
-
-function rememberVersion(key: string, version: number): void {
-  const prev = consumerVersionMap.get(key);
-  if (prev !== undefined && prev >= version) return;
-  consumerVersionMap.delete(key); // re-insert so Map order approximates recency
-  consumerVersionMap.set(key, version);
-  if (consumerVersionMap.size > MAX_TRACKED_AGGREGATES) {
-    const oldest = consumerVersionMap.keys().next().value;
-    if (oldest !== undefined) consumerVersionMap.delete(oldest);
-  }
-}
-
 export function getWorkerMetrics(): WorkerMetrics {
   return { ...globalMetrics };
 }
@@ -88,7 +75,6 @@ export function resetWorkerMetrics(): void {
   globalMetrics.heartbeatAt = null;
   globalMetrics.queueDepth = 0;
   globalMetrics.queueLagMs = 0;
-  consumerVersionMap.clear();
 }
 
 /**
@@ -140,12 +126,10 @@ export async function drainBatch(opts: WorkerOptions = {}): Promise<{
       // Our lease on the rest of the batch has run out: another worker may already have reclaimed them
       if (Date.now() >= claimedAt + leaseSeconds * 1000) break;
 
-      const versionKey = `${consumer}:${event.aggregate_id}`;
-
       try {
-        // Stale-version detection: only an event STRICTLY older than a version this consumer already took for the
-        // same aggregate is stale. A retry of the same event (same id/version) is never stale.
-        const lastVer = consumerVersionMap.get(versionKey);
+        // Durable stale-version detection backed by worker_consumer_version (survives worker restarts).
+        // Only an event STRICTLY older than a version this consumer already took for the same aggregate is stale.
+        const lastVer = await getConsumerHighWaterVersion(consumer, event.aggregate_id);
         if (lastVer !== undefined && Number(event.aggregate_version) < lastVer) {
           // Drop (do not retry, do not dead-letter): delivering it now would move the consumer backwards
           await markPublished(
@@ -165,8 +149,8 @@ export async function drainBatch(opts: WorkerOptions = {}): Promise<{
           throw new Error("SIMULATED_WORKER_CRASH_AFTER_PUBLISH");
         }
 
-        // Record consumer version advancement only on un-crashed delivery
-        rememberVersion(versionKey, Number(event.aggregate_version));
+        // Persist consumer version advancement durably only on un-crashed delivery
+        await recordConsumerHighWaterVersion(consumer, event.aggregate_id, Number(event.aggregate_version));
 
         // Step B: Mark event as published
         await markPublished(event.id);
@@ -270,8 +254,8 @@ export async function stopWorkerDaemon(): Promise<void> {
   }
 }
 
-// Direct CLI entrypoint: tsx src/worker/daemon.ts
-if (typeof process !== "undefined" && process.argv[1]?.includes("daemon.ts")) {
+// Direct CLI entrypoint: tsx src/worker/daemon.ts or node dist/worker/daemon.js
+if (typeof process !== "undefined" && /daemon\.(ts|js)$/.test(process.argv[1] || "")) {
   const enableRetentionExecutor =
     process.env.ABATE_ENABLE_RETENTION_EXECUTOR === "1" ||
     process.env.ABATE_ENABLE_RETENTION_EXECUTOR === "true";

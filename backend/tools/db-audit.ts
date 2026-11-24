@@ -115,7 +115,9 @@ function runStaticMigrationAudit(): void {
     { label: "evidence_item_tenant_isolation policy", re: /CREATE POLICY evidence_item_tenant_isolation ON evidence_item/i },
     { label: "tenant_sector_setting FORCE RLS", re: /ALTER TABLE tenant_sector_setting FORCE ROW LEVEL SECURITY/i },
     { label: "async_job FORCE RLS", re: /ALTER TABLE async_job FORCE ROW LEVEL SECURITY/i },
-    { label: "ops_active_tenants view", re: /CREATE OR REPLACE VIEW ops_active_tenants/i }
+    { label: "ops_active_tenants view", re: /CREATE OR REPLACE VIEW ops_active_tenants/i },
+    { label: "ops_connector_health view", re: /CREATE OR REPLACE VIEW ops_connector_health/i },
+    { label: "worker_consumer_version table", re: /CREATE TABLE IF NOT EXISTS worker_consumer_version/i }
   ];
 
   let failures = 0;

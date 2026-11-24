@@ -1,5 +1,5 @@
 // frontend/src/components/Navbar.tsx
-import { PRESET_TENANTS, type SystemHealth } from "../api/client";
+import { PRESET_TENANTS, type SystemHealth, type TenantWorkspaceItem } from "../api/client";
 
 interface NavbarProps {
   currentTenantId: string;
@@ -13,6 +13,8 @@ interface NavbarProps {
   devTokenEnabled?: boolean;
   authenticatedSubject?: string | null;
   onSignOut?: () => void;
+  availableTenants?: TenantWorkspaceItem[];
+  activeTenantName?: string | null;
 }
 
 export function Navbar({
@@ -26,9 +28,14 @@ export function Navbar({
   onOpenDemo,
   devTokenEnabled = true,
   authenticatedSubject = null,
-  onSignOut
+  onSignOut,
+  availableTenants = [],
+  activeTenantName = null
 }: NavbarProps) {
   const currentTenant = PRESET_TENANTS.find(t => t.id === currentTenantId) || PRESET_TENANTS[0];
+  const tenantOptions = availableTenants.length > 0
+    ? availableTenants.map((t) => ({ id: t.id, name: t.name, region: t.region }))
+    : PRESET_TENANTS.map((t) => ({ id: t.id, name: t.name, region: t.region }));
 
   return (
     <header className="app-header">
@@ -95,7 +102,7 @@ export function Navbar({
                 value={currentTenantId}
                 onChange={(e) => onSelectTenant(e.target.value)}
               >
-                {PRESET_TENANTS.map(t => (
+                {tenantOptions.map(t => (
                   <option key={t.id} value={t.id}>
                     {t.name} [{t.region}]
                   </option>
@@ -127,7 +134,23 @@ export function Navbar({
           <>
             <div className="context-item context-info">
               <span className="context-label">Active Tenant Scope:</span>
-              <span className="monospace-badge">{currentTenantId || "Unauthenticated"}</span>
+              {availableTenants.length > 1 ? (
+                <select
+                  id="oidc-tenant-select"
+                  className="select-control"
+                  value={currentTenantId}
+                  onChange={(e) => onSelectTenant(e.target.value)}
+                  aria-label="Switch active tenant workspace"
+                >
+                  {availableTenants.map((t) => (
+                    <option key={t.id} value={t.id}>
+                      {t.name} [{t.region}]
+                    </option>
+                  ))}
+                </select>
+              ) : (
+                <span className="monospace-badge">{activeTenantName || currentTenantId || "Unauthenticated"}</span>
+              )}
             </div>
             <div className="context-item context-info">
               <span className="context-label">Effective Domain Role:</span>

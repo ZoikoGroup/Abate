@@ -1,5 +1,5 @@
 // frontend/src/components/Tabs/IngestionTab.tsx
-import { useState, useEffect, useCallback } from "react";
+import { useState, useEffect } from "react";
 import {
   fetchSourceContracts,
   fetchConnections,
@@ -57,7 +57,7 @@ export function IngestionTab({ currentTenant, token, sectorProfile, onRefresh }:
   } | null>(null);
 
   // Load Ingestion domain data
-  const loadData = useCallback(async () => {
+  const loadData = async () => {
     if (!token) return;
     setLoading(true);
     try {
@@ -83,7 +83,7 @@ export function IngestionTab({ currentTenant, token, sectorProfile, onRefresh }:
     } finally {
       setLoading(false);
     }
-  }, [token]);
+  };
 
   useEffect(() => {
     if (!token) return;
@@ -471,13 +471,12 @@ export function IngestionTab({ currentTenant, token, sectorProfile, onRefresh }:
       {/* Feedback Banner */}
       {feedback && (
         <div
-          className={`feedback-alert ${
-            feedback.type === "success"
-              ? "alert-success"
-              : feedback.type === "error"
+          className={`feedback-alert ${feedback.type === "success"
+            ? "alert-success"
+            : feedback.type === "error"
               ? "alert-error"
               : "alert-conflict"
-          }`}
+            }`}
           role="alert"
         >
           <div className="feedback-title">{feedback.title}</div>
@@ -661,10 +660,10 @@ export function IngestionTab({ currentTenant, token, sectorProfile, onRefresh }:
               const healthBadgeClass = isFresh
                 ? "badge-success"
                 : isDelayed
-                ? "badge-warning"
-                : isStale
-                ? "badge-coral"
-                : "badge-dark";
+                  ? "badge-warning"
+                  : isStale
+                    ? "badge-coral"
+                    : "badge-dark";
 
               const cadenceMin = Math.round(conn.expected_cadence_seconds / 60);
               const staleMin = cadenceMin * 3;

@@ -12,6 +12,7 @@ import {
   setKillSwitch,
   fetchOpsJobs,
   fetchOpsAiQuota,
+  fetchReleaseDossier,
   replayDeadLetter,
   type AiQuotaStatus,
   type OpsJobsOverview,
@@ -27,6 +28,7 @@ import { StateView } from "../StateView";
 interface OperationsTabProps {
   currentTenant: typeof PRESET_TENANTS[0];
   token: string | null;
+  devTokenEnabled?: boolean;
 }
 
 type Feedback = { kind: "success" | "error"; title: string; message: string } | null;
@@ -39,7 +41,7 @@ const STATUS_BADGE: Record<SloStatus, string> = {
 
 const fmt = (iso: string | null) => (iso ? new Date(iso).toISOString().slice(0, 19).replace("T", " ") + " UTC" : "—");
 
-export function OperationsTab({ currentTenant, token }: OperationsTabProps) {
+export function OperationsTab({ currentTenant, token, devTokenEnabled = true }: OperationsTabProps) {
   const [feedback, setFeedback] = useState<Feedback>(null);
   const [busy, setBusy] = useState(false);
 
@@ -48,6 +50,7 @@ export function OperationsTab({ currentTenant, token }: OperationsTabProps) {
 
   // Support console (separate credential; never a tenant token)
   const [operator, setOperator] = useState("ops.oncall");
+  const [supportOidcJwt, setSupportOidcJwt] = useState("");
   const [supportToken, setSupportToken] = useState<string | null>(null);
   const [report, setReport] = useState<SloReport | null>(null);
   const [errors, setErrors] = useState<SafeErrorLogEntry[]>([]);
@@ -59,24 +62,15 @@ export function OperationsTab({ currentTenant, token }: OperationsTabProps) {
   const [requestRecord, setRequestRecord] = useState<OpsRequestRecord | null>(null);
   const [receiptText, setReceiptText] = useState("");
 
+  // Accessible confirmation dialogs for kill switches & dead-letter replay (Completion Plan §7.2)
+  const [pendingSwitch, setPendingSwitch] = useState<{ scope: string; nextActive: boolean } | null>(null);
+  const [switchReason, setSwitchReason] = useState("");
+  const [pendingReplayId, setPendingReplayId] = useState<string | null>(null);
+  const [replayReason, setReplayReason] = useState("Operator verified downstream consumer health");
+
   const loadDossier = useCallback(async () => {
-    try {
-      const res = await fetch("/api/v2/release/dossier");
-      if (res.ok) {
-        setDossier(await res.json());
-        return;
-      }
-    } catch {
-      // Fallback to static bundle artifact
-    }
-    try {
-      const res = await fetch("/release-dossier.json");
-      if (res.ok) {
-        setDossier(await res.json());
-      }
-    } catch {
-      // Ignore offline fetch failure
-    }
+    const data = await fetchReleaseDossier();
+    if (data) setDossier(data);
   }, []);
 
   useEffect(() => {
@@ -125,19 +119,43 @@ export function OperationsTab({ currentTenant, token }: OperationsTabProps) {
     return `Signed in as ${res.operator}. This credential has no tenant and cannot read tenant data. SLO overall: ${r.overall}.`;
   });
 
-  const handleToggleKillSwitch = (scope: string, currentActive: boolean) => act(`Kill switch updated for ${scope}`, async () => {
-    const updated = await setKillSwitch(scope, !currentActive, supportToken!);
-    setKillSwitches(prev => {
-      const idx = prev.findIndex(k => k.scope === scope);
-      if (idx >= 0) {
-        const copy = [...prev];
-        copy[idx] = updated;
-        return copy;
-      }
-      return [...prev, updated];
-    });
-    return `Kill switch '${scope}' is now ${updated.active ? "ACTIVE (Circuit Open/Disabled)" : "INACTIVE (Circuit Closed/Enabled)"}.`;
+  const handleOidcSupportSignIn = () => act("Support OIDC session verified", async () => {
+    const raw = supportOidcJwt.trim();
+    if (!raw) {
+      throw Object.assign(new Error("Enter a Support OIDC Bearer JWT scoped to the support audience."), { code: "VALIDATION" });
+    }
+    const r = await refreshOps(raw);
+    setSupportToken(raw);
+    setSupportOidcJwt("");
+    return `Verified Support OIDC credential. Zero-impersonation perimeter active; SLO overall: ${r.overall}.`;
   });
+
+  const handleRequestToggleKillSwitch = (scope: string, currentActive: boolean) => {
+    setPendingSwitch({ scope, nextActive: !currentActive });
+    setSwitchReason(!currentActive ? "Containment drill or anomaly isolation" : "Verified recovery; lifting containment switch");
+  };
+
+  const handleConfirmToggleKillSwitch = () => {
+    if (!pendingSwitch || !supportToken) return;
+    const reason = switchReason.trim();
+    if (reason.length < 5) return;
+    const { scope, nextActive } = pendingSwitch;
+    void act(`Kill switch updated for ${scope}`, async () => {
+      const updated = await setKillSwitch(scope, nextActive, supportToken, reason);
+      setKillSwitches(prev => {
+        const idx = prev.findIndex(k => k.scope === scope);
+        if (idx >= 0) {
+          const copy = [...prev];
+          copy[idx] = updated;
+          return copy;
+        }
+        return [...prev, updated];
+      });
+      setPendingSwitch(null);
+      setSwitchReason("");
+      return `Kill switch '${scope}' is now ${updated.active ? "ACTIVE (Circuit Open/Disabled)" : "INACTIVE (Circuit Closed/Enabled)"} — reason: ${reason}.`;
+    });
+  };
 
   const handleRefresh = () => act("SLO report refreshed", async () => {
     const r = await refreshOps(supportToken!);
@@ -145,11 +163,18 @@ export function OperationsTab({ currentTenant, token }: OperationsTabProps) {
   });
 
   const handleReplayDeadLetter = (deadLetterId: string) => {
-    const reason = window.prompt("Enter human-approval reason for replaying this dead-letter event (min 5 chars):", "Operator verified downstream consumer health");
-    if (!reason || reason.trim().length < 5) return;
-    void act(`Dead-letter replayed (${deadLetterId.slice(0, 8)}...)`, async () => {
-      const res = await replayDeadLetter(deadLetterId, reason.trim(), supportToken!);
-      await refreshOps(supportToken!);
+    setPendingReplayId(deadLetterId);
+    setReplayReason("Operator verified downstream consumer health");
+  };
+
+  const handleConfirmReplayDeadLetter = () => {
+    if (!pendingReplayId || !supportToken || replayReason.trim().length < 5) return;
+    const targetId = pendingReplayId;
+    const reason = replayReason.trim();
+    void act(`Dead-letter replayed (${targetId.slice(0, 8)}...)`, async () => {
+      const res = await replayDeadLetter(targetId, reason, supportToken);
+      setPendingReplayId(null);
+      await refreshOps(supportToken);
       return `Dead-letter ${res.deadLetterId.slice(0, 8)}... replayed back to PENDING outbox by ${res.replayedBy}.`;
     });
   };
@@ -221,10 +246,30 @@ export function OperationsTab({ currentTenant, token }: OperationsTabProps) {
         </div>
 
         <div className="button-group">
-          <input className="text-control" aria-label="Support operator" value={operator} onChange={e => setOperator(e.target.value)} />
-          <button type="button" className="btn btn-secondary" disabled={busy || operator.trim().length < 3} onClick={handleSignIn}>
-            {supportToken ? "Re-issue support token" : "Sign in as support operator"}
-          </button>
+          {devTokenEnabled ? (
+            <>
+              <input className="text-control" aria-label="Support operator" value={operator} onChange={e => setOperator(e.target.value)} />
+              <button type="button" className="btn btn-secondary" disabled={busy || operator.trim().length < 3} onClick={handleSignIn}>
+                {supportToken ? "Re-issue support token" : "Sign in as support operator"}
+              </button>
+            </>
+          ) : (
+            <>
+              <input
+                id="ops-support-jwt"
+                type="password"
+                className="text-control"
+                aria-label="Support OIDC Bearer JWT"
+                placeholder="Paste Support OIDC JWT (audience: abate-api:support)"
+                value={supportOidcJwt}
+                onChange={e => setSupportOidcJwt(e.target.value)}
+                autoComplete="off"
+              />
+              <button type="button" className="btn btn-secondary" disabled={busy || supportOidcJwt.trim().length < 10} onClick={handleOidcSupportSignIn}>
+                {supportToken ? "Rotate Support OIDC JWT" : "Connect with Support OIDC JWT"}
+              </button>
+            </>
+          )}
           <button type="button" className="btn btn-secondary" disabled={busy || !supportToken} onClick={handleRefresh}>Refresh</button>
         </div>
 
@@ -354,6 +399,49 @@ export function OperationsTab({ currentTenant, token }: OperationsTabProps) {
               </table>
             </div>
           )}
+          {pendingReplayId && (
+            <div
+              role="dialog"
+              aria-modal="true"
+              aria-labelledby="replay-dlq-title"
+              style={{
+                marginTop: "1rem",
+                padding: "1rem",
+                border: "1px solid #C2410C",
+                background: "#FFF7ED",
+                borderRadius: "6px"
+              }}
+            >
+              <h4 id="replay-dlq-title" style={{ marginTop: 0 }}>Confirm Human-Approved Dead-Letter Replay</h4>
+              <p className="text-sm">
+                Event <code className="monospace">{pendingReplayId}</code> will return to <code>PENDING</code> in the outbox. Record your operator justification:
+              </p>
+              <div className="button-group" style={{ marginTop: "0.5rem" }}>
+                <input
+                  className="text-control"
+                  aria-label="Dead-letter replay reason"
+                  value={replayReason}
+                  onChange={e => setReplayReason(e.target.value)}
+                  style={{ flex: 1 }}
+                />
+                <button
+                  type="button"
+                  className="btn btn-primary btn-sm"
+                  disabled={busy || replayReason.trim().length < 5}
+                  onClick={handleConfirmReplayDeadLetter}
+                >
+                  Confirm Replay
+                </button>
+                <button
+                  type="button"
+                  className="btn btn-secondary btn-sm"
+                  onClick={() => setPendingReplayId(null)}
+                >
+                  Cancel
+                </button>
+              </div>
+            </div>
+          )}
         </div>
       )}
 
@@ -361,13 +449,61 @@ export function OperationsTab({ currentTenant, token }: OperationsTabProps) {
         <div className="card">
           <div className="card-header">
             <div>
-              <h3>Phase 8: Five Independent Kill Switches</h3>
+              <h3>Five Independent Kill Switches</h3>
               <p className="card-desc">
                 Operators can stop the smallest unsafe scope without taking down the entire product. Activating a switch enforces immediate fail-closed protection and never relaxes privacy thresholds.
               </p>
             </div>
             <span className="badge badge-aubergine">FAIL-CLOSED ISOLATION</span>
           </div>
+
+          {pendingSwitch && (
+            <div
+              role="dialog"
+              aria-modal="true"
+              aria-labelledby="confirm-ks-title"
+              style={{
+                marginBottom: "1rem",
+                padding: "1rem",
+                border: "1px solid #B91C1C",
+                background: "#FEF2F2",
+                borderRadius: "6px"
+              }}
+            >
+              <h4 id="confirm-ks-title" style={{ marginTop: 0, color: "#7F1D1D" }}>
+                Confirm Kill Switch {pendingSwitch.nextActive ? "Activation" : "Deactivation"}: <code>{pendingSwitch.scope}</code>
+              </h4>
+              <p className="text-sm">
+                This global operational action takes effect immediately across all requests for scope <code>{pendingSwitch.scope}</code>. A reason (minimum 5 characters) is required.
+              </p>
+              <div className="button-group" style={{ marginTop: "0.5rem" }}>
+                <input
+                  id="kill-switch-reason-input"
+                  className="text-control"
+                  aria-label="Kill switch change reason"
+                  placeholder="Reason for kill switch change (min 5 chars)"
+                  value={switchReason}
+                  onChange={e => setSwitchReason(e.target.value)}
+                  style={{ flex: 1 }}
+                />
+                <button
+                  type="button"
+                  className={`btn btn-sm ${pendingSwitch.nextActive ? "btn-danger" : "btn-primary"}`}
+                  disabled={busy || switchReason.trim().length < 5}
+                  onClick={handleConfirmToggleKillSwitch}
+                >
+                  Confirm Kill Switch Change
+                </button>
+                <button
+                  type="button"
+                  className="btn btn-secondary btn-sm"
+                  onClick={() => setPendingSwitch(null)}
+                >
+                  Cancel
+                </button>
+              </div>
+            </div>
+          )}
 
           <div className="table-responsive">
             <table className="data-table">
@@ -390,6 +526,7 @@ export function OperationsTab({ currentTenant, token }: OperationsTabProps) {
                 ].map(item => {
                   const current = killSwitches.find(k => k.scope === item.scope);
                   const isActive = current ? current.active : false;
+                  const canToggle = current ? current.canToggle !== false : true;
                   return (
                     <tr key={item.scope}>
                       <td className="monospace font-bold">{item.scope}</td>
@@ -404,16 +541,21 @@ export function OperationsTab({ currentTenant, token }: OperationsTabProps) {
                       </td>
                       <td className="text-sm">
                         {current?.changed_by ? `${current.changed_by} at ${fmt(current.changed_at)}` : "Initial boot"}
+                        {current?.reason && <div className="text-muted">Reason: {current.reason}</div>}
                       </td>
                       <td>
-                        <button
-                          type="button"
-                          className={`btn btn-sm ${isActive ? "btn-secondary" : "btn-danger"}`}
-                          disabled={busy}
-                          onClick={() => handleToggleKillSwitch(item.scope, isActive)}
-                        >
-                          {isActive ? "Deactivate (Re-enable)" : "Activate Kill Switch"}
-                        </button>
+                        {canToggle ? (
+                          <button
+                            type="button"
+                            className={`btn btn-sm ${isActive ? "btn-secondary" : "btn-danger"}`}
+                            disabled={busy}
+                            onClick={() => handleRequestToggleKillSwitch(item.scope, isActive)}
+                          >
+                            {isActive ? "Deactivate (Re-enable)" : "Activate Kill Switch"}
+                          </button>
+                        ) : (
+                          <span className="text-sm text-muted">Read-only</span>
+                        )}
                       </td>
                     </tr>
                   );

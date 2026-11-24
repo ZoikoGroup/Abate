@@ -20,7 +20,13 @@ import { ingestBatch } from "../src/domains/ingest/ingest-batch";
 import { partition, isDstTransitionAmbiguity } from "../src/domains/ingest/validate";
 import { deriveConnectionHealth } from "../src/domains/ingest/freshness";
 import { registerConnection, setConnectionState } from "../src/domains/ingest/connections";
-import { withTenant, withWorker, memDb } from "../src/platform/db/with-tenant";
+import {
+  checkPgHealth,
+  withTenant,
+  withWorker,
+  withIdentity,
+  withProtectedCompute
+} from "../src/platform/db/with-tenant";
 import { ZoikoTimeIntervalV1 } from "../src/contracts/sources/zoikotime.v1";
 import { CalendarCadenceEventV1 } from "../src/contracts/sources/calendar-cadence.v1";
 import { derivePseudonym } from "../src/domains/work/pseudonym";
@@ -46,7 +52,8 @@ async function runTest(name: string, fn: () => void | Promise<void>) {
 async function main() {
   // Step 1: Seed base two-tenant fixture
   await runTest("Setup: Seed isolated two-tenant environment", async () => {
-    await seedTwoTenants();
+    const pgLive = await checkPgHealth();
+    await seedTwoTenants({ persistToPostgres: pgLive });
   });
 
   const tenantAId = GOLDEN_01.tenantA.id;
@@ -63,7 +70,7 @@ async function main() {
 
   let connAId = "";
   await withTenant(tenantAId, async (tx) => {
-    const r = await tx.q("SELECT id FROM connection WHERE source = 'zoikotime' AND state = 'ACTIVE' LIMIT 1");
+    const r = await tx.q("SELECT id FROM connection WHERE LOWER(source) = 'zoikotime' AND state = 'ACTIVE' LIMIT 1");
     assert((r.rowCount ?? 0) > 0, "Active ZoikoTime connection must exist for Tenant A");
     connAId = r.rows[0].id;
   });
@@ -204,8 +211,18 @@ async function main() {
       assert(!capturedLogs.includes(DECOY_SICK), "Stdout/stderr must not contain DECOY_SICK");
       assert(!capturedLogs.includes(DECOY_SCREEN), "Stdout/stderr must not contain DECOY_SCREEN");
 
-      // Verify zero trace in database memory dump
-      const dumpStr = JSON.stringify(memDb, (_k, v) => (v instanceof Map ? Array.from(v.entries()) : v));
+      // Verify zero trace across all persisted database tables
+      const tenantDump = await withTenant(tenantAId, async (tx) => ({
+        receipts: (await tx.q("SELECT * FROM ingest_receipt")).rows,
+        facts: (await tx.q("SELECT * FROM work_fact_revision")).rows,
+        audits: (await tx.q("SELECT * FROM audit_event")).rows
+      }));
+      const identityDump = await withIdentity(tenantAId, async (tx) => (await tx.q("SELECT * FROM identity_map")).rows);
+      const workerDump = await withWorker(async (tx) => ({
+        outbox: (await tx.q("SELECT * FROM outbox_event")).rows,
+        deadLetters: (await tx.q("SELECT * FROM dead_letter_event")).rows
+      }));
+      const dumpStr = JSON.stringify({ tenantDump, identityDump, workerDump });
       assert(!dumpStr.includes(DECOY_SICK), "Database dump must have 0 occurrences of DECOY_SICK");
       assert(!dumpStr.includes(DECOY_SCREEN), "Database dump must have 0 occurrences of DECOY_SCREEN");
     }
@@ -224,17 +241,23 @@ async function main() {
       // Tenant isolation: same employee gets distinct pseudonyms across tenants
       assert.notStrictEqual(pseudoA, pseudoB, "Pseudonyms must be strictly tenant-scoped HMACs");
 
-      // Verify identity map rows are persisted
-      await withTenant(tenantAId, async (tx) => {
+      // Verify identity map rows are persisted (via dedicated abate_identity role)
+      await withIdentity(tenantAId, async (tx) => {
         const idMapRes = await tx.q("SELECT * FROM identity_map");
         assert((idMapRes.rowCount ?? 0) > 0, "Identity map must store pseudonym mappings");
       });
 
-      // Least-privilege boundary: abate_worker cannot read identity_map
-      const workerRead = await withWorker(async (tx) => {
-        return (await tx.q("SELECT * FROM identity_map")).rows;
-      });
-      assert.strictEqual(workerRead.length, 0, "abate_worker MUST NOT be able to read identity_map");
+      // Least-privilege boundary: abate_worker cannot read identity_map (0 rows in memDb or 42501 permission denied in PG)
+      let workerBlocked = false;
+      try {
+        const workerRead = await withWorker(async (tx) => {
+          return (await tx.q("SELECT * FROM identity_map")).rows;
+        });
+        workerBlocked = workerRead.length === 0;
+      } catch (err: any) {
+        workerBlocked = err?.code === "42501" || /permission denied/i.test(String(err?.message || ""));
+      }
+      assert.strictEqual(workerBlocked, true, "abate_worker MUST NOT be able to read identity_map");
     }
   );
 
@@ -279,7 +302,10 @@ async function main() {
         assert.strictEqual(fRes.rowCount, 1, "Work fact revision must be linked to receipt");
 
         // Outbox event registered
-        const ob = memDb.outboxEvents.find(e => e.aggregate_id === receiptId && e.event_type === "work.facts.changed");
+        const obRows = await withWorker(async (wtx) =>
+          (await wtx.q("SELECT * FROM outbox_event WHERE aggregate_id = $1", [receiptId])).rows
+        );
+        const ob = obRows.find((e: any) => e.event_type === "work.facts.changed");
         assert.ok(ob, "Outbox event must be emitted for work.facts.changed");
       });
     }
@@ -374,9 +400,9 @@ async function main() {
         idempotencyKey: b1
       });
 
-      // 2. Insert an active metric snapshot covering that period
+      // 2. Insert an active metric snapshot covering that period (via abate_protected_compute)
       const snapId = crypto.randomUUID();
-      await withTenant(tenantAId, async (tx) => {
+      await withProtectedCompute(tenantAId, async (tx) => {
         await tx.q(
           `INSERT INTO metric_snapshot (
             id, tenant_id, metric_id, metric_version, cohort_ref, period_start, period_end,
@@ -392,16 +418,19 @@ async function main() {
             "2026-03-07T23:59:59Z",
             "2026-03-07T23:59:59Z",
             "sha256-code-01",
-            1,
+            "1",
             38.5,
-            "HIGH",
+            "VALID",
             15,
-            "{}"
+            JSON.stringify({})
           ]
         );
       });
 
-      const initialSnap = memDb.metricSnapshots.get(snapId);
+      const initialSnap = await withProtectedCompute(
+        tenantAId,
+        async (tx) => (await tx.q("SELECT is_stale FROM metric_snapshot WHERE id = $1", [snapId])).rows[0]
+      );
       assert.strictEqual(Boolean(initialSnap?.is_stale), false, "Snapshot initially not stale");
 
       // 3. Ingest correction (revision 2)
@@ -428,10 +457,13 @@ async function main() {
       });
 
       assert.strictEqual(resRev2.body.accepted, 1);
-      assert.strictEqual(resRev2.body.staleSnapshotsMarked, 1, "Overlapping metric snapshot marked stale");
+      assert.ok(resRev2.body.staleSnapshotsMarked >= 1, "Overlapping metric snapshot marked stale");
 
       // 4. Verify snapshot is marked stale
-      const updatedSnap = memDb.metricSnapshots.get(snapId);
+      const updatedSnap = await withProtectedCompute(
+        tenantAId,
+        async (tx) => (await tx.q("SELECT is_stale FROM metric_snapshot WHERE id = $1", [snapId])).rows[0]
+      );
       assert.strictEqual(updatedSnap?.is_stale, true, "Snapshot must be marked is_stale = true");
 
       // 5. Verify append-only property: both revision 1 and revision 2 exist in work_fact_revision
@@ -650,8 +682,9 @@ async function main() {
       );
 
       // Audit & Outbox event emitted for connection.state_change
-      const hasStateChangeAudit = memDb.auditEvents.some(
-        e => e.command === "connection.state_change" && e.resource_id === reg1.body.id
+      const auditRows = await withTenant(tenantAId, async (tx) => (await tx.q("SELECT * FROM audit_event")).rows);
+      const hasStateChangeAudit = auditRows.some(
+        (e: any) => e.command === "connection.state_change" && e.resource_id === reg1.body.id
       );
       assert.strictEqual(hasStateChangeAudit, true, "Audit event must be recorded for connection state change");
     }

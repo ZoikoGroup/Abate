@@ -1,7 +1,7 @@
 // backend/tools/test-fast.ts
 import assert from "node:assert";
 import { CreateOrganizationBody } from "../src/contracts";
-import { createDevToken, authenticate } from "../src/domains/tenant/auth";
+import { createDevToken, authenticate, authorize, canActorPerform } from "../src/domains/tenant/auth";
 import { computeRequestHash } from "../src/platform/command";
 import { AppError } from "../src/platform/errors";
 import { GOLDEN_01 } from "../src/fixtures/golden01";
@@ -334,6 +334,40 @@ async function runTests() {
 
     const h = await store.health();
     assert.strictEqual(h.ok, true);
+  });
+
+  it("BE-004 Single RBAC Permission Registry enforces command roles, APPROVER, unknown-command deny, and prohibited purposes", () => {
+    const mkActor = (role: string) => ({
+      principalId: "00000000-0000-4000-a002-000000000099",
+      tenantId: GOLDEN_01.tenantA.id,
+      memberships: [{ organization_id: "00000000-0000-4000-a001-000000000001", domain_role: role }]
+    });
+
+    // APPROVER can approve controls, VIEWER cannot mutate sector profile or approve
+    assert.strictEqual(canActorPerform(mkActor("APPROVER"), "control.approve"), true);
+    assert.strictEqual(canActorPerform(mkActor("VIEWER"), "control.approve"), false);
+    assert.strictEqual(canActorPerform(mkActor("VIEWER"), "entitlements.read"), true);
+    assert.strictEqual(canActorPerform(mkActor("MEMBER"), "entitlements.read"), false);
+    assert.strictEqual(canActorPerform(mkActor("REVIEWER"), "tenant.sector_profile.set"), false);
+    assert.strictEqual(canActorPerform(mkActor("EMPLOYER_ADMIN"), "tenant.sector_profile.set"), true);
+
+    // Unknown command fails closed
+    assert.throws(
+      () => authorize(mkActor("RISK_OWNER"), "unregistered.dangerous.command"),
+      (err: any) => err instanceof AppError && err.code === "FORBIDDEN"
+    );
+
+    // Prohibited purpose fails closed even for RISK_OWNER
+    assert.throws(
+      () => authorize(mkActor("RISK_OWNER"), "entitlements.read", undefined, "INDIVIDUAL_SCORING"),
+      (err: any) => err instanceof AppError && err.code === "FORBIDDEN"
+    );
+
+    // Foreign tenant resource returns 404 NOT_FOUND (never reveals existence)
+    assert.throws(
+      () => authorize(mkActor("RISK_OWNER"), "entitlements.read", { tenantId: GOLDEN_01.tenantB.id }),
+      (err: any) => err instanceof AppError && err.code === "NOT_FOUND"
+    );
   });
 
   console.log(`\x1b[32m[SUCCESS] ${passed} fast unit and policy tests passed.\x1b[0m`);

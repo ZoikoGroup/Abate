@@ -709,6 +709,56 @@ export async function seedTwoTenants(opts: SeedTwoTenantsOptions = {}) {
           );
         }
 
+        // Phase 6 Bounded AI use cases & Safe Action tool catalog (parity with memDb)
+        await client.query("BEGIN");
+        try {
+          for (const uc of [explainUseCase, causeUseCase, controlUseCase]) {
+            await client.query(
+              `INSERT INTO ai_use_case (
+                 key, version, purpose, allowed_inputs, output_schema_ref,
+                 prompt_version, model_ref, provider_region, max_steps,
+                 max_input_tokens, max_output_tokens, timeout_ms,
+                 monthly_budget_minor, enabled, eval_thresholds
+               ) VALUES ($1, $2, $3, $4::jsonb, $5, $6, $7, $8, $9, $10, $11, $12, $13, $14, $15::jsonb)
+               ON CONFLICT (key, version) DO UPDATE SET
+                 monthly_budget_minor = EXCLUDED.monthly_budget_minor,
+                 enabled = EXCLUDED.enabled,
+                 eval_thresholds = EXCLUDED.eval_thresholds`,
+              [
+                uc.key,
+                uc.version,
+                uc.purpose,
+                JSON.stringify(uc.allowed_inputs),
+                uc.output_schema_ref,
+                uc.prompt_version,
+                uc.model_ref,
+                uc.provider_region,
+                uc.max_steps,
+                uc.max_input_tokens,
+                uc.max_output_tokens,
+                uc.timeout_ms,
+                uc.monthly_budget_minor,
+                uc.enabled,
+                JSON.stringify(uc.eval_thresholds)
+              ]
+            );
+          }
+          for (const tc of memDb.toolCatalog.values()) {
+            await client.query(
+              `INSERT INTO tool_catalog (tool, schema_ref, enabled)
+               VALUES ($1, $2, $3)
+               ON CONFLICT (tool) DO UPDATE SET
+                 schema_ref = EXCLUDED.schema_ref,
+                 enabled = EXCLUDED.enabled`,
+              [tc.tool, tc.schema_ref, tc.enabled]
+            );
+          }
+          await client.query("COMMIT");
+        } catch (aiSeedErr) {
+          await client.query("ROLLBACK");
+          throw aiSeedErr;
+        }
+
         // Global approved metric and prototype outcome definitions (Plane A & Plane B parity with memDb)
         await client.query("BEGIN");
         try {

@@ -31,7 +31,7 @@ const ALLOWED: Record<string, string> = {
   "backend/src/domains/ai/run.ts": "the prohibited-request screen lists people nouns for every sector",
   "backend/src/contracts/retention.ts": "deprecated matterRef alias of the neutral hold reference",
   "backend/src/domains/lifecycle/retention.ts": "stored column name matter_ref, kept until a safe migration",
-  "backend/src/platform/db/with-tenant.ts": "in-memory store mirrors the stored matter_ref column",
+  "backend/src/platform/db/mem-db.ts": "in-memory store mirrors the stored matter_ref column",
   "backend/src/contracts/openapi.ts": "documents the legal alias routes",
   "frontend/src/api/client.ts": "deprecated matter_ref field on the hold view, demo tenant names",
   "frontend/src/components/Tabs/RetentionTab.tsx": "falls back to the deprecated matter_ref field",

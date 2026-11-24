@@ -168,6 +168,41 @@ test.describe("Stage B Item 6: Hardened OIDC Session Login & Dev Token Lockdown 
         timeout: 10_000
       });
 
+      // Production-clean nav in hardened OIDC mode: Dashboard present, dev attack labs hidden, no "(Phase N)" labels
+      await expect(page.getByRole("button", { name: "Dashboard", exact: true })).toBeVisible();
+      await expect(page.getByRole("button", { name: /Tenant Isolation & Attack Lab/i })).toHaveCount(0);
+      await expect(page.getByRole("button", { name: /Transactional Outbox/i })).toHaveCount(0);
+      await expect(page.getByRole("button", { name: /\(Phase \d\)/i })).toHaveCount(0);
+
+      // Navigate to Dashboard and verify health + authorized workspace tiles render
+      await page.getByRole("button", { name: "Dashboard", exact: true }).click();
+      await expect(page.getByRole("heading", { name: /Platform Dashboard/i })).toBeVisible();
+      await expect(page.getByRole("heading", { name: /Authorized Workspaces/i })).toBeVisible();
+
+      // Navigate to Bounded AI & Actions and verify kill switches are read-only in hardened OIDC mode
+      await page.getByRole("button", { name: "Bounded AI & Actions", exact: true }).click();
+      await expect(page.getByText(/Read-only for tenant sessions/i).first()).toBeVisible();
+
+      // Navigate to Operations & Support and sign in with a real RS256 Support OIDC JWT
+      await page.getByRole("button", { name: "Operations & Support", exact: true }).click();
+      await expect(page.locator("#ops-support-jwt")).toBeVisible();
+      const supportOidcJwt = signRs256Jwt(
+        {
+          sub: "ops.pilot-oncall",
+          scope: "platform-support",
+          iss: ISSUER,
+          aud: `${AUDIENCE}:support`,
+          iat: nowSec,
+          exp: nowSec + 600
+        },
+        privateKey
+      );
+      await page.locator("#ops-support-jwt").fill(supportOidcJwt);
+      const sloPromise = page.waitForResponse((r) => r.url().includes("/api/v2/ops/slo") && r.request().method() === "GET");
+      await page.getByRole("button", { name: /Connect with Support OIDC JWT/i }).click();
+      expect((await sloPromise).status()).toBe(200);
+      await expect(page.getByText(/Support OIDC session verified/i)).toBeVisible();
+
       const cookies = await context.cookies(FRONTEND_URL);
       const sessionCookie = cookies.find((c) => c.name === "abate_session");
       expect(sessionCookie).toBeTruthy();

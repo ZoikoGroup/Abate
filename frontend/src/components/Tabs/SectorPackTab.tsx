@@ -3,7 +3,7 @@
 // for the tenant's active sector pack. All wording, units and decoy fields come from the pack
 // through the sector profile, so this component holds no sector-specific text.
 
-import { useState, useEffect, useCallback } from "react";
+import { useState, useEffect } from "react";
 import {
   ApiError,
   fetchSectorWorkItems,
@@ -74,7 +74,7 @@ export function SectorPackTab({ currentTenant, token, sectorProfile }: SectorPac
   const [injected, setInjected] = useState<Record<string, boolean>>({});
   const [boundaryRejectionResult, setBoundaryRejectionResult] = useState<string | null>(null);
 
-  const loadItems = useCallback(async () => {
+  const loadItems = async () => {
     if (!token) return;
     setLoading(true);
     setErrorMsg(null);
@@ -89,7 +89,7 @@ export function SectorPackTab({ currentTenant, token, sectorProfile }: SectorPac
     } finally {
       setLoading(false);
     }
-  }, [token, selected, workItemsLower]);
+  };
 
   useEffect(() => {
     if (!token) return;

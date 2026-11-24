@@ -1,10 +1,6 @@
 // backend/src/routes/planes.ts
-// Domain S13 & S14: Phase 7 Feature Flags, Work-Design Outcomes (Plane B), and AI Change Assessments.
 import type { Express, Request, Response } from "express";
 import { toErrorResponse, AppError } from "../platform/errors";
-import { withTenant } from "../platform/db/with-tenant";
-import { authenticate, resolveActor } from "../domains/tenant/auth";
-import { getRelease } from "../domains/privacy";
 import {
   CreateOutcomeDefinitionInput,
   EvaluateOutcomeInput,
@@ -12,6 +8,7 @@ import {
   CreateAiChangeProfileInput,
   AdvanceAssessmentInput
 } from "../contracts";
+import { authenticate, resolveActor, authorize } from "../domains/tenant/auth";
 import {
   setFeatureFlag,
   listFeatureFlags,
@@ -31,13 +28,13 @@ import {
   getAssessment,
   listAssessments
 } from "../domains/aichange";
+import { getRelease } from "../domains/privacy";
+import { canTenantFeature } from "../domains/lifecycle";
+import { withTenant, withPerformance } from "../platform/db/with-tenant";
+import { getHeader } from "./helpers";
 
-export interface PlanesRouteDeps {
-  getHeader: (req: Request, name: string) => string | null;
-}
-
-export function registerPlanesRoutes(app: Express, deps: PlanesRouteDeps): void {
-  const { getHeader } = deps;
+export function registerPlanesRoutes(app: Express): void {
+  // -------------------------------------------------------------
 
   // Feature Flags: list and toggle
   app.get("/api/v2/flags", async (req: Request, res: Response) => {
@@ -74,7 +71,7 @@ export function registerPlanesRoutes(app: Express, deps: PlanesRouteDeps): void 
   app.post("/api/v2/outcomes/definitions", async (req: Request, res: Response) => {
     try {
       const who = await authenticate(getHeader(req, "authorization"));
-      await resolveActor(who.tenantId, who.subject, new Date(), who.role);
+      const actor = await resolveActor(who.tenantId, who.subject, new Date(), who.role);
       const input = CreateOutcomeDefinitionInput.parse(req.body);
       const out = await withTenant(who.tenantId, async (tx) => {
         await requireFeatureFlag(tx, who.tenantId, "outcomes_plane_b");
@@ -126,19 +123,15 @@ export function registerPlanesRoutes(app: Express, deps: PlanesRouteDeps): void 
     }
   });
 
-  // Domain S13: Outcomes Evaluations (Plane B - runs with write_plane = 'B')
+  // Domain S13: Outcomes Evaluations (Plane B - runs on abate_performance pool with write_plane = 'B')
   app.post("/api/v2/outcomes/evaluations", async (req: Request, res: Response) => {
     try {
       const who = await authenticate(getHeader(req, "authorization"));
       const actor = await resolveActor(who.tenantId, who.subject, new Date(), who.role);
       const input = EvaluateOutcomeInput.parse(req.body);
-      const out = await withTenant(
-        who.tenantId,
-        async (tx) => {
-          return await evaluateOutcome(tx, actor, input);
-        },
-        { writePlane: "B" } // Enforce Plane B write context
-      );
+      const out = await withPerformance(who.tenantId, async (tx) => {
+        return await evaluateOutcome(tx, actor, input);
+      });
       res.status(201).json(out);
     } catch (err) {
       toErrorResponse(err, res);
@@ -149,7 +142,7 @@ export function registerPlanesRoutes(app: Express, deps: PlanesRouteDeps): void 
     try {
       const who = await authenticate(getHeader(req, "authorization"));
       await resolveActor(who.tenantId, who.subject, new Date(), who.role);
-      const out = await withTenant(who.tenantId, async (tx) => {
+      const out = await withPerformance(who.tenantId, async (tx) => {
         return await listOutcomeEvaluations(tx, who.tenantId);
       });
       res.status(200).json(out);
@@ -162,7 +155,7 @@ export function registerPlanesRoutes(app: Express, deps: PlanesRouteDeps): void 
     try {
       const who = await authenticate(getHeader(req, "authorization"));
       await resolveActor(who.tenantId, who.subject, new Date(), who.role);
-      const out = await withTenant(who.tenantId, async (tx) => {
+      const out = await withPerformance(who.tenantId, async (tx) => {
         return await getOutcomeEvaluation(tx, who.tenantId, String(req.params.id));
       });
       res.status(200).json(out);
@@ -183,13 +176,13 @@ export function registerPlanesRoutes(app: Express, deps: PlanesRouteDeps): void 
     }
   });
 
-  // Domain S14: AI Change Profiles & Assessments
+  // Domain S14: AI Change Profiles & Assessments (abate_performance pool)
   app.post("/api/v2/ai-changes", async (req: Request, res: Response) => {
     try {
       const who = await authenticate(getHeader(req, "authorization"));
       const actor = await resolveActor(who.tenantId, who.subject, new Date(), who.role);
       const input = CreateAiChangeProfileInput.parse(req.body);
-      const out = await withTenant(who.tenantId, async (tx) => {
+      const out = await withPerformance(who.tenantId, async (tx) => {
         const profile = await registerAiChangeProfile(tx, actor, input);
         const assessment = await createAssessment(tx, actor, { profileId: profile.id, profileVersion: profile.version });
         return { profile, assessment };
@@ -204,7 +197,7 @@ export function registerPlanesRoutes(app: Express, deps: PlanesRouteDeps): void 
     try {
       const who = await authenticate(getHeader(req, "authorization"));
       await resolveActor(who.tenantId, who.subject, new Date(), who.role);
-      const out = await withTenant(who.tenantId, async (tx) => {
+      const out = await withPerformance(who.tenantId, async (tx) => {
         return await listAssessments(tx, who.tenantId);
       });
       res.status(200).json(out);
@@ -217,7 +210,7 @@ export function registerPlanesRoutes(app: Express, deps: PlanesRouteDeps): void 
     try {
       const who = await authenticate(getHeader(req, "authorization"));
       await resolveActor(who.tenantId, who.subject, new Date(), who.role);
-      const out = await withTenant(who.tenantId, async (tx) => {
+      const out = await withPerformance(who.tenantId, async (tx) => {
         return await getAssessment(tx, who.tenantId, String(req.params.id));
       });
       res.status(200).json(out);
@@ -236,7 +229,7 @@ export function registerPlanesRoutes(app: Express, deps: PlanesRouteDeps): void 
         throw new AppError("VALIDATION", "Header 'If-Match' (or body.version) is required for stage advance.");
       }
       const input = AdvanceAssessmentInput.parse(req.body);
-      const out = await withTenant(who.tenantId, async (tx) => {
+      const out = await withPerformance(who.tenantId, async (tx) => {
         return await advanceAssessment(tx, actor, String(req.params.id), input.to, ifMatch, input);
       });
       res.status(200).json(out);
@@ -244,4 +237,5 @@ export function registerPlanesRoutes(app: Express, deps: PlanesRouteDeps): void 
       toErrorResponse(err, res);
     }
   });
+
 }

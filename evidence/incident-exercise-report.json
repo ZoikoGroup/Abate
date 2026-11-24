@@ -1,18 +1,18 @@
 {
   "schema": "abate.incident-exercise.v1",
-  "generatedAt": "2026-11-20T11:27:36.760Z",
+  "generatedAt": "2026-11-24T05:30:48.931Z",
   "incidentLead": "incident.lead.sre",
   "scenario": "Prohibited surveillance decoy transmitted by connector -> scoped kill-switch containment -> forensic check -> recovery",
   "containedScope": "connector:zoikotime",
   "timestamps": {
-    "startedAt": "2026-11-20T11:27:36.615Z",
-    "detectedAt": "2026-11-20T11:27:36.702Z",
-    "containedAt": "2026-11-20T11:27:36.706Z",
-    "recoveredAt": "2026-11-20T11:27:36.760Z"
+    "startedAt": "2026-11-24T05:30:48.857Z",
+    "detectedAt": "2026-11-24T05:30:48.900Z",
+    "containedAt": "2026-11-24T05:30:48.903Z",
+    "recoveredAt": "2026-11-24T05:30:48.931Z"
   },
-  "timeToDetectMs": 87,
-  "timeToContainMs": 4,
-  "timeToRecoverMs": 54,
+  "timeToDetectMs": 43,
+  "timeToContainMs": 3,
+  "timeToRecoverMs": 28,
   "telemetryLeakCount": 0,
   "unaffectedPathStatus": 200,
   "containedPathStatus": 503,

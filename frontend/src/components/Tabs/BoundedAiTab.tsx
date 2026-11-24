@@ -31,9 +31,10 @@ function fmtBoundedAiErr(err: unknown): string {
 interface BoundedAiTabProps {
   currentTenant: typeof PRESET_TENANTS[0];
   token: string | null;
+  devTokenEnabled?: boolean;
 }
 
-export function BoundedAiTab({ currentTenant, token }: BoundedAiTabProps) {
+export function BoundedAiTab({ currentTenant, token, devTokenEnabled = true }: BoundedAiTabProps) {
   const [runs, setRuns] = useState<AiRunView[]>([]);
   const [killSwitches, setKillSwitches] = useState<KillSwitchRecord[]>([]);
   const [quota, setQuota] = useState<AiQuotaStatus | null>(null);
@@ -522,15 +523,21 @@ export function BoundedAiTab({ currentTenant, token }: BoundedAiTabProps) {
                   </span>
                 </div>
                 <p style={{ fontSize: "0.775rem", color: "#64748B", margin: "0 0 0.6rem 0" }}>{item.desc}</p>
-                <button
-                  type="button"
-                  onClick={() => handleToggleKillSwitch(item.scope, active)}
-                  disabled={loading}
-                  className={`btn btn-sm ${active ? "btn-secondary" : "btn-danger"}`}
-                  style={{ width: "100%", fontSize: "0.75rem" }}
-                >
-                  {active ? "Re-enable Service" : "Kill / Disable Immediately"}
-                </button>
+                {devTokenEnabled ? (
+                  <button
+                    type="button"
+                    onClick={() => handleToggleKillSwitch(item.scope, active)}
+                    disabled={loading}
+                    className={`btn btn-sm ${active ? "btn-secondary" : "btn-danger"}`}
+                    style={{ width: "100%", fontSize: "0.75rem" }}
+                  >
+                    {active ? "Re-enable Service" : "Kill / Disable Immediately"}
+                  </button>
+                ) : (
+                  <div className="text-sm text-muted" style={{ fontSize: "0.75rem" }}>
+                    Read-only for tenant sessions (<code>canToggle: false</code>). Use <strong>Operations &amp; Support</strong> with a Support OIDC JWT.
+                  </div>
+                )}
               </div>
             );
           })}

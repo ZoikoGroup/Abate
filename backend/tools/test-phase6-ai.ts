@@ -21,7 +21,7 @@ import { PassThrough } from "node:stream";
 import { GOLDEN_01 } from "../src/fixtures/golden01";
 import { seedTwoTenants } from "../src/fixtures/seed";
 import { createDevToken, authenticate, resolveActor } from "../src/domains/tenant/auth";
-import { withTenant, memDb } from "../src/platform/db/with-tenant";
+import { checkPgHealth, migratorPool, withOps, withTenant } from "../src/platform/db/with-tenant";
 import { seedApprovedKnowledge } from "../src/domains/ai/retrieve";
 import { runAiUseCase, isProhibitedRequest, getMonthlySpendMinor, getAiQuotaStatus } from "../src/domains/ai/run";
 import { validateOutput } from "../src/domains/ai/validate";
@@ -55,11 +55,36 @@ const isCode = (code: string) => (err: any) => err?.code === code || (err instan
 
 async function main() {
   // Step 0: Seed base multi-tenant environment
+  let pgLive = false;
   await runTest("Setup: Seed isolated two-tenant environment", async () => {
-    await seedTwoTenants();
+    pgLive = await checkPgHealth();
+    await seedTwoTenants({ persistToPostgres: pgLive });
   });
 
   const tenantAId = GOLDEN_01.tenantA.id;
+  const getExplainUseCaseBudget = async (): Promise<number> => {
+    const row = await withTenant(
+      tenantAId,
+      async (tx) => (await tx.q("SELECT monthly_budget_minor FROM ai_use_case WHERE key = $1", ["explain_release"])).rows[0]
+    );
+    assert.ok(row, "seeded explain_release use case row must exist");
+    return Number(row.monthly_budget_minor);
+  };
+  const setExplainUseCaseBudget = async (budgetMinor: number): Promise<void> => {
+    if (pgLive && migratorPool) {
+      await migratorPool.query(
+        "UPDATE ai_use_case SET monthly_budget_minor = $1 WHERE key = $2 AND version = $3",
+        [budgetMinor, "explain_release", 1]
+      );
+      return;
+    }
+    await withOps(async (tx) => {
+      await tx.q(
+        "UPDATE ai_use_case SET monthly_budget_minor = $1 WHERE key = $2 AND version = $3",
+        [budgetMinor, "explain_release", 1]
+      );
+    });
+  };
   const tokenA = createDevToken({
     tenantId: tenantAId,
     subject: "auth0|user-tenant-a-risk-owner",
@@ -213,26 +238,34 @@ async function main() {
 
   // Test 8: Kill switch disables AI immediately while manual controls remain operational
   await runTest("Test 8: Kill switch disables AI immediately; manual control cycle remains operational", async () => {
-    await withTenant(tenantAId, async (tx) => {
-      // Activate AI kill switch
+    // Activate AI kill switch via abate_ops
+    await withOps(async (tx) => {
       await setKillSwitch(tx, "all_ai", true, "ops.admin");
-
-      // AI pipeline throws UNAVAILABLE
-      await assert.rejects(async () => {
-        await runAiUseCase(tx, actorA, "explain_release", {
-          contextRefs: [{ type: "RELEASE", id: "00000000-0000-4000-a003-000000000001" }],
-          question: "Explain"
-        });
-      }, isCode("UNAVAILABLE"));
-
-      // Restore kill switch
-      await setKillSwitch(tx, "all_ai", false, "ops.admin");
     });
+
+    try {
+      await withTenant(tenantAId, async (tx) => {
+        // AI pipeline throws UNAVAILABLE
+        await assert.rejects(async () => {
+          await runAiUseCase(tx, actorA, "explain_release", {
+            contextRefs: [{ type: "RELEASE", id: "00000000-0000-4000-a003-000000000001" }],
+            question: "Explain"
+          });
+        }, isCode("UNAVAILABLE"));
+      });
+    } finally {
+      // Restore kill switch
+      await withOps(async (tx) => {
+        await setKillSwitch(tx, "all_ai", false, "ops.admin");
+      });
+    }
   });
 
   // Test 9: Transaction rollback isolation for Phase 6 tables
   await runTest("Test 9: Aborted transactions leave zero Phase 6 rows behind", async () => {
-    const before = memDb.actionAttempts.size;
+    const countAttempts = () =>
+      withTenant(tenantAId, async (tx) => Number((await tx.q("SELECT COUNT(*)::int AS count FROM action_attempt")).rows[0]?.count ?? 0));
+    const before = await countAttempts();
     await assert.rejects(() => withTenant(tenantAId, async (tx) => {
       await createActionAttempt(tx, {
         tool: "review_spy",
@@ -242,7 +275,7 @@ async function main() {
       });
       throw new Error("abort after write");
     }));
-    assert.strictEqual(memDb.actionAttempts.size, before, "Rollback must clean up action_attempt map");
+    assert.strictEqual(await countAttempts(), before, "Rollback must clean up action_attempt rows");
   });
 
   // Test 10: Request screening survives rewording, casing, punctuation and Hinglish; legitimate asks still pass
@@ -322,9 +355,7 @@ async function main() {
   // Test 12: Budget is durable (derived from ai_run) and per tenant
   await runTest("Test 12: Monthly AI budget is read from ai_run per tenant; one tenant exhausting it does not block another", async () => {
     // loadUseCase prefers the seeded ai_use_case row over the code default, so adjust the row the run will actually read
-    const ucRow = memDb.aiUseCases.get("explain_release:1");
-    assert.ok(ucRow, "seeded explain_release use case row must exist");
-    const originalBudget = ucRow.monthly_budget_minor;
+    const originalBudget = await getExplainUseCaseBudget();
     const tenantBId = GOLDEN_01.tenantB.id;
     const whoB = await authenticate(`Bearer ${createDevToken({ tenantId: tenantBId, subject: "auth0|user-tenant-b-risk-owner", role: "RISK_OWNER" })}`);
     const actorB = await resolveActor(whoB.tenantId, whoB.subject);
@@ -335,7 +366,7 @@ async function main() {
       assert.ok(spentA > 0, "earlier runs in this suite must already show up as durable spend");
 
       // Room for exactly one more call (estimate is 10, a default-run costs 3)
-      ucRow.monthly_budget_minor = spentA + 12;
+      await setExplainUseCaseBudget(spentA + 12);
 
       await withTenant(tenantAId, async (tx) => {
         const first = await runAiUseCase(tx, actorA, "explain_release", { contextRefs: refs, question: "Explain" });
@@ -357,21 +388,18 @@ async function main() {
         assert.ok(res.id, "Tenant B call must go through");
       });
     } finally {
-      const currentUcRow = memDb.aiUseCases.get("explain_release:1");
-      if (currentUcRow) currentUcRow.monthly_budget_minor = originalBudget;
+      await setExplainUseCaseBudget(originalBudget);
     }
   });
 
   // Test 13: Strict budget under concurrency (advisory lock serialises reads of the remaining budget)
   await runTest("Test 13: Concurrent AI calls cannot overshoot the monthly budget (strict lock)", async () => {
-    const ucRow = memDb.aiUseCases.get("explain_release:1");
-    assert.ok(ucRow);
-    const originalBudget = ucRow.monthly_budget_minor;
+    const originalBudget = await getExplainUseCaseBudget();
     const refs = [{ type: "RELEASE" as const, id: "00000000-0000-4000-a003-000000000001" }];
     try {
       const spent = await withTenant(tenantAId, tx => getMonthlySpendMinor(tx, "explain_release"));
       // Room for exactly one more call (estimate 10, a default run costs 3)
-      ucRow.monthly_budget_minor = spent + 12;
+      await setExplainUseCaseBudget(spent + 12);
 
       const results = await Promise.allSettled(
         Array.from({ length: 4 }, () =>
@@ -386,8 +414,7 @@ async function main() {
       const after = await withTenant(tenantAId, tx => getMonthlySpendMinor(tx, "explain_release"));
       assert.ok(after <= spent + 12, `spend ${after} must not exceed budget ${spent + 12}`);
     } finally {
-      const currentUcRow = memDb.aiUseCases.get("explain_release:1");
-      if (currentUcRow) currentUcRow.monthly_budget_minor = originalBudget;
+      await setExplainUseCaseBudget(originalBudget);
     }
   });
 
@@ -437,8 +464,7 @@ async function main() {
         (app as any)(req, res);
       });
 
-    const ucRow = memDb.aiUseCases.get("explain_release:1")!;
-    const originalBudget = ucRow.monthly_budget_minor;
+    const originalBudget = await getExplainUseCaseBudget();
     const tokenA = createDevToken({ tenantId: tenantAId, subject: "auth0|user-tenant-a-risk-owner", role: "RISK_OWNER" });
     const releaseId = "00000000-0000-4000-a003-000000000001";
 
@@ -475,7 +501,7 @@ async function main() {
       assert.strictEqual(rConflict.status, 409);
 
       // 2. Over-limit HTTP call returns 429 RATE_LIMITED + Retry-After header
-      memDb.aiUseCases.get("explain_release:1")!.monthly_budget_minor = afterReplay + 5; // below estimated 10
+      await setExplainUseCaseBudget(afterReplay + 5); // below estimated 10
       const rQuota = await dispatchApp("POST", "/api/v2/ai/explain-release", {
         token: tokenA,
         body: { releaseId, question: "Explain" }
@@ -495,8 +521,7 @@ async function main() {
       const quotaCheckDirect = await withTenant(tenantAId, tx => getAiQuotaStatus(tx));
       assert.strictEqual(quotaCheckDirect.tenantId, tenantAId);
     } finally {
-      const currentUcRow = memDb.aiUseCases.get("explain_release:1");
-      if (currentUcRow) currentUcRow.monthly_budget_minor = originalBudget;
+      await setExplainUseCaseBudget(originalBudget);
     }
   });
 

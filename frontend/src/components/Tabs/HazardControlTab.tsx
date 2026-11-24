@@ -1,6 +1,5 @@
 // frontend/src/components/Tabs/HazardControlTab.tsx
 import { useState, useEffect } from "react";
-import { AiPanel } from "../AiPanel";
 import {
   ApiError,
   type Hazard,
@@ -32,6 +31,12 @@ import {
 } from "../../api/client";
 import { getSectorUi, getSectorVocabulary, isSectorPackActive, labelFor } from "../../utils/vocabulary";
 import { StateView } from "../StateView";
+import { HazardWorkspaceCard } from "./hazards/HazardWorkspaceCard";
+import { HazardCausesCard } from "./hazards/HazardCausesCard";
+import { HazardControlLifecycleCard } from "./hazards/HazardControlLifecycleCard";
+import { HazardVerificationCard, type VerificationOutcome } from "./hazards/HazardVerificationCard";
+import { HazardEvidenceExportCard } from "./hazards/HazardEvidenceExportCard";
+import { HazardRefusalLabCard } from "./hazards/HazardRefusalLabCard";
 
 function fmtHazardErr(err: unknown): string {
   if (err instanceof ApiError) {
@@ -66,7 +71,7 @@ export function HazardControlTab({ currentTenant, token, sectorProfile }: Hazard
   const [newControlDueDate, setNewControlDueDate] = useState("2026-05-15");
   const [newImplementationKind, setNewImplementationKind] = useState("MANUAL");
   const [newEvidenceRef, setNewEvidenceRef] = useState("doc:policy-scheduled-delivery-v1");
-  const [concludeOutcome, setConcludeOutcome] = useState<"EFFECTIVE" | "PARTIALLY_EFFECTIVE" | "NOT_EFFECTIVE" | "INCONCLUSIVE">("EFFECTIVE");
+  const [concludeOutcome, setConcludeOutcome] = useState<VerificationOutcome>("EFFECTIVE");
   const [concludeResidualRisk, setConcludeResidualRisk] = useState("Residual boundary intrusion reduced below 15% threshold; monitor during quarterly filing cycle.");
 
   // Disposition Form
@@ -905,229 +910,49 @@ export function HazardControlTab({ currentTenant, token, sectorProfile }: Hazard
         {/* LEFT COLUMN: Hazard & Causes */}
         <div style={{ display: "flex", flexDirection: "column", gap: "1.5rem" }}>
 
-          {/* Hazard Registration & Selection */}
-          <div className="card">
-            <div className="card-header">
-              <div>
-                <h3>Hazard Workspace</h3>
-                <p className="card-desc">Authoritative hazards rooted in privacy-released cohort evidence.</p>
-              </div>
-              <span className="badge badge-coral">{hazards.length} HAZARDS</span>
-            </div>
+          <HazardWorkspaceCard
+            hazards={hazards}
+            selectedHazardId={selectedHazardId}
+            hazardDetail={hazardDetail}
+            token={token}
+            loading={loading}
+            newHazardTitle={newHazardTitle}
+            newOriginatingReleaseId={newOriginatingReleaseId}
+            onSelectHazard={setSelectedHazardId}
+            onChangeTitle={setNewHazardTitle}
+            onChangeReleaseId={setNewOriginatingReleaseId}
+            onCreateHazard={handleCreateHazard}
+            onDraftAccepted={() => {
+              if (selectedHazardId && token) {
+                fetchHazardDetail(selectedHazardId, token)
+                  .then(setHazardDetail)
+                  .catch((err: unknown) => {
+                    setFeedback({
+                      type: "error",
+                      title: "✖ FAILED TO REFRESH HAZARD DETAIL",
+                      details: fmtHazardErr(err)
+                    });
+                  });
+              }
+            }}
+          />
 
-            {/* Selector */}
-            <div className="form-group" style={{ marginBottom: "1rem" }}>
-              <label htmlFor="active-hazard-select" className="form-label">Active Hazard</label>
-              <select
-                id="active-hazard-select"
-                value={selectedHazardId || ""}
-                onChange={e => setSelectedHazardId(e.target.value)}
-                className="select-control"
-                style={{ width: "100%", background: "#FFFFFF" }}
-              >
-                {hazards.map(h => (
-                  <option key={h.id} value={h.id}>
-                    {h.title} [{h.disposition}] (v{h.version})
-                  </option>
-                ))}
-              </select>
-            </div>
-
-            {/* Selected Hazard Summary */}
-            {hazardDetail && (
-              <div style={{ background: "var(--ivory)", padding: "1rem", borderRadius: "8px", border: "1px solid var(--card-border)" }}>
-                <div style={{ display: "flex", justifyContent: "space-between", alignItems: "center", marginBottom: "0.5rem" }}>
-                  <span style={{ fontWeight: 700, fontSize: "0.95rem" }}>{hazardDetail.hazard.title}</span>
-                  <span className={`badge ${hazardDetail.hazard.disposition === "CONTROLLED" ? "badge-success" : "badge-coral"}`}>
-                    {hazardDetail.hazard.disposition}
-                  </span>
-                </div>
-                <div style={{ fontSize: "0.8rem", color: "var(--muted-text)", display: "flex", flexDirection: "column", gap: "0.25rem" }}>
-                  <div>Originating Release: <code className="monospace">{hazardDetail.hazard.originating_release_id}</code></div>
-                  <div>Owner Principal: <code className="monospace">{hazardDetail.hazard.owner_principal_id}</code></div>
-                  <div>Causes: {hazardDetail.causes.length} | Controls: {hazardDetail.controls.length}</div>
-                </div>
-                {hazardDetail.hazard.originating_release_id && (
-                  <AiPanel
-                    releaseId={hazardDetail.hazard.originating_release_id}
-                    hazardId={hazardDetail.hazard.id}
-                    token={token}
-                    onDraftAccepted={() => {
-                      if (selectedHazardId && token) {
-                        fetchHazardDetail(selectedHazardId, token)
-                          .then(setHazardDetail)
-                          .catch((err: unknown) => {
-                            setFeedback({
-                              type: "error",
-                              title: "✖ FAILED TO REFRESH HAZARD DETAIL",
-                              details: fmtHazardErr(err)
-                            });
-                          });
-                      }
-                    }}
-                  />
-                )}
-              </div>
-            )}
-
-            {/* Create New Hazard Form */}
-            <form onSubmit={handleCreateHazard} style={{ marginTop: "1rem", paddingTop: "1rem", borderTop: "1px solid var(--card-border)" }}>
-              <div style={{ fontSize: "0.85rem", fontWeight: 700, marginBottom: "0.5rem" }}>Register New Hazard</div>
-              <div className="form-group">
-                <input
-                  aria-label="New hazard title"
-                  type="text"
-                  value={newHazardTitle}
-                  onChange={e => setNewHazardTitle(e.target.value)}
-                  placeholder="Hazard Title"
-                  className="text-control"
-                  style={{ width: "100%", marginBottom: "0.5rem" }}
-                  required
-                />
-                <input
-                  aria-label="Originating release ID"
-                  type="text"
-                  value={newOriginatingReleaseId}
-                  onChange={e => setNewOriginatingReleaseId(e.target.value)}
-                  placeholder="Originating Release ID"
-                  className="text-control monospace"
-                  style={{ width: "100%", marginBottom: "0.25rem" }}
-                  required
-                />
-                <div style={{ display: "flex", justifyContent: "space-between", alignItems: "center", marginBottom: "0.5rem" }}>
-                  <small style={{ color: "var(--muted)", fontSize: "0.75rem" }}>
-                    Must reference an approved cohort release ID.
-                  </small>
-                  <button
-                    type="button"
-                    onClick={() => setNewOriginatingReleaseId(BASELINE_RELEASE_ID)}
-                    style={{ background: "none", border: "none", color: "var(--coral)", cursor: "pointer", fontSize: "0.75rem", padding: 0, textDecoration: "underline" }}
-                  >
-                    Use Seeded Baseline
-                  </button>
-                </div>
-              </div>
-              <button type="submit" disabled={loading} className="btn btn-primary" style={{ width: "100%" }}>
-                + Register Authoritative Hazard
-              </button>
-            </form>
-          </div>
-
-          {/* Organizational Causes */}
-          <div className="card">
-            <div className="card-header">
-              <div>
-                <h3>Organizational Causes</h3>
-                <p className="card-desc">Work-design factors (routing, pacing, staffing). No individual worker blame.</p>
-              </div>
-              <span className="badge badge-aubergine">{hazardDetail?.causes.length || 0} CAUSES</span>
-            </div>
-
-            {/* Cause List */}
-            <div style={{ display: "flex", flexDirection: "column", gap: "0.75rem", marginBottom: "1rem" }}>
-              {hazardDetail?.causes.map(c => (
-                <div
-                  key={c.id}
-                  style={{
-                    padding: "0.75rem",
-                    borderRadius: "6px",
-                    border: "1px solid var(--card-border)",
-                    background: c.status === "REVIEWED_ACCEPTED" ? "var(--success-bg)" : "#FFFFFF"
-                  }}
-                >
-                  <div style={{ display: "flex", justifyContent: "space-between", alignItems: "flex-start", marginBottom: "0.25rem" }}>
-                    <div style={{ fontSize: "0.88rem", fontWeight: 600 }}>{c.statement}</div>
-                    <span className={`badge ${c.status === "REVIEWED_ACCEPTED" ? "badge-success" : c.status === "REVIEWED_REJECTED" ? "badge-secondary" : "badge-coral"}`}>
-                      {c.status}
-                    </span>
-                  </div>
-                  <div style={{ fontSize: "0.75rem", color: "var(--muted-text)", marginBottom: "0.5rem" }}>
-                    Cause ID: <span className="monospace">{c.id.slice(0, 8)}</span> | Version: {c.version}
-                  </div>
-                  {c.status === "PROPOSED" && (
-                    <div style={{ display: "flex", gap: "0.5rem" }}>
-                      <button
-                        type="button"
-                        onClick={() => handleReviewCause(c.id, "REVIEWED_ACCEPTED")}
-                        className="btn btn-sm btn-success"
-                      >
-                        ✔ Accept Cause
-                      </button>
-                      <button
-                        type="button"
-                        onClick={() => handleReviewCause(c.id, "REVIEWED_REJECTED")}
-                        className="btn btn-sm btn-secondary"
-                      >
-                        ✖ Reject
-                      </button>
-                    </div>
-                  )}
-                  {c.status === "REVIEWED_ACCEPTED" && (
-                    <div style={{ marginTop: "0.5rem", borderTop: "1px dashed var(--card-border)", paddingTop: "0.5rem" }}>
-                      <div style={{ fontSize: "0.75rem", fontWeight: 700, color: "var(--graphite)", marginBottom: "0.25rem" }}>
-                        Configure Intervention Parameters:
-                      </div>
-                      <input
-                        aria-label="Intervention scope"
-                        type="text"
-                        value={newControlScope}
-                        onChange={e => setNewControlScope(e.target.value)}
-                        placeholder="Scope"
-                        className="text-control"
-                        style={{ width: "100%", fontSize: "0.8rem", marginBottom: "0.25rem" }}
-                      />
-                      <input
-                        aria-label="Intervention objective"
-                        type="text"
-                        value={newControlObjective}
-                        onChange={e => setNewControlObjective(e.target.value)}
-                        placeholder="Objective"
-                        className="text-control"
-                        style={{ width: "100%", fontSize: "0.8rem", marginBottom: "0.25rem" }}
-                      />
-                      <div style={{ display: "flex", gap: "0.5rem", alignItems: "center", marginBottom: "0.5rem" }}>
-                        <span style={{ fontSize: "0.75rem", color: "var(--muted-text)" }}>Due:</span>
-                        <input
-                          aria-label="Intervention review due date"
-                          type="date"
-                          value={newControlDueDate}
-                          onChange={e => setNewControlDueDate(e.target.value)}
-                          className="text-control monospace"
-                          style={{ fontSize: "0.8rem" }}
-                        />
-                      </div>
-                      <button
-                        type="button"
-                        onClick={() => handleDraftControl(c.id)}
-                        className="btn btn-sm btn-primary"
-                        style={{ width: "100%" }}
-                      >
-                        + Commit Control Draft on Accepted Cause
-                      </button>
-                    </div>
-                  )}
-                </div>
-              ))}
-            </div>
-
-            {/* Propose Cause Form */}
-            <form onSubmit={handleProposeCause} style={{ borderTop: "1px solid var(--card-border)", paddingTop: "1rem" }}>
-              <div style={{ fontSize: "0.85rem", fontWeight: 700, marginBottom: "0.5rem" }}>Propose Work-Design Cause</div>
-              <input
-                aria-label="Operational root cause statement"
-                type="text"
-                value={newCauseStatement}
-                onChange={e => setNewCauseStatement(e.target.value)}
-                placeholder="Operational root cause statement"
-                className="text-control"
-                style={{ width: "100%", marginBottom: "0.5rem" }}
-                required
-              />
-              <button type="submit" disabled={loading || !selectedHazardId} className="btn btn-secondary" style={{ width: "100%" }}>
-                Propose Cause
-              </button>
-            </form>
-          </div>
+          <HazardCausesCard
+            causes={hazardDetail?.causes || []}
+            selectedHazardId={selectedHazardId}
+            loading={loading}
+            newControlScope={newControlScope}
+            newControlObjective={newControlObjective}
+            newControlDueDate={newControlDueDate}
+            newCauseStatement={newCauseStatement}
+            onChangeControlScope={setNewControlScope}
+            onChangeControlObjective={setNewControlObjective}
+            onChangeControlDueDate={setNewControlDueDate}
+            onChangeCauseStatement={setNewCauseStatement}
+            onReviewCause={handleReviewCause}
+            onDraftControl={handleDraftControl}
+            onProposeCause={handleProposeCause}
+          />
 
           {/* Hazard Disposition Selector */}
           <div className="card">
@@ -1201,368 +1026,49 @@ export function HazardControlTab({ currentTenant, token, sectorProfile }: Hazard
         {/* RIGHT COLUMN: Controls, Version-Bound Approval & Verification */}
         <div style={{ display: "flex", flexDirection: "column", gap: "1.5rem" }}>
 
-          {/* Active Control & Version-Bound Approval Card */}
-          <div className="card">
-            <div className="card-header">
-              <div>
-                <h3>Control Intervention &amp; Version-Bound Approval</h3>
-                <p className="card-desc">Enforces version-bound approval: v4 approval cannot approve v5.</p>
-              </div>
-              {selectedControl && (
-                <span className={`badge ${selectedControl.state === "APPROVED" || selectedControl.state === "IMPLEMENTED" || selectedControl.state === "CLOSED" ? "badge-success" : "badge-coral"}`}>
-                  {selectedControl.state}
-                </span>
-              )}
-            </div>
+          <HazardControlLifecycleCard
+            selectedControl={selectedControl}
+            loading={loading}
+            newImplementationKind={newImplementationKind}
+            newEvidenceRef={newEvidenceRef}
+            editScope={editScope}
+            editObjective={editObjective}
+            onChangeImplementationKind={setNewImplementationKind}
+            onChangeEvidenceRef={setNewEvidenceRef}
+            onChangeEditScope={setEditScope}
+            onChangeEditObjective={setEditObjective}
+            onApproveControl={handleApproveControl}
+            onRecordImplementation={handleRecordImplementation}
+            onPinVerification={handlePinVerification}
+            onMaterialEdit={handleMaterialEdit}
+          />
 
-            {selectedControl ? (
-              <div>
-                {/* Control Metadata */}
-                <div style={{ background: "var(--ivory)", padding: "1rem", borderRadius: "8px", marginBottom: "1rem" }}>
-                  <div style={{ display: "flex", justifyContent: "space-between", marginBottom: "0.25rem" }}>
-                    <span style={{ fontWeight: 700 }}>Version {selectedControl.version}</span>
-                    <span className="monospace" style={{ fontSize: "0.8rem", color: "var(--muted-text)" }}>
-                      Hash: {(selectedControl.materialHash || "").slice(0, 16)}...
-                    </span>
-                  </div>
-                  <div style={{ fontSize: "0.85rem", marginBottom: "0.5rem" }}>
-                    <strong>Scope:</strong> {selectedControl.scope}
-                  </div>
-                  <div style={{ fontSize: "0.85rem", marginBottom: "0.5rem" }}>
-                    <strong>Objective:</strong> {selectedControl.objective}
-                  </div>
-                  <div style={{ fontSize: "0.8rem", color: "var(--muted-text)" }}>
-                    Due Date: {selectedControl.dueDate} | ETag: <code className="monospace">{selectedControl.etag}</code>
-                  </div>
-                </div>
+          <HazardVerificationCard
+            selectedControl={selectedControl}
+            loading={loading}
+            concludeOutcome={concludeOutcome}
+            concludeResidualRisk={concludeResidualRisk}
+            onChangeOutcome={setConcludeOutcome}
+            onChangeResidualRisk={setConcludeResidualRisk}
+            onConcludeVerification={handleConcludeVerification}
+          />
 
-                {/* Material Changes Diff */}
-                {selectedControl.materialChanges && selectedControl.materialChanges.length > 0 && (
-                  <div style={{ background: "var(--warning-bg)", padding: "0.75rem", borderRadius: "6px", marginBottom: "1rem", border: "1px solid #FCD34D" }}>
-                    <div style={{ fontWeight: 700, fontSize: "0.85rem", color: "var(--warning)", marginBottom: "0.25rem" }}>
-                      ⚠ Material Changes Detected Since Prior Approval
-                    </div>
-                    {selectedControl.materialChanges.map((c, i) => (
-                      <div key={i} style={{ fontSize: "0.8rem" }}>
-                        <strong>{c.field}:</strong> {c.from} &rarr; <span style={{ color: "var(--danger)" }}>{c.to}</span>
-                      </div>
-                    ))}
-                  </div>
-                )}
-
-                {/* Action Bar for Control */}
-                <div style={{ display: "flex", gap: "0.5rem", flexWrap: "wrap", marginBottom: "1rem" }}>
-                  {(selectedControl.state === "PROPOSED" || selectedControl.state === "APPROVAL_REQUIRED") && (
-                    <button
-                      type="button"
-                      onClick={handleApproveControl}
-                      disabled={loading}
-                      className="btn btn-success"
-                    >
-                      ✔ Approve Control (If-Match: v{selectedControl.version})
-                    </button>
-                  )}
-
-                  {selectedControl.state === "APPROVED" && (
-                    <div style={{ background: "var(--ivory)", padding: "0.75rem", borderRadius: "6px", width: "100%", marginBottom: "0.5rem" }}>
-                      <div style={{ fontSize: "0.8rem", fontWeight: 700, marginBottom: "0.5rem" }}>Record Attributable Implementation Evidence</div>
-                      <div style={{ display: "grid", gridTemplateColumns: "1fr 1fr", gap: "0.5rem", marginBottom: "0.5rem" }}>
-                        <div>
-                          <label htmlFor="hazard-impl-kind" className="form-label" style={{ fontSize: "0.75rem" }}>Implementation Kind</label>
-                          <select
-                            id="hazard-impl-kind"
-                            value={newImplementationKind}
-                            onChange={e => setNewImplementationKind(e.target.value)}
-                            className="select-control"
-                            style={{ width: "100%", background: "#FFFFFF", fontSize: "0.8rem" }}
-                          >
-                            <option value="MANUAL">MANUAL (Organizational Policy / Workflow)</option>
-                            <option value="INTEGRATED">INTEGRATED (Tool / System Configuration)</option>
-                          </select>
-                        </div>
-                        <div>
-                          <label htmlFor="hazard-evidence-ref" className="form-label" style={{ fontSize: "0.75rem" }}>Evidence Reference</label>
-                          <input
-                            id="hazard-evidence-ref"
-                            type="text"
-                            value={newEvidenceRef}
-                            onChange={e => setNewEvidenceRef(e.target.value)}
-                            className="text-control monospace"
-                            style={{ width: "100%", fontSize: "0.8rem" }}
-                          />
-                        </div>
-                      </div>
-                      <button
-                        type="button"
-                        onClick={handleRecordImplementation}
-                        disabled={loading}
-                        className="btn btn-primary"
-                        style={{ width: "100%" }}
-                      >
-                        ✔ Commit Implementation Receipt
-                      </button>
-                    </div>
-                  )}
-
-                  {selectedControl.state === "IMPLEMENTED" && (
-                    <button
-                      type="button"
-                      onClick={handlePinVerification}
-                      disabled={loading}
-                      className="btn btn-aubergine"
-                    >
-                      📌 Pin Verification Plan
-                    </button>
-                  )}
-                </div>
-
-                {/* Material Edit Box (To demonstrate v4 cannot approve v5) */}
-                <div style={{ borderTop: "1px solid var(--card-border)", paddingTop: "1rem" }}>
-                  <div style={{ fontSize: "0.85rem", fontWeight: 700, marginBottom: "0.5rem" }}>
-                    Material Modification (Tests Automatic Approval Invalidation)
-                  </div>
-                  <input
-                    aria-label="Updated intervention scope"
-                    type="text"
-                    value={editScope}
-                    onChange={e => setEditScope(e.target.value)}
-                    placeholder="Updated Scope"
-                    className="text-control"
-                    style={{ width: "100%", marginBottom: "0.5rem" }}
-                  />
-                  <input
-                    aria-label="Updated intervention objective"
-                    type="text"
-                    value={editObjective}
-                    onChange={e => setEditObjective(e.target.value)}
-                    placeholder="Updated Objective"
-                    className="text-control"
-                    style={{ width: "100%", marginBottom: "0.5rem" }}
-                  />
-                  <button
-                    type="button"
-                    onClick={handleMaterialEdit}
-                    disabled={loading}
-                    className="btn btn-sm btn-secondary"
-                  >
-                    Apply Material Edit (Bumps version &amp; resets approval)
-                  </button>
-                </div>
-              </div>
-            ) : (
-              <div style={{ color: "var(--muted-text)", fontStyle: "italic", fontSize: "0.85rem" }}>
-                No control intervention drafted yet. Propose and accept an organizational cause on the left to anchor a control.
-              </div>
-            )}
-          </div>
-
-          {/* Verification Panel & Human Reviewer Conclusion */}
-          <div className="card">
-            <div className="card-header">
-              <div>
-                <h3>Verification &amp; Transfer of Risk</h3>
-                <p className="card-desc">Guards against risk transfer to adjacent cohorts and requires named human review.</p>
-              </div>
-              {selectedControl?.evaluation && (
-                <span className="badge badge-aubergine">
-                  {selectedControl.evaluation.outcome || "PENDING EVALUATION"}
-                </span>
-              )}
-            </div>
-
-            {selectedControl?.state === "VERIFYING" || selectedControl?.evaluation ? (
-              <div>
-                <div style={{ display: "grid", gridTemplateColumns: "1fr 1fr", gap: "1rem", marginBottom: "1rem" }}>
-                  <div style={{ background: "var(--ivory)", padding: "0.75rem", borderRadius: "6px" }}>
-                    <div style={{ fontSize: "0.75rem", color: "var(--muted-text)" }}>TARGET CRITERIA (PINNED PLAN)</div>
-                    <div style={{ fontSize: "1.25rem", fontWeight: 700 }}>
-                      -{selectedControl.verificationPlan?.criteria ?? 10}%
-                    </div>
-                    <div style={{ fontSize: "0.75rem" }}>
-                      {selectedControl.verificationPlan?.direction || "DECREASE"} BOUNDARY_INTRUSION_SHARE
-                    </div>
-                  </div>
-                  <div style={{ background: "var(--success-bg)", padding: "0.75rem", borderRadius: "6px" }}>
-                    <div style={{ fontSize: "0.75rem", color: "var(--muted-text)" }}>EVALUATION OUTCOME</div>
-                    <div style={{ fontSize: "1.1rem", fontWeight: 700, color: "var(--success)" }}>
-                      {selectedControl.evaluation?.outcome || "AWAITING CONCLUSION"}
-                    </div>
-                    <div style={{ fontSize: "0.75rem", color: "var(--success)" }}>
-                      Pre-analysis plan locked
-                    </div>
-                  </div>
-                </div>
-
-                {/* Transfer of Risk Indicator */}
-                <div style={{ background: "#F0FDF4", border: "1px solid #BBF7D0", padding: "0.75rem", borderRadius: "6px", marginBottom: "1rem" }}>
-                  <div style={{ fontWeight: 700, fontSize: "0.85rem", color: "#166534" }}>
-                    Adjacent Cohort Guard (Tolerance &le; {selectedControl.verificationPlan?.adjacentTolerance ?? 5}%)
-                  </div>
-                  <div style={{ fontSize: "0.8rem", color: "#15803D" }}>
-                    {selectedControl.evaluation?.residualRisk
-                      ? selectedControl.evaluation.residualRisk
-                      : "Pending human reviewer evaluation conclusion."}
-                  </div>
-                </div>
-
-                {/* Human Reviewer Conclusion Form */}
-                {selectedControl.state === "VERIFYING" && (
-                  <div style={{ borderTop: "1px solid var(--card-border)", paddingTop: "1rem" }}>
-                    <div style={{ fontSize: "0.85rem", fontWeight: 700, marginBottom: "0.5rem" }}>
-                      Conclude Verification (Named Human Reviewer)
-                    </div>
-                    <div className="form-group" style={{ marginBottom: "0.5rem" }}>
-                      <label htmlFor="hazard-conclude-outcome" className="form-label">Reviewer Outcome</label>
-                      <select
-                        id="hazard-conclude-outcome"
-                        value={concludeOutcome}
-                        onChange={e => setConcludeOutcome(e.target.value as any)}
-                        className="select-control"
-                        style={{ width: "100%", background: "#FFFFFF" }}
-                      >
-                        <option value="EFFECTIVE">EFFECTIVE (Target met, no transfer of risk)</option>
-                        <option value="PARTIALLY_EFFECTIVE">PARTIALLY_EFFECTIVE (Partial reduction or transferred risk)</option>
-                        <option value="NOT_EFFECTIVE">NOT_EFFECTIVE (Did not meet target)</option>
-                        <option value="INCONCLUSIVE">INCONCLUSIVE (Series break or insufficient window)</option>
-                      </select>
-                    </div>
-                    <div className="form-group" style={{ marginBottom: "0.5rem" }}>
-                      <label htmlFor="hazard-conclude-residual" className="form-label">Residual Risk Statement</label>
-                      <input
-                        id="hazard-conclude-residual"
-                        type="text"
-                        value={concludeResidualRisk}
-                        onChange={e => setConcludeResidualRisk(e.target.value)}
-                        className="text-control"
-                        style={{ width: "100%" }}
-                      />
-                    </div>
-                    <button
-                      type="button"
-                      onClick={handleConcludeVerification}
-                      disabled={loading}
-                      className="btn btn-primary"
-                      style={{ width: "100%" }}
-                    >
-                      Commit Reviewer Conclusion (Closes Intervention)
-                    </button>
-                  </div>
-                )}
-              </div>
-            ) : (
-              <div style={{ color: "var(--muted-text)", fontStyle: "italic", fontSize: "0.85rem" }}>
-                Intervention must reach IMPLEMENTED state before pinning verification plan.
-              </div>
-            )}
-          </div>
-
-          {/* Cryptographic Evidence Package Viewer */}
-          <div className="card">
-            <div className="card-header">
-              <div>
-                <h3>Cryptographic Evidence Package</h3>
-                <p className="card-desc">Verifiable SHA-256 package allowing external audit of the entire risk slice.</p>
-              </div>
-            </div>
-            <div style={{ display: "flex", gap: "0.5rem", marginBottom: "1rem" }}>
-              <button
-                type="button"
-                onClick={handleExportEvidence}
-                disabled={loading || !selectedHazardId}
-                className="btn btn-primary"
-              >
-                📦 Export Evidence Package
-              </button>
-              {evidencePackage && (
-                <button
-                  type="button"
-                  onClick={handleDownloadPackageJson}
-                  className="btn btn-secondary"
-                >
-                  Download JSON
-                </button>
-              )}
-            </div>
-
-            {evidencePackage && (
-              <div style={{ background: "var(--aubergine)", color: "#FFFFFF", padding: "1rem", borderRadius: "8px", fontSize: "0.8rem" }}>
-                <div style={{ marginBottom: "0.5rem", fontWeight: 700, color: "var(--coral)" }}>
-                  MANIFEST SHA-256: {evidencePackage.manifest.manifestHash}
-                </div>
-                <div style={{ marginBottom: "0.5rem", color: "#D1D5DB" }}>
-                  Package ID: {evidencePackage.manifest.packageId} | Items: {evidencePackage.artifacts.length}
-                </div>
-                <div style={{ maxHeight: "150px", overflowY: "auto", borderTop: "1px solid rgba(255,255,255,0.2)", paddingTop: "0.5rem" }}>
-                  {evidencePackage.artifacts.map((a, i) => (
-                    <div key={i} style={{ marginBottom: "0.25rem", display: "flex", justifyContent: "space-between" }}>
-                      <span>[{a.type}] {a.id.slice(0, 8)}...</span>
-                      <span className="monospace" style={{ color: "var(--sage)" }}>{a.sha256.slice(0, 16)}...</span>
-                    </div>
-                  ))}
-                </div>
-              </div>
-            )}
-          </div>
+          <HazardEvidenceExportCard
+            loading={loading}
+            selectedHazardId={selectedHazardId}
+            evidencePackage={evidencePackage}
+            onExportEvidence={handleExportEvidence}
+            onDownloadPackageJson={handleDownloadPackageJson}
+          />
 
         </div>
       </div>
 
-      {/* Phase 4 Refusal Lab (Adversarial Suite) */}
-      <div className="card" style={{ background: "var(--aubergine)", color: "#FFFFFF" }}>
-        <div className="card-header" style={{ borderBottom: "1px solid rgba(255,255,255,0.15)" }}>
-          <div>
-            <div style={{ display: "flex", alignItems: "center", gap: "0.5rem", marginBottom: "0.25rem" }}>
-              <span className="pulse-indicator"></span>
-              <h3 style={{ color: "#FFFFFF" }}>Phase 4 Governance &amp; Refusal Lab (Adversarial Gates)</h3>
-            </div>
-            <p className="card-desc" style={{ color: "#D1D5DB" }}>
-              Playbook B4 §8 verification: State machine transitions, version-bound approval invalidation, and transfer-of-risk detection.
-            </p>
-          </div>
-          <span className="badge badge-coral">ZAB-ENG-001 §8</span>
-        </div>
-
-        <div style={{ display: "grid", gridTemplateColumns: "repeat(3, 1fr)", gap: "1rem", marginTop: "1rem" }}>
-          <button
-            type="button"
-            onClick={handleTestStateRejection}
-            className="lab-card-btn border-rose"
-          >
-            <div className="lab-btn-title" style={{ color: "#FCA5A5" }}>
-              1. Skip Approval Attack
-            </div>
-            <div className="lab-btn-desc">
-              Attempts PROPOSED &rarr; IMPLEMENTING jump directly. State machine enforces strict approval gate.
-            </div>
-          </button>
-
-          <button
-            type="button"
-            onClick={handleTestVersionBoundRejection}
-            className="lab-card-btn border-amber"
-          >
-            <div className="lab-btn-title" style={{ color: "#FCD34D" }}>
-              2. &ldquo;v4 Cannot Approve v5&rdquo;
-            </div>
-            <div className="lab-btn-desc">
-              Sends If-Match with stale target version. Rejects with 409 CONFLICT on version mismatch.
-            </div>
-          </button>
-
-          <button
-            type="button"
-            onClick={handleTestTransferOfRisk}
-            className="lab-card-btn border-cyan"
-          >
-            <div className="lab-btn-title" style={{ color: "#7DD3FC" }}>
-              3. Transfer of Risk Flag (Simulation)
-            </div>
-            <div className="lab-btn-desc">
-              Simulation preview: illustrates adjacent cohort degradation &gt; tolerance blocking clean EFFECTIVE conclusion.
-            </div>
-          </button>
-        </div>
-      </div>
+      <HazardRefusalLabCard
+        onTestStateRejection={handleTestStateRejection}
+        onTestVersionBoundRejection={handleTestVersionBoundRejection}
+        onTestTransferOfRisk={handleTestTransferOfRisk}
+      />
     </div>
   );
 }

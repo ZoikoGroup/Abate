@@ -7,6 +7,7 @@ export interface KillSwitchRecord {
   active: boolean;
   changed_by: string | null;
   changed_at: string;
+  reason?: string | null;
 }
 
 export async function getKillSwitches(tx: Tx): Promise<KillSwitchRecord[]> {
@@ -34,20 +35,23 @@ export async function setKillSwitch(
   tx: Tx,
   scope: string,
   active: boolean,
-  changedBy: string
+  changedBy: string,
+  reason?: string | null
 ): Promise<KillSwitchRecord> {
   const now = new Date().toISOString();
+  const normalizedReason = reason ? reason.trim() : null;
   await tx.q(
-    `INSERT INTO ai_kill_switch (scope, active, changed_by, changed_at)
-     VALUES ($1, $2, $3, $4)
-     ON CONFLICT (scope) DO UPDATE SET active = EXCLUDED.active, changed_by = EXCLUDED.changed_by, changed_at = EXCLUDED.changed_at`,
-    [scope, active, changedBy, now]
+    `INSERT INTO ai_kill_switch (scope, active, changed_by, changed_at, reason)
+     VALUES ($1, $2, $3, $4, $5)
+     ON CONFLICT (scope) DO UPDATE SET active = EXCLUDED.active, changed_by = EXCLUDED.changed_by, changed_at = EXCLUDED.changed_at, reason = EXCLUDED.reason`,
+    [scope, active, changedBy, now, normalizedReason]
   );
   return {
     scope,
     active,
     changed_by: changedBy,
-    changed_at: now
+    changed_at: now,
+    reason: normalizedReason
   };
 }
 

@@ -503,12 +503,19 @@ test.describe("All Tabs & Buttons Full Real Verification", () => {
     expect((await verRes).status()).toBe(200);
     await expect(page.getByText(/Receipt checked/i)).toBeVisible();
 
-    // Kill switch toggle & restore
+    // Kill switch toggle (via accessible confirmation modal + required reason) & restore
     const ksOn = page.waitForResponse(r => r.url().includes("/api/v2/ops/kill-switches") && r.request().method() === "POST");
     await page.getByRole("button", { name: /Activate Kill Switch/i }).first().click();
+    await expect(page.getByRole("dialog")).toBeVisible();
+    await page.getByLabel(/Kill switch change reason/i).fill("E2E containment activation test");
+    await page.getByRole("button", { name: /Confirm Kill Switch Change/i }).click();
     expect((await ksOn).status()).toBe(200);
+
     const ksOff = page.waitForResponse(r => r.url().includes("/api/v2/ops/kill-switches") && r.request().method() === "POST");
     await page.getByRole("button", { name: /Deactivate \(Re-enable\)/i }).first().click();
+    await expect(page.getByRole("dialog")).toBeVisible();
+    await page.getByLabel(/Kill switch change reason/i).fill("E2E recovery restore test");
+    await page.getByRole("button", { name: /Confirm Kill Switch Change/i }).click();
     expect((await ksOff).status()).toBe(200);
   });
 

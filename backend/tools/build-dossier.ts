@@ -195,11 +195,11 @@ export async function assembleDossier() {
       const componentCount = Array.isArray(rawComponents)
         ? rawComponents.length
         : rawComponents && typeof rawComponents === "object"
-        ? Object.values(rawComponents).reduce<number>(
+          ? Object.values(rawComponents).reduce<number>(
             (sum, group) => sum + (group && typeof group === "object" ? Object.keys(group as Record<string, unknown>).length : 0),
             0
           )
-        : 0;
+          : 0;
       sbomSummary = {
         path: "evidence/sbom.json",
         sha256: sha256Hex(sbomRaw),
@@ -306,14 +306,14 @@ export async function assembleDossier() {
         invalidationReason = !hashMatches
           ? "dossierHash changed"
           : !shaMatches
-          ? "commitSha changed"
-          : !digestsMatch
-          ? "imageDigests changed"
-          : !notExpired
-          ? "signoff missing valid future expiresAt"
-          : !hasScope
-          ? "signoff missing explicit scope"
-          : "gates not green";
+            ? "commitSha changed"
+            : !digestsMatch
+              ? "imageDigests changed"
+              : !notExpired
+                ? "signoff missing valid future expiresAt"
+                : !hasScope
+                  ? "signoff missing explicit scope"
+                  : "gates not green";
       }
     } catch {
       existingSignoff = null;

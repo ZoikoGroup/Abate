@@ -1,17 +1,14 @@
 // backend/src/routes/ai-actions.ts
-// Domain S08 & S09: Phase 6 Bounded AI & Safe Action Execution endpoints.
 import type { Express, Request, Response } from "express";
 import { toErrorResponse, AppError } from "../platform/errors";
 import { runCommand, computeRequestHash } from "../platform/command";
-import { withTenant, withPlatform } from "../platform/db/with-tenant";
-import { authenticate, authorize, resolveActor } from "../domains/tenant/auth";
-import { authenticateSupport } from "../domains/support";
 import {
   ExplainReleaseInput,
   DraftCauseInput,
   DraftControlInput,
   ActionProposalInput
 } from "../contracts";
+import { authenticate, resolveActor, authorize } from "../domains/tenant/auth";
 import {
   runAiUseCase,
   acceptAiRun,
@@ -20,16 +17,15 @@ import {
   getAiQuotaStatus
 } from "../domains/ai";
 import { proposeAction, dispatchAction } from "../domains/actions";
-import { GOLDEN_01 } from "../fixtures/golden01";
+import { withTenant, withOps } from "../platform/db/with-tenant";
+import { getHeader, parseLimit } from "./helpers";
 
-export interface AiActionRouteDeps {
-  getHeader: (req: Request, name: string) => string | null;
-  parseLimit: (req: Request, def: number, max: number) => number;
-}
+export function registerAiActionRoutes(app: Express): void {
+  // -------------------------------------------------------------
+  // Domain S08 & S09: Phase 6 Bounded AI & Safe Action Execution Endpoints
+  // -------------------------------------------------------------
 
-export function registerAiActionRoutes(app: Express, deps: AiActionRouteDeps): void {
-  const { getHeader, parseLimit } = deps;
-
+  // Helper for idempotent or direct AI use-case invocation
   async function executeAiEndpoint(
     req: Request,
     operation: string,
@@ -204,11 +200,8 @@ export function registerAiActionRoutes(app: Express, deps: AiActionRouteDeps): v
       const who = await authenticate(getHeader(req, "authorization"));
       authorize(await resolveActor(who.tenantId, who.subject, new Date(), who.role), "ai.run.read");
       const out = await withTenant(who.tenantId, async (tx) => {
-        const result = await tx.q(
-          `SELECT * FROM ai_run WHERE tenant_id = $1 ORDER BY created_at DESC LIMIT ${parseLimit(req, 100, 500)}`,
-          [who.tenantId]
-        );
-        return result.rows;
+        const res = await tx.q(`SELECT * FROM ai_run WHERE tenant_id = $1 ORDER BY created_at DESC LIMIT ${parseLimit(req, 100, 500)}`, [who.tenantId]);
+        return res.rows;
       });
       res.status(200).json(out);
     } catch (err) {
@@ -228,31 +221,14 @@ export function registerAiActionRoutes(app: Express, deps: AiActionRouteDeps): v
     }
   });
 
-  // Support Ops: Per-tenant AI Quota Visibility across active tenants
-  app.get("/api/v2/ops/ai-quota", async (req: Request, res: Response) => {
-    try {
-      await authenticateSupport(getHeader(req, "authorization"));
-      const requestedTenantId =
-        typeof req.query.tenantId === "string" && req.query.tenantId.trim() ? req.query.tenantId.trim() : null;
-      const tenantIds = requestedTenantId ? [requestedTenantId] : [GOLDEN_01.tenantA.id, GOLDEN_01.tenantB.id];
 
-      const items = [];
-      for (const tId of tenantIds) {
-        const q = await withTenant(tId, async (tx) => getAiQuotaStatus(tx));
-        items.push(q);
-      }
-      res.status(200).json({ items });
-    } catch (err) {
-      toErrorResponse(err, res);
-    }
-  });
-
-  // Tenants may see which AI features are switched off (no tenant data involved)
+  // Tenants may see which AI features are switched off (no tenant data involved; read via abate_ops)
   app.get("/api/v2/ai/kill-switches", async (req: Request, res: Response) => {
     try {
       const who = await authenticate(getHeader(req, "authorization"));
-      authorize(await resolveActor(who.tenantId, who.subject, new Date(), who.role), "ai.kill_switch.read");
-      res.status(200).json(await withPlatform(tx => getKillSwitches(tx)));
+      authorize(await resolveActor(who.tenantId, who.subject, new Date(), who.role), "ai.kill_switch.read", undefined, who.purpose);
+      const rows = await withOps(tx => getKillSwitches(tx));
+      res.status(200).json(rows.map((r) => ({ ...r, canToggle: false })));
     } catch (err) {
       toErrorResponse(err, res);
     }
@@ -285,4 +261,7 @@ export function registerAiActionRoutes(app: Express, deps: AiActionRouteDeps): v
       toErrorResponse(err, res);
     }
   });
+
+  // -------------------------------------------------------------
+  // Domain S13 & S14: Phase 7 Work-Design Outcomes & AI Change Endpoints
 }

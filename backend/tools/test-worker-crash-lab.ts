@@ -10,7 +10,7 @@
 
 import assert from "node:assert";
 import crypto from "node:crypto";
-import { withTenant, withWorker, memDb } from "../src/platform/db/with-tenant";
+import { withTenant, withWorker } from "../src/platform/db/with-tenant";
 import { GOLDEN_01 } from "../src/fixtures/golden01";
 import { EventBus } from "../src/worker/outbox-publisher";
 import {
@@ -87,7 +87,7 @@ async function main() {
             "ORG_CREATED",
             "org.v1",
             "Tenant unit creation",
-            [{ kind: "org", id: aggId }]
+            JSON.stringify([{ kind: "org", id: aggId }])
           ]
         );
       });
@@ -176,7 +176,7 @@ async function main() {
             "POISON_MUTATION",
             "poison.v1",
             "Hazard condition test",
-            poisonRef
+            JSON.stringify(poisonRef)
           ]
         );
       });
@@ -199,16 +199,20 @@ async function main() {
             "HEALTHY_MUTATION",
             "healthy.v1",
             "Safe business event",
-            [{ kind: "healthy_record", id: healthyAggId }]
+            JSON.stringify([{ kind: "healthy_record", id: healthyAggId }])
           ]
         );
       });
 
       // 3. Drain attempts 1 to 4: poison event retries, attempts counter increments
       for (let attempt = 1; attempt <= 4; attempt++) {
-        // Fast-forward next_retry_at to now for testing backoff transitions
-        const ev = memDb.outboxEvents.find((e) => e.id === poisonId);
-        if (ev) ev.next_retry_at = new Date(Date.now() - 1000).toISOString();
+        // Fast-forward next_retry_at to now for testing backoff transitions (SQL works on live PG & memDb)
+        await withWorker(async (tx) => {
+          await tx.q(`UPDATE outbox_event SET next_retry_at = $1 WHERE id = $2`, [
+            new Date(Date.now() - 1000).toISOString(),
+            poisonId
+          ]);
+        });
 
         await drainBatch({
           bus: testBus,
@@ -216,13 +220,20 @@ async function main() {
           maxAttempts: 5
         });
 
-        assert.strictEqual(ev?.attempts, attempt, `Poison event attempts must be ${attempt}`);
+        const ev = await withWorker(async (tx) => {
+          return (await tx.q(`SELECT * FROM outbox_event WHERE id = $1`, [poisonId])).rows[0];
+        });
+        assert.strictEqual(Number(ev?.attempts), attempt, `Poison event attempts must be ${attempt}`);
         assert.strictEqual(ev?.state, "PENDING", "State must remain PENDING during retry attempts");
       }
 
       // 4. Attempt 5: poison event must transition to DEAD_LETTER
-      const ev = memDb.outboxEvents.find((e) => e.id === poisonId);
-      if (ev) ev.next_retry_at = new Date(Date.now() - 1000).toISOString();
+      await withWorker(async (tx) => {
+        await tx.q(`UPDATE outbox_event SET next_retry_at = $1 WHERE id = $2`, [
+          new Date(Date.now() - 1000).toISOString(),
+          poisonId
+        ]);
+      });
 
       const fifthDrain = await drainBatch({
         bus: testBus,
@@ -230,8 +241,11 @@ async function main() {
         maxAttempts: 5
       });
 
+      const evFinal = await withWorker(async (tx) => {
+        return (await tx.q(`SELECT * FROM outbox_event WHERE id = $1`, [poisonId])).rows[0];
+      });
       assert.strictEqual(fifthDrain.deadLetters, 1, "Fifth attempt must transition event to dead-letter");
-      assert.strictEqual(ev?.state, "DEAD_LETTER", "Outbox state must be DEAD_LETTER");
+      assert.strictEqual(evFinal?.state, "DEAD_LETTER", "Outbox state must be DEAD_LETTER");
 
       // Verify dead_letter_event row
       const deadLetterRows = await withWorker(async (tx) => {
@@ -293,7 +307,7 @@ async function main() {
               "BATCH_PROCESSED",
               "batch.v1",
               "Concurrent queue test",
-              [{ kind: "item", index: i }]
+              JSON.stringify([{ kind: "item", index: i }])
             ]
           );
         });
@@ -355,7 +369,7 @@ async function main() {
              id, tenant_id, aggregate, aggregate_id, aggregate_version,
              event_type, schema_version, purpose, refs
            ) VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9)`,
-          [v2Id, tenantA, "versioned_doc", targetAggId, 2, "DOC_UPDATED", "doc.v1", "Doc edit", []]
+          [v2Id, tenantA, "versioned_doc", targetAggId, 2, "DOC_UPDATED", "doc.v1", "Doc edit", JSON.stringify([])]
         );
       });
 
@@ -366,6 +380,9 @@ async function main() {
       });
       assert.strictEqual(drainV2.processed, 1, "Version 2 must process successfully");
 
+      // Simulate worker restart (clears in-process metrics; durable worker_consumer_version must persist!)
+      resetWorkerMetrics();
+
       // 2. Queue version 1 (out-of-order)
       const v1Id = crypto.randomUUID();
       await withTenant(tenantA, async (tx) => {
@@ -374,26 +391,27 @@ async function main() {
              id, tenant_id, aggregate, aggregate_id, aggregate_version,
              event_type, schema_version, purpose, refs
            ) VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9)`,
-          [v1Id, tenantA, "versioned_doc", targetAggId, 1, "DOC_CREATED", "doc.v1", "Stale event", []]
+          [v1Id, tenantA, "versioned_doc", targetAggId, 1, "DOC_CREATED", "doc.v1", "Stale event", JSON.stringify([])]
         );
       });
 
-      // Process version 1: strictly older than version 2 -> dropped, neither retried nor dead-lettered
+      // Process version 1: strictly older than version 2 -> dropped even after worker restart
       const drainV1 = await drainBatch({
         bus: testBus,
         consumerName: versionConsumer
       });
-      assert.strictEqual(drainV1.skipped, 1, "Stale version must be skipped");
+      assert.strictEqual(drainV1.skipped, 1, "Stale version must be skipped even after worker restart");
       assert.strictEqual(drainV1.failures, 0, "Stale version must not count as a failure");
       assert.strictEqual(drainV1.deadLetters, 0, "Stale version must not be dead-lettered");
 
-      const ev1 = memDb.outboxEvents.find((e) => e.id === v1Id);
+      const ev1 = await withWorker(async (tx) => {
+        return (await tx.q(`SELECT * FROM outbox_event WHERE id = $1`, [v1Id])).rows[0];
+      });
       assert.strictEqual(ev1?.state, "PUBLISHED", "Stale event is closed out, not left to retry");
-      assert.strictEqual(
-        memDb.deadLetterEvents.filter((d) => d.outbox_id === v1Id).length,
-        0,
-        "Stale event must not reach dead-letter"
-      );
+      const dl1 = await withWorker(async (tx) => {
+        return (await tx.q(`SELECT * FROM dead_letter_event WHERE outbox_id = $1`, [v1Id])).rows;
+      });
+      assert.strictEqual(dl1.length, 0, "Stale event must not reach dead-letter");
     }
   );
 
@@ -427,14 +445,17 @@ async function main() {
       assert.strictEqual(first.processed, 2);
 
       // Version 2 is re-queued (e.g. its PUBLISHED mark was lost): the retry must be delivered, not flagged stale
-      const ev2 = memDb.outboxEvents.find((e) => e.id === ids[1])!;
-      ev2.state = "PENDING";
-      ev2.published_at = null;
+      await withWorker(async (tx) => {
+        await tx.q(`UPDATE outbox_event SET state = 'PENDING', published_at = NULL WHERE id = $1`, [ids[1]]);
+      });
       const retry = await drainBatch({ bus: testBus, consumerName });
       assert.strictEqual(retry.skipped, 0, "Same-version retry must not be skipped");
       assert.strictEqual(retry.failures, 0, "Same-version retry must not fail");
       assert.strictEqual(retry.processed, 1, "Same-version retry must be processed");
-      assert.strictEqual(ev2.state, "PUBLISHED");
+      const ev2 = await withWorker(async (tx) => {
+        return (await tx.q(`SELECT * FROM outbox_event WHERE id = $1`, [ids[1]])).rows[0];
+      });
+      assert.strictEqual(ev2?.state, "PUBLISHED");
       assert.deepStrictEqual(delivered, [1, 2], "Inbox dedupe keeps the business effect single");
     }
   );
@@ -460,35 +481,23 @@ async function main() {
   await runTest(
     "abate_worker least-privilege boundary: fails closed on business tables (work_fact_revision, principal, organization)",
     async () => {
-      // 1. Worker tries to query work_fact_revision
-      const factResult = await withWorker(async (tx) => {
-        return (await tx.q("SELECT * FROM work_fact_revision")).rows;
-      });
-      assert.strictEqual(
-        factResult.length,
-        0,
-        "abate_worker MUST NOT be able to read work_fact_revision (fail-closed RLS)"
-      );
+      const assertWorkerDeniedOrEmpty = async (tableName: string) => {
+        try {
+          const rows = await withWorker(async (tx) => {
+            return (await tx.q(`SELECT * FROM ${tableName} LIMIT 1`)).rows;
+          });
+          assert.strictEqual(rows.length, 0, `abate_worker MUST NOT read ${tableName}`);
+        } catch (err: any) {
+          assert.ok(
+            err?.code === "42501" || /permission denied/i.test(String(err?.message || "")),
+            `Unexpected error querying ${tableName} as abate_worker: ${err?.message}`
+          );
+        }
+      };
 
-      // 2. Worker tries to query principal
-      const principalResult = await withWorker(async (tx) => {
-        return (await tx.q("SELECT * FROM principal")).rows;
-      });
-      assert.strictEqual(
-        principalResult.length,
-        0,
-        "abate_worker MUST NOT be able to read principal table"
-      );
-
-      // 3. Worker tries to query organization
-      const orgResult = await withWorker(async (tx) => {
-        return (await tx.q("SELECT * FROM organization")).rows;
-      });
-      assert.strictEqual(
-        orgResult.length,
-        0,
-        "abate_worker MUST NOT be able to read organization table"
-      );
+      await assertWorkerDeniedOrEmpty("work_fact_revision");
+      await assertWorkerDeniedOrEmpty("principal");
+      await assertWorkerDeniedOrEmpty("organization");
 
       // 4. Worker CAN read outbox_event
       const outboxResult = await withWorker(async (tx) => {

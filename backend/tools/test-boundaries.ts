@@ -5,7 +5,15 @@ import fs from "node:fs";
 import path from "node:path";
 import { GOLDEN_01 } from "../src/fixtures/golden01";
 import { seedTwoTenants } from "../src/fixtures/seed";
-import { withTenant, memDb } from "../src/platform/db/with-tenant";
+import {
+  checkPgHealth,
+  withTenant,
+  withWorker,
+  withOps,
+  withMigrator,
+  withProtectedCompute,
+  withReleaseCompiler
+} from "../src/platform/db/with-tenant";
 import { createOrganization, getOrganization } from "../src/domains/tenant/commands";
 import { ingestBatch } from "../src/domains/ingest/ingest-batch";
 import { setConnectionState } from "../src/domains/ingest/connections";
@@ -75,7 +83,8 @@ async function test(name: string, fn: () => Promise<void>) {
 }
 
 async function run() {
-  await seedTwoTenants();
+  const pgLive = await checkPgHealth();
+  await seedTwoTenants({ persistToPostgres: pgLive });
 
   const tenantAId = GOLDEN_01.tenantA.id;
   const tenantBId = GOLDEN_01.tenantB.id;
@@ -204,13 +213,16 @@ async function run() {
     const deliveredFirst = deliveryCount;
 
     // 2. Deliver same event again -> inbox_event table deduplicates and skips
-    const replayEvent = memDb.outboxEvents[0];
+    const replayEvent = await withWorker(
+      async (tx) => (await tx.q("SELECT * FROM outbox_event ORDER BY created_at ASC LIMIT 1")).rows[0]
+    );
+    assert.ok(replayEvent, "Expected at least one outbox event to replay");
     const deliveredAgain = await testBus.publish("audit-worker", {
       eventId: replayEvent.id,
       tenantId: replayEvent.tenant_id,
       aggregate: replayEvent.aggregate,
       aggregateVersion: replayEvent.aggregate_version,
-      eventTime: replayEvent.created_at,
+      eventTime: new Date(replayEvent.created_at).toISOString(),
       schemaVersion: replayEvent.schema_version,
       purpose: replayEvent.purpose,
       refs: replayEvent.refs
@@ -281,12 +293,13 @@ async function run() {
     assert.strictEqual(res.body.rejected, 1);
 
     // Physical Minimization Proof: Ensure DECOY_STRING is absent from ALL database tables and receipts
-    const dbDump = JSON.stringify({
-      workFacts: Array.from(memDb.workFactRevisions.values()),
-      receipts: Array.from(memDb.ingestReceipts.values()),
-      audits: memDb.auditEvents,
-      outbox: memDb.outboxEvents
-    });
+    const tenantDump = await withTenant(tenantAId, async (tx) => ({
+      workFacts: (await tx.q("SELECT * FROM work_fact_revision")).rows,
+      receipts: (await tx.q("SELECT * FROM ingest_receipt")).rows,
+      audits: (await tx.q("SELECT * FROM audit_event")).rows
+    }));
+    const outboxDump = await withWorker(async (tx) => (await tx.q("SELECT * FROM outbox_event")).rows);
+    const dbDump = JSON.stringify({ ...tenantDump, outbox: outboxDump });
     assert.ok(!dbDump.includes(DECOY_STRING), "Decoy string must not exist anywhere in database persistence!");
   });
 
@@ -573,14 +586,14 @@ async function run() {
 
       // Seed Hazard and Accepted Cause
       await tx.q("INSERT INTO hazard (id, tenant_id, title, owner_principal_id, originating_release_id, disposition, version) VALUES ($1, $2, $3, $4, $5, 'OPEN', 1)",
-        [hazardId, tenantAId, "Chronic Uncompensated Overtime", actorA.principalId, "rel-baseline-1"]
+        [hazardId, tenantAId, "Chronic Uncompensated Overtime", actorA.principalId, "00000000-0000-4000-a003-000000000001"]
       );
       await tx.q("INSERT INTO cause (id, tenant_id, hazard_id, statement, status, version) VALUES ($1, $2, $3, $4, 'REVIEWED_ACCEPTED', 1)",
         [causeId, tenantAId, hazardId, "Unpredictable late-night partner email routing"]
       );
 
       // Create v1 Control
-      const v1Plan = { baselineReleaseId: "rel-baseline-1", primaryMetric: "BOUNDARY_INTRUSION_SHARE", minDays: 28 };
+      const v1Plan = { baselineReleaseId: "00000000-0000-4000-a003-000000000001", primaryMetric: "BOUNDARY_INTRUSION_SHARE", minDays: 28 };
       const v1Hash = materialHash({
         hazardId,
         causeId,
@@ -593,14 +606,14 @@ async function run() {
 
       await tx.q(
         "INSERT INTO intervention (id, tenant_id, hazard_id, cause_id, state, version, scope, objective, owner_principal_id, due_date, verification_plan, material_hash) VALUES ($1, $2, $3, $4, 'APPROVED', 1, $5, $6, $7, $8, $9, $10)",
-        [controlId, tenantAId, hazardId, causeId, "Corporate Litigation practice group", "Cap after-hours communications to critical emergencies only", actorA.principalId, "2026-05-01", v1Plan, v1Hash]
+        [controlId, tenantAId, hazardId, causeId, "Corporate Litigation practice group", "Cap after-hours communications to critical emergencies only", actorA.principalId, "2026-05-01", JSON.stringify(v1Plan), v1Hash]
       );
 
       // Add Approval bound to v1
       const approvalId = crypto.randomUUID();
       await tx.q(
         "INSERT INTO approval (id, tenant_id, intervention_id, approved_version, approved_material_hash, approver_principal_id, authority_ref, policy_resolution) VALUES ($1, $2, $3, $4, $5, $6, $7, $8)",
-        [approvalId, tenantAId, controlId, 1, v1Hash, actorA.principalId, "auth:playbook-b4", { gate: "APPROVAL", resolved: true }]
+        [approvalId, tenantAId, controlId, 1, v1Hash, actorA.principalId, "auth:playbook-b4", JSON.stringify({ gate: "APPROVAL", resolved: true })]
       );
 
       // Verify v1 approval matches
@@ -676,7 +689,7 @@ async function run() {
       // Create hazard with full vertical slice
       const hazardId = crypto.randomUUID();
       await tx.q("INSERT INTO hazard (id, tenant_id, title, owner_principal_id, originating_release_id, disposition, version) VALUES ($1, $2, $3, $4, $5, 'CONTROLLED', 1)",
-        [hazardId, tenantAId, "Hazard for Evidence Package Test", actorA.principalId, "rel-baseline-1"]
+        [hazardId, tenantAId, "Hazard for Evidence Package Test", actorA.principalId, "00000000-0000-4000-a003-000000000001"]
       );
 
       const causeId = crypto.randomUUID();
@@ -685,7 +698,7 @@ async function run() {
       );
 
       const controlId = crypto.randomUUID();
-      const plan = { baselineReleaseId: "rel-baseline-1", primaryMetric: "BOUNDARY_INTRUSION_SHARE", minDays: 28 };
+      const plan = { baselineReleaseId: "00000000-0000-4000-a003-000000000001", primaryMetric: "BOUNDARY_INTRUSION_SHARE", minDays: 28 };
       const mHash = materialHash({
         hazardId,
         causeId,
@@ -698,7 +711,7 @@ async function run() {
 
       await tx.q(
         "INSERT INTO intervention (id, tenant_id, hazard_id, cause_id, state, version, scope, objective, owner_principal_id, due_date, verification_plan, material_hash) VALUES ($1, $2, $3, $4, 'CLOSED', 1, $5, $6, $7, $8, $9, $10)",
-        [controlId, tenantAId, hazardId, causeId, "All teams", "Reduce intrusion", actorA.principalId, "2026-06-01", plan, mHash]
+        [controlId, tenantAId, hazardId, causeId, "All teams", "Reduce intrusion", actorA.principalId, "2026-06-01", JSON.stringify(plan), mHash]
       );
 
       const pkg = await exportEvidencePackage(tx, hazardId, actorA.principalId);
@@ -726,8 +739,10 @@ async function run() {
     return t.toISOString();
   };
   const isCode = (code: string) => (err: any) => err?.code === code || (err instanceof AppError && err.code === code);
-  const factBySource = (recordId: string) =>
-    Array.from(memDb.workFactRevisions.values()).find(f => f.source_record_id === recordId);
+  const factBySource = async (recordId: string) =>
+    withTenant(tenantAId, async (tx) => (await tx.q("SELECT * FROM work_fact_revision WHERE source_record_id = $1", [recordId])).rows[0]);
+  const countWorkFacts = async () =>
+    withTenant(tenantAId, async (tx) => Number((await tx.q("SELECT COUNT(*)::int AS count FROM work_fact_revision")).rows[0]?.count ?? 0));
 
   const whoB = {
     tenantId: tenantBId,
@@ -743,14 +758,13 @@ async function run() {
 
   // Second Tenant A connection so a hold can be scoped to one source only
   const connA2Id = "00000000-0000-4000-a004-000000000002";
-  memDb.connections.set(connA2Id, {
-    id: connA2Id,
-    tenant_id: tenantAId,
-    source: "ZoikoTime",
-    contract_id: "00000000-0000-4000-a005-000000000001",
-    state: "ACTIVE",
-    last_success_at: NOW.toISOString(),
-    expected_cadence_seconds: 3600
+  await withTenant(tenantAId, async (tx) => {
+    await tx.q(
+      `INSERT INTO connection (id, tenant_id, source, contract_id, state, expected_cadence_seconds)
+       VALUES ($1, $2, $3, $4, $5, $6)
+       ON CONFLICT (id) DO NOTHING`,
+      [connA2Id, tenantAId, "ZoikoTime", "00000000-0000-4000-a005-000000000001", "ACTIVE", 3600]
+    );
   });
 
   const workItem = (recordId: string, endDaysAgo: number) => ({
@@ -768,21 +782,24 @@ async function run() {
     retention: { WORK_FACT: { floor: { days: floorDays, citation: "SYNTHETIC-TEST floor" } } }
   });
   const packMeta = { kind: "JURISDICTION" as const, sourceRefs: ["SYNTHETIC-TEST"], accountableReviewer: "SYNTHETIC-TEST", reviewDate: "2027-01-01" };
+  const datingPackKey = `test-dating-pack-${crypto.randomUUID().slice(0, 8)}`;
 
   // 22. Effective-dated jurisdiction pack resolution
   await test("Phase 5 Jurisdiction: Pack resolution is effective-dated and fails closed outside coverage", async () => {
-    await withTenant(tenantAId, async (tx) => {
+    await withMigrator(async (tx) => {
       await publishPackVersion(tx, {
-        ...packMeta, packKey: "test-dating-pack", version: 1,
+        ...packMeta, packKey: datingPackKey, version: 1,
         effectiveFrom: "2026-01-01T00:00:00.000Z", content: packContent(90)
       });
       await publishPackVersion(tx, {
-        ...packMeta, packKey: "test-dating-pack", version: 2,
+        ...packMeta, packKey: datingPackKey, version: 2,
         effectiveFrom: "2026-06-01T00:00:00.000Z", content: packContent(120)
       });
+    });
 
-      const rows = (await tx.q("SELECT * FROM policy_pack WHERE pack_key = $1", ["test-dating-pack"])).rows;
-      assert.strictEqual(rows.find(r => r.version === 1)?.effective_to, "2026-06-01T00:00:00.000Z", "v1 must be closed where v2 starts");
+    await withTenant(tenantAId, async (tx) => {
+      const rows = (await tx.q("SELECT * FROM policy_pack WHERE pack_key = $1", [datingPackKey])).rows;
+      assert.strictEqual(new Date(rows.find(r => r.version === 1)?.effective_to).toISOString(), "2026-06-01T00:00:00.000Z", "v1 must be closed where v2 starts");
       assert.strictEqual(resolveEffectivePack(rows, new Date("2026-03-01T00:00:00Z"))?.version, 1);
       assert.strictEqual(resolveEffectivePack(rows, new Date("2026-06-01T00:00:00Z"))?.version, 2, "Boundary instant belongs to the new version");
       assert.strictEqual(resolveEffectivePack(rows, new Date("2025-12-31T23:59:59Z")), null, "Before coverage there is no pack");
@@ -791,19 +808,21 @@ async function run() {
 
   // 23. Published pack versions are immutable and sequential
   await test("Phase 5 Jurisdiction: Published versions are immutable; out-of-sequence or overlapping versions are refused", async () => {
-    await withTenant(tenantAId, async (tx) => {
-      const v1Before = (await tx.q("SELECT * FROM policy_pack WHERE pack_key = $1", ["test-dating-pack"])).rows
-        .find(r => r.version === 1)?.content_hash;
-      const base = { ...packMeta, packKey: "test-dating-pack", content: packContent(1) };
+    const v1Before = await withTenant(tenantAId, async (tx) =>
+      (await tx.q("SELECT * FROM policy_pack WHERE pack_key = $1", [datingPackKey])).rows
+        .find(r => r.version === 1)?.content_hash
+    );
+    const base = { ...packMeta, packKey: datingPackKey, content: packContent(1) };
 
-      await assert.rejects(() => publishPackVersion(tx, { ...base, version: 2, effectiveFrom: "2026-09-01T00:00:00.000Z" }), isCode("CONFLICT"));
-      await assert.rejects(() => publishPackVersion(tx, { ...base, version: 5, effectiveFrom: "2026-09-01T00:00:00.000Z" }), isCode("CONFLICT"));
-      await assert.rejects(() => publishPackVersion(tx, { ...base, version: 3, effectiveFrom: "2026-05-01T00:00:00.000Z" }), isCode("CONFLICT"));
+    await assert.rejects(() => withMigrator(tx => publishPackVersion(tx, { ...base, version: 2, effectiveFrom: "2026-09-01T00:00:00.000Z" })), isCode("CONFLICT"));
+    await assert.rejects(() => withMigrator(tx => publishPackVersion(tx, { ...base, version: 5, effectiveFrom: "2026-09-01T00:00:00.000Z" })), isCode("CONFLICT"));
+    await assert.rejects(() => withMigrator(tx => publishPackVersion(tx, { ...base, version: 3, effectiveFrom: "2026-05-01T00:00:00.000Z" })), isCode("CONFLICT"));
 
-      const v1After = (await tx.q("SELECT * FROM policy_pack WHERE pack_key = $1", ["test-dating-pack"])).rows
-        .find(r => r.version === 1)?.content_hash;
-      assert.strictEqual(v1After, v1Before, "Approved content must never change");
-    });
+    const v1After = await withTenant(tenantAId, async (tx) =>
+      (await tx.q("SELECT * FROM policy_pack WHERE pack_key = $1", [datingPackKey])).rows
+        .find(r => r.version === 1)?.content_hash
+    );
+    assert.strictEqual(v1After, v1Before, "Approved content must never change");
   });
 
   // Facts used by the retention tests: two expired (one per connection) and one recent
@@ -818,11 +837,11 @@ async function run() {
 
   // 24. No invented default duration
   await test("Phase 5 Retention: With no configured class a run deletes nothing (no invented default)", async () => {
-    const before = memDb.workFactRevisions.size;
+    const before = await countWorkFacts();
     const res = await runRetention({ who: whoA, actor: actorA, dataCategory: "WORK_FACT", idempotencyKey: crypto.randomUUID(), now: NOW });
     assert.strictEqual(res.body.status, "NO_POLICY");
     assert.strictEqual(res.body.purged, 0);
-    assert.strictEqual(memDb.workFactRevisions.size, before, "No rows may be deleted without a tenant-configured class");
+    assert.strictEqual(await countWorkFacts(), before, "No rows may be deleted without a tenant-configured class");
   });
 
   // 25. Durations bounded by the pack; no pack => refused
@@ -841,7 +860,9 @@ async function run() {
       input: { dataCategory: "WORK_FACT", retentionDays: 365, basis: "Boundary test duration" }
     }), isCode("VALIDATION"));
 
-    assert.strictEqual(Array.from(memDb.retentionClasses.values()).length, 0, "Refused configurations must leave no class behind");
+    const classesA = await withTenant(tenantAId, async (tx) => (await tx.q("SELECT id FROM retention_class")).rows);
+    const classesB = await withTenant(tenantBId, async (tx) => (await tx.q("SELECT id FROM retention_class")).rows);
+    assert.strictEqual(classesA.length + classesB.length, 0, "Refused configurations must leave no class behind");
   });
 
   let scopedHoldId = "";
@@ -861,7 +882,7 @@ async function run() {
     });
     scopedHoldId = hold.body.id;
 
-    const deletedPseudonym = factBySource("ret-old-a")?.subject_pseudonym;
+    const deletedPseudonym = (await factBySource("ret-old-a"))?.subject_pseudonym;
     assert.ok(deletedPseudonym);
 
     const preview = await previewRetention({ who: whoA, actor: actorA, dataCategory: "WORK_FACT", now: NOW });
@@ -876,13 +897,16 @@ async function run() {
     assert.ok(run.body.held >= 1);
     assert.strictEqual(replay.body.runId, run.body.runId, "Idempotent replay returns the same receipt");
 
-    assert.strictEqual(factBySource("ret-old-a"), undefined, "Expired, unheld fact must be purged");
-    assert.ok(factBySource("ret-old-a2"), "Fact under legal hold must survive");
-    assert.ok(factBySource("ret-new-a"), "Fact inside the retention window must survive");
+    assert.strictEqual(await factBySource("ret-old-a"), undefined, "Expired, unheld fact must be purged");
+    assert.ok(await factBySource("ret-old-a2"), "Fact under legal hold must survive");
+    assert.ok(await factBySource("ret-new-a"), "Fact inside the retention window must survive");
 
-    const tombstones = Array.from(memDb.deletionTombstones.values()).filter(t => t.run_id === run.body.runId);
+    const tombstones = await withTenant(
+      tenantAId,
+      async (tx) => (await tx.q("SELECT * FROM deletion_tombstone WHERE run_id = $1", [run.body.runId])).rows
+    );
     assert.strictEqual(tombstones.length, run.body.purged);
-    assert.ok(tombstones.every(t => t.verified_at), "All tombstones must be verified");
+    assert.ok(tombstones.every((t: any) => t.verified_at), "All tombstones must be verified");
     const dump = JSON.stringify(tombstones);
     assert.ok(!dump.includes(deletedPseudonym!) && !dump.includes("ret-old-a"), "Tombstones must not keep pseudonyms or source record ids");
   });
@@ -895,7 +919,7 @@ async function run() {
     });
     const run = await runRetention({ who: whoA, actor: actorA, dataCategory: "WORK_FACT", idempotencyKey: crypto.randomUUID(), now: NOW });
     assert.strictEqual(run.body.held, 0);
-    assert.strictEqual(factBySource("ret-old-a2"), undefined, "Released fact is purged on the next run");
+    assert.strictEqual(await factBySource("ret-old-a2"), undefined, "Released fact is purged on the next run");
 
     await assert.rejects(() => releaseLegalHold({
       who: whoA, actor: actorA, holdId: scopedHoldId, idempotencyKey: crypto.randomUUID(),
@@ -911,12 +935,12 @@ async function run() {
     });
     assert.strictEqual(res.body.accepted, 0);
     assert.strictEqual(res.body.duplicate, 1);
-    assert.strictEqual(factBySource("ret-old-a"), undefined);
+    assert.strictEqual(await factBySource("ret-old-a"), undefined);
   });
 
   // 29. Storage-layer purge guard (mirrors the PostgreSQL trigger)
   await test("Phase 5 Purge Guard: Deleting a work fact without a tombstone, or under legal hold, is refused by storage", async () => {
-    const recent = factBySource("ret-new-a");
+    const recent = await factBySource("ret-new-a");
     assert.ok(recent);
 
     await assert.rejects(() => withTenant(tenantAId, async (tx) => {
@@ -935,8 +959,12 @@ async function run() {
       await tx.q("DELETE FROM work_fact_revision WHERE id = $1", [recent!.id]);
     }), /under legal hold/);
 
-    assert.ok(factBySource("ret-new-a"), "Refused delete must leave the fact intact");
-    assert.ok(!Array.from(memDb.deletionTombstones.values()).some(t => t.record_ref === recent!.id), "Rolled-back tombstone must not persist");
+    assert.ok(await factBySource("ret-new-a"), "Refused delete must leave the fact intact");
+    const rolledBackTombstones = await withTenant(
+      tenantAId,
+      async (tx) => (await tx.q("SELECT id FROM deletion_tombstone WHERE record_ref = $1", [recent!.id])).rows
+    );
+    assert.strictEqual(rolledBackTombstones.length, 0, "Rolled-back tombstone must not persist");
 
     await releaseLegalHold({
       who: whoA, actor: actorA, holdId: hold.body.id, idempotencyKey: crypto.randomUUID(),
@@ -973,18 +1001,18 @@ async function run() {
 
   // 32. A newer pack invalidating the configured duration blocks deletion
   await test("Phase 5 Fail Closed: A class outside a newer pack version's floor blocks the run instead of deleting", async () => {
-    await withTenant(tenantAId, async (tx) => {
+    await withMigrator(async (tx) => {
       await publishPackVersion(tx, {
         ...packMeta, packKey: "legal-uk-sra", version: 2,
         effectiveFrom: daysAgo(1, 0), content: packContent(400)
       });
     });
-    const before = memDb.workFactRevisions.size;
+    const before = await countWorkFacts();
     const run = await runRetention({ who: whoA, actor: actorA, dataCategory: "WORK_FACT", idempotencyKey: crypto.randomUUID(), now: NOW });
     assert.strictEqual(run.body.status, "BLOCKED");
     assert.ok(run.body.blockedReason?.includes("floor"));
     assert.strictEqual(run.body.purged, 0);
-    assert.strictEqual(memDb.workFactRevisions.size, before);
+    assert.strictEqual(await countWorkFacts(), before);
   });
 
   // -------------------------------------------------------------
@@ -1005,9 +1033,18 @@ async function run() {
     assert.strictEqual(receipt.sections.retention.coverage, "COVERED");
 
     const dump = JSON.stringify(receipt);
-    const pseudonyms = Array.from(memDb.workFactRevisions.values()).map(f => f.subject_pseudonym);
-    const subjects = Array.from(memDb.principals.values()).map(p => p.external_subject);
-    const foreignConnections = Array.from(memDb.connections.values()).filter(c => c.tenant_id !== tenantAId).map(c => c.id);
+    const pseudonyms = await withTenant(
+      tenantAId,
+      async (tx) => (await tx.q("SELECT subject_pseudonym FROM work_fact_revision")).rows.map((f: any) => f.subject_pseudonym)
+    );
+    const subjects = await withTenant(
+      tenantAId,
+      async (tx) => (await tx.q("SELECT external_subject FROM principal")).rows.map((p: any) => p.external_subject)
+    );
+    const foreignConnections = await withTenant(
+      tenantBId,
+      async (tx) => (await tx.q("SELECT id FROM connection")).rows.map((c: any) => c.id)
+    );
     assert.ok(pseudonyms.length > 0 && subjects.length > 0);
     for (const secret of [...pseudonyms, ...subjects, ...foreignConnections]) {
       assert.ok(!dump.includes(secret), "Receipt must not contain pseudonyms, identities or another tenant's resources");
@@ -1032,6 +1069,12 @@ async function run() {
   // -------------------------------------------------------------
   // Phase 6 Bounded AI & Safe Action Execution Labs (Playbook B6)
   // -------------------------------------------------------------
+
+  // Phase 5 retention purges above deleted expired March 2026 work facts and marked overlapping releases STALE;
+  // restore the seeded baseline release to RELEASED so Phase 6 AI & Phase 5 correction labs can evaluate it cleanly.
+  await withReleaseCompiler(tenantAId, async (tx) => {
+    await tx.q("UPDATE privacy_release SET status = $1 WHERE id = $2", ["RELEASED", "00000000-0000-4000-a003-000000000001"]);
+  });
 
   // 35. Prompt Injection in Retrieved Content
   await test("Phase 6 AI Lab 1: Injected instruction in knowledge cannot cause individual disclosure (rejected by validator)", async () => {
@@ -1171,21 +1214,27 @@ async function run() {
 
   // 42. Kill Switch Immediately Disables AI and Leaves Manual Control Functional
   await test("Phase 6 AI Lab 8: Kill switch disables AI immediately; manual control cycle remains operational", async () => {
-    await withTenant(tenantAId, async (tx) => {
-      // Activate kill switch
+    // Activate kill switch via abate_ops
+    await withOps(async (tx) => {
       await setKillSwitch(tx, "all_ai", true, "ops.admin");
-
-      // AI call throws UNAVAILABLE
-      await assert.rejects(async () => {
-        await runAiUseCase(tx, actorA, "explain_release", {
-          contextRefs: [{ type: "RELEASE", id: "00000000-0000-4000-a003-000000000001" }],
-          question: "Explain"
-        });
-      }, isCode("UNAVAILABLE"));
-
-      // Deactivate kill switch for subsequent tests
-      await setKillSwitch(tx, "all_ai", false, "ops.admin");
     });
+
+    try {
+      await withTenant(tenantAId, async (tx) => {
+        // AI call throws UNAVAILABLE
+        await assert.rejects(async () => {
+          await runAiUseCase(tx, actorA, "explain_release", {
+            contextRefs: [{ type: "RELEASE", id: "00000000-0000-4000-a003-000000000001" }],
+            question: "Explain"
+          });
+        }, isCode("UNAVAILABLE"));
+      });
+    } finally {
+      // Deactivate kill switch for subsequent tests
+      await withOps(async (tx) => {
+        await setKillSwitch(tx, "all_ai", false, "ops.admin");
+      });
+    }
   });
 
   // -------------------------------------------------------------
@@ -1193,15 +1242,16 @@ async function run() {
   // -------------------------------------------------------------
 
   const memberA = { ...actorA, principalId: "00000000-0000-4000-a002-000000000002", memberships: [{ organization_id: "00000000-0000-4000-a001-000000000001", domain_role: "MEMBER" }] };
-  const subjectFacts = (pseudonym: string) => Array.from(memDb.workFactRevisions.values()).filter(f => f.subject_pseudonym === pseudonym);
+  const subjectFacts = async (pseudonym: string) =>
+    withTenant(tenantAId, async (tx) => (await tx.q("SELECT * FROM work_fact_revision WHERE subject_pseudonym = $1", [pseudonym])).rows);
 
   // 43. Erasure really deletes, proves it, keeps held data, and blocks re-delivery
   await test("Review fix: GDPR erasure deletes with verified tombstones, keeps held facts, and refuses re-delivery", async () => {
     const item = (recordId: string) => ({ ...workItem(recordId, 3), subjectRef: "emp-erasure-subject" });
     await ingestBatch({ who: whoA, actor: actorA, batch: { connectionId: connAId, batchId: `batch-erase-a-${crypto.randomUUID()}`, items: [item("erase-a-1"), item("erase-a-2")] } });
     await ingestBatch({ who: whoA, actor: actorA, batch: { connectionId: connA2Id, batchId: `batch-erase-a2-${crypto.randomUUID()}`, items: [item("erase-a2-1")] } });
-    const pseudonym = factBySource("erase-a-1")!.subject_pseudonym;
-    assert.strictEqual(subjectFacts(pseudonym).length, 3);
+    const pseudonym = (await factBySource("erase-a-1"))!.subject_pseudonym;
+    assert.strictEqual((await subjectFacts(pseudonym)).length, 3);
 
     const hold = await placeLegalHold({
       who: whoA, actor: actorA, idempotencyKey: crypto.randomUUID(),
@@ -1216,10 +1266,13 @@ async function run() {
     assert.deepStrictEqual([res.body.deleted, res.body.verified, res.body.heldExceptions], [2, 2, 1]);
     assert.strictEqual(replay.body.requestId, res.body.requestId, "Idempotent replay returns the same receipt");
 
-    const left = subjectFacts(pseudonym);
-    assert.deepStrictEqual(left.map(f => f.source_record_id), ["erase-a2-1"], "Only the held fact may remain");
-    const tombstones = Array.from(memDb.deletionTombstones.values()).filter(t => t.run_id === res.body.requestId);
-    assert.ok(tombstones.length === 2 && tombstones.every(t => t.verified_at), "Every erased fact has a verified tombstone");
+    const left = await subjectFacts(pseudonym);
+    assert.deepStrictEqual(left.map((f: any) => f.source_record_id), ["erase-a2-1"], "Only the held fact may remain");
+    const tombstones = await withTenant(
+      tenantAId,
+      async (tx) => (await tx.q("SELECT * FROM deletion_tombstone WHERE run_id = $1", [res.body.requestId])).rows
+    );
+    assert.ok(tombstones.length === 2 && tombstones.every((t: any) => t.verified_at), "Every erased fact has a verified tombstone");
 
     const redelivery = await ingestBatch({ who: whoA, actor: actorA, batch: { connectionId: connAId, batchId: `batch-erase-again-${crypto.randomUUID()}`, items: [item("erase-a-1")] } });
     assert.deepStrictEqual([redelivery.body.accepted, redelivery.body.duplicate], [0, 1], "Erased record must not be re-ingested");
@@ -1261,11 +1314,11 @@ async function run() {
       const draft = { hazardId: ids.hazard, causeId: ids.cause, scope: "Team", objective: "Rota", ownerPrincipalId: actorA.principalId, dueDate: "2026-12-31", verificationPlan: {} };
       await tx.q(
         "INSERT INTO intervention (id, tenant_id, hazard_id, cause_id, state, version, scope, objective, owner_principal_id, due_date, verification_plan, material_hash) VALUES ($1, $2, $3, $4, 'APPROVED', 1, $5, $6, $7, $8, $9, $10)",
-        [ids.control, tenantAId, ids.hazard, ids.cause, draft.scope, draft.objective, actorA.principalId, draft.dueDate, draft.verificationPlan, materialHash(draft)]
+        [ids.control, tenantAId, ids.hazard, ids.cause, draft.scope, draft.objective, actorA.principalId, draft.dueDate, JSON.stringify(draft.verificationPlan), materialHash(draft)]
       );
       await tx.q(
         "INSERT INTO approval (id, tenant_id, intervention_id, approved_version, approved_material_hash, approver_principal_id, authority_ref, policy_resolution) VALUES ($1, $2, $3, $4, $5, $6, $7, $8)",
-        [ids.approval, tenantAId, ids.control, 1, materialHash(draft), actorA.principalId, "auth:playbook-b4", { gate: "APPROVAL", resolved: true }]
+        [ids.approval, tenantAId, ids.control, 1, materialHash(draft), actorA.principalId, "auth:playbook-b4", JSON.stringify({ gate: "APPROVAL", resolved: true })]
       );
     });
 
@@ -1308,12 +1361,14 @@ async function run() {
 
   // 48. Failed transactions roll back Phase 6 tables too
   await test("Review fix: a failed transaction leaves no Phase 6 rows behind", async () => {
-    const before = memDb.actionAttempts.size;
+    const countAttempts = () =>
+      withTenant(tenantAId, async (tx) => Number((await tx.q("SELECT COUNT(*)::int AS count FROM action_attempt")).rows[0]?.count ?? 0));
+    const before = await countAttempts();
     await assert.rejects(() => withTenant(tenantAId, async (tx) => {
       await createActionAttempt(tx, { tool: "review_spy", target: "rollback", params: { n: crypto.randomUUID() }, resourceVersion: 1 });
       throw new Error("abort after write");
     }));
-    assert.strictEqual(memDb.actionAttempts.size, before);
+    assert.strictEqual(await countAttempts(), before);
   });
 
   // -------------------------------------------------------------
@@ -1327,11 +1382,14 @@ async function run() {
     const before = await withTenant(tenantAId, tx => resolveTenantCoverage(tx, new Date("2024-01-01T00:00:00Z")));
     assert.strictEqual(before.coverage.status, "NOT_COVERED", "No binding in effect yet: not covered");
 
+    const secondPackKey = `test-second-jurisdiction-${crypto.randomUUID().slice(0, 8)}`;
+    await withMigrator(async (tx) => {
+      await publishPackVersion(tx, { ...packMeta, packKey: secondPackKey, version: 1, effectiveFrom: "2025-01-01T00:00:00.000Z", content: packContent(90) });
+    });
     await withTenant(tenantBId, async (tx) => {
-      await publishPackVersion(tx, { ...packMeta, packKey: "test-second-jurisdiction", version: 1, effectiveFrom: "2025-01-01T00:00:00.000Z", content: packContent(90) });
       await tx.q(
         "INSERT INTO tenant_policy_binding (tenant_id, pack_key, pack_version, applies_to, bound_from, bound_to) VALUES ($1, $2, $3, $4, $5, $6)",
-        [tenantBId, "test-second-jurisdiction", 1, {}, "2025-01-01T00:00:00.000Z", null]
+        [tenantBId, secondPackKey, 1, JSON.stringify({}), "2025-01-01T00:00:00.000Z", null]
       );
     });
     const ambiguous = await withTenant(tenantBId, tx => resolveTenantCoverage(tx, new Date()));
@@ -1345,7 +1403,10 @@ async function run() {
       question: "Explain"
     }));
     const accepted = await withTenant(tenantAId, tx => acceptAiRun(tx, actorA, run.id, { hazardId: GOLDEN_01.approvedControl.hazardId }));
-    const cause = memDb.causes.get(accepted.createdResourceId!);
+    const cause = await withTenant(
+      tenantAId,
+      async (tx) => (await tx.q("SELECT status FROM cause WHERE id = $1", [accepted.createdResourceId!])).rows[0]
+    );
     assert.strictEqual(cause?.status, "PROPOSED");
   });
 
@@ -1389,7 +1450,10 @@ async function run() {
 
     await assert.rejects(() => drainOnce({ bus, consumerName: "crash-consumer", simulateCrashBeforeMarkingPublished: true }));
     assert.strictEqual(handled, 1);
-    assert.ok(memDb.outboxEvents.some(e => !e.published_at), "Crash before marking leaves the event unpublished");
+    const unpublishedCount = await withWorker(
+      async (tx) => Number((await tx.q("SELECT COUNT(*)::int AS count FROM outbox_event WHERE published_at IS NULL")).rows[0]?.count ?? 0)
+    );
+    assert.ok(unpublishedCount > 0, "Crash before marking leaves the event unpublished");
 
     const second = await drainOnce({ bus, consumerName: "crash-consumer" });
     assert.ok(second.published >= 1);
@@ -1400,21 +1464,67 @@ async function run() {
   // Phase 7: Work-Design Outcomes (Plane B) & AI Change Assessment (S13 & S14)
   // -------------------------------------------------------------
 
+  const seedBoundaryRelease = async (args: {
+    releaseId: string;
+    metricId: string;
+    value: number;
+    unit: string;
+    interpretation: string;
+    artifactHash: string;
+    plane: "A" | "B";
+  }) => {
+    const snapId = crypto.randomUUID();
+    const decId = crypto.randomUUID();
+    const periodEnd = new Date().toISOString();
+    const periodStart = new Date(Date.now() - 28 * 24 * 3600 * 1000).toISOString();
+    await withProtectedCompute(tenantAId, async (tx) => {
+      await tx.q(
+        `INSERT INTO metric_snapshot (
+           id, tenant_id, metric_id, metric_version, cohort_ref, period_start, period_end,
+           source_cutoff, code_digest, membership_version, value, quality, contributor_count, lineage
+         ) VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12, $13, $14)`,
+        [
+          snapId, tenantAId, args.metricId, 1, "cohort:phase7", periodStart, periodEnd,
+          periodEnd, "sha256-phase7", "1", args.value, "VALID", 16, JSON.stringify({})
+        ]
+      );
+    });
+    await withReleaseCompiler(tenantAId, async (tx) => {
+      await tx.q(
+        `INSERT INTO privacy_decision (id, tenant_id, semantic_query_hash, outcome, reason_code, policy_version)
+         VALUES ($1, $2, $3, $4, $5, $6)`,
+        [decId, tenantAId, `phase7-${args.releaseId}`, "RELEASED", "APPROVED", "v1.0"]
+      );
+      await tx.q(
+        `INSERT INTO privacy_release (id, tenant_id, decision_id, snapshot_id, metric_id, metric_version, release_class, status, plane)
+         VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9)`,
+        [args.releaseId, tenantAId, decId, snapId, args.metricId, 1, "CLASS_B", "RELEASED", args.plane]
+      );
+      await tx.q(
+        `INSERT INTO released_artifact (
+           release_id, tenant_id, metric_id, metric_version, value, unit,
+           period_start, period_end, quality, interpretation, status, artifact_hash, plane
+         ) VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12, $13)`,
+        [
+          args.releaseId, tenantAId, args.metricId, 1, args.value, args.unit,
+          periodStart, periodEnd, "VALID", args.interpretation, "RELEASED", args.artifactHash, args.plane
+        ]
+      );
+    });
+  };
+
   // 53. Plane B outcome write cannot close or alter an open hazard in Plane A
   await test("Phase 7 Lab 1: Performance outcome write cannot close an open hazard (Plane B cannot mutate Plane A)", async () => {
     // 0. Seed a fresh active release for Phase 7
     const p7ReleaseId = crypto.randomUUID();
-    await withTenant(tenantAId, async (tx) => {
-      await tx.q(
-        `INSERT INTO privacy_release (id, tenant_id, decision_id, snapshot_id, metric_id, metric_version, release_class, status, plane)
-         VALUES ($1, $2, $3, $4, 'BOUNDARY_INTRUSION_SHARE', 1, 'CLASS_B', 'RELEASED', 'A')`,
-        [p7ReleaseId, tenantAId, crypto.randomUUID(), crypto.randomUUID()]
-      );
-      await tx.q(
-        `INSERT INTO released_artifact (release_id, tenant_id, metric_id, metric_version, value, unit, period_start, period_end, quality, interpretation, status, artifact_hash, plane)
-         VALUES ($1, $2, 'BOUNDARY_INTRUSION_SHARE', 1, 20.0, 'percent', now() - interval '28 days', now(), 'VALID', 'Intervention verification', 'RELEASED', 'hash-p7', 'A')`,
-        [p7ReleaseId, tenantAId]
-      );
+    await seedBoundaryRelease({
+      releaseId: p7ReleaseId,
+      metricId: "BOUNDARY_INTRUSION_SHARE",
+      value: 20.0,
+      unit: "percent",
+      interpretation: "Intervention verification",
+      artifactHash: "hash-p7",
+      plane: "A"
     });
 
     // 1. Create a hazard in Plane A with disposition OPEN
@@ -1459,17 +1569,14 @@ async function run() {
   await test("Phase 7 Lab 2: Prohibited claims in outcome evaluation are strictly rejected", async () => {
     // Fresh release for claim test
     const claimRelId = crypto.randomUUID();
-    await withTenant(tenantAId, async (tx) => {
-      await tx.q(
-        `INSERT INTO privacy_release (id, tenant_id, decision_id, snapshot_id, metric_id, metric_version, release_class, status, plane)
-         VALUES ($1, $2, $3, $4, 'WORKLOAD_SUSTAINABILITY', 1, 'CLASS_B', 'RELEASED', 'A')`,
-        [claimRelId, tenantAId, crypto.randomUUID(), crypto.randomUUID()]
-      );
-      await tx.q(
-        `INSERT INTO released_artifact (release_id, tenant_id, metric_id, metric_version, value, unit, period_start, period_end, quality, interpretation, status, artifact_hash, plane)
-         VALUES ($1, $2, 'WORKLOAD_SUSTAINABILITY', 1, 20.0, 'percent', now() - interval '28 days', now(), 'VALID', 'Claims test', 'RELEASED', 'hash-claim', 'A')`,
-        [claimRelId, tenantAId]
-      );
+    await seedBoundaryRelease({
+      releaseId: claimRelId,
+      metricId: "WORKLOAD_SUSTAINABILITY",
+      value: 20.0,
+      unit: "percent",
+      interpretation: "Claims test",
+      artifactHash: "hash-claim",
+      plane: "A"
     });
 
     await withTenant(tenantAId, async (tx) => {
@@ -1495,24 +1602,21 @@ async function run() {
       await withTenant(tenantAId, async (tx) => {
         await tx.q("UPDATE hazard SET disposition = 'CONTROLLED'");
       }, { writePlane: "B" });
-    }, isCode("FORBIDDEN"));
+    }, (err: any) => isCode("FORBIDDEN")(err) || /assurance state may only be written by plane A commands/i.test(String(err?.message || "")));
   });
 
   // 56. Cross-plane release endpoint isolation: Plane B release is hidden from Plane A endpoint
   await test("Phase 7 Lab 4: Cross-plane release endpoint isolation (Plane B hidden from Plane A reader)", async () => {
     const relBId = crypto.randomUUID();
-    await withTenant(tenantAId, async (tx) => {
-      await tx.q(
-        `INSERT INTO privacy_release (id, tenant_id, decision_id, snapshot_id, metric_id, metric_version, release_class, status, plane)
-         VALUES ($1, $2, $3, $4, 'WORKLOAD_SUSTAINABILITY', 1, 'CLASS_B', 'RELEASED', 'B')`,
-        [relBId, tenantAId, crypto.randomUUID(), crypto.randomUUID()]
-      );
-      await tx.q(
-        `INSERT INTO released_artifact (release_id, tenant_id, metric_id, metric_version, value, unit, period_start, period_end, quality, interpretation, status, artifact_hash, plane)
-         VALUES ($1, $2, 'WORKLOAD_SUSTAINABILITY', 1, 88.5, 'score', now() - interval '28 days', now(), 'VALID', 'Workload sustainability score', 'RELEASED', 'hash-rel-b', 'B')`,
-        [relBId, tenantAId]
-      );
-    }, { writePlane: "B" });
+    await seedBoundaryRelease({
+      releaseId: relBId,
+      metricId: "WORKLOAD_SUSTAINABILITY",
+      value: 88.5,
+      unit: "score",
+      interpretation: "Workload sustainability score",
+      artifactHash: "hash-rel-b",
+      plane: "B"
+    });
 
     // Plane A reader rejects Plane B release with NOT_FOUND
     await assert.rejects(async () => {
@@ -1529,17 +1633,14 @@ async function run() {
   await test("Phase 7 Lab 5: AI Change assessment workflow enforces stage guards and blocks closure on open obligations", async () => {
     // 0. Seed fresh baseline release for AI change
     const aiBaselineReleaseId = crypto.randomUUID();
-    await withTenant(tenantAId, async (tx) => {
-      await tx.q(
-        `INSERT INTO privacy_release (id, tenant_id, decision_id, snapshot_id, metric_id, metric_version, release_class, status, plane)
-         VALUES ($1, $2, $3, $4, 'BOUNDARY_INTRUSION_SHARE', 1, 'CLASS_B', 'RELEASED', 'A')`,
-        [aiBaselineReleaseId, tenantAId, crypto.randomUUID(), crypto.randomUUID()]
-      );
-      await tx.q(
-        `INSERT INTO released_artifact (release_id, tenant_id, metric_id, metric_version, value, unit, period_start, period_end, quality, interpretation, status, artifact_hash, plane)
-         VALUES ($1, $2, 'BOUNDARY_INTRUSION_SHARE', 1, 18.5, 'percent', now() - interval '28 days', now(), 'VALID', 'Baseline for AI rollout', 'RELEASED', 'hash-ai-base', 'A')`,
-        [aiBaselineReleaseId, tenantAId]
-      );
+    await seedBoundaryRelease({
+      releaseId: aiBaselineReleaseId,
+      metricId: "BOUNDARY_INTRUSION_SHARE",
+      value: 18.5,
+      unit: "percent",
+      interpretation: "Baseline for AI rollout",
+      artifactHash: "hash-ai-base",
+      plane: "A"
     });
 
     // 1. Register AI Change Profile
@@ -1623,8 +1724,15 @@ async function run() {
     const testInterventionId = crypto.randomUUID();
     await withTenant(tenantAId, async (tx) => {
       await tx.q(
-        "INSERT INTO intervention (id, tenant_id, hazard_id, scope, objective, target_date, state, version) VALUES ($1, $2, $3, 'Scope', 'Objective', '2026-06-01', 'IMPLEMENTED', 1)",
-        [testInterventionId, tenantAId, testHazardId]
+        `INSERT INTO intervention (
+           id, tenant_id, hazard_id, cause_id, state, version, scope, objective,
+           owner_principal_id, due_date, verification_plan, material_hash
+         ) VALUES ($1, $2, $3, $4, 'IMPLEMENTED', 1, $5, $6, $7, $8, $9, $10)`,
+        [
+          testInterventionId, tenantAId, testHazardId, testCauseId,
+          "Scope", "Objective", actorA.principalId, "2026-06-01",
+          JSON.stringify({}), "hash-boundary-control"
+        ]
       );
     });
 

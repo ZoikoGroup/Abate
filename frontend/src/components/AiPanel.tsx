@@ -136,13 +136,14 @@ export function AiPanel({ releaseId, hazardId, token, onDraftAccepted, onActionS
         )}
       </div>
 
-      <p style={{ fontSize: "0.8rem", color: "#64748B", margin: "0 0 0.75rem 0", lineHeight: 1.4 }}>
+      <p style={{ fontSize: "0.8rem", color: "#475569", margin: "0 0 0.75rem 0", lineHeight: 1.4 }}>
         Explains released cohort evidence and drafts organizational hypotheses. AI never reads raw telemetry, never scores individuals, and has zero execution authority.
       </p>
 
       {/* Query Form */}
       <div style={{ display: "flex", gap: "0.5rem", marginBottom: "0.75rem" }}>
         <input
+          aria-label="Ask a question about this release"
           type="text"
           value={question}
           onChange={e => setQuestion(e.target.value)}
