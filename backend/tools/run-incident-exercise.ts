@@ -15,13 +15,14 @@ import path from "node:path";
 import { expressCall } from "./simulate-30d-http";
 import { GOLDEN_01 } from "../src/fixtures/golden01";
 import { seedTwoTenants } from "../src/fixtures/seed";
+import { isPostgresRequired } from "../src/platform/db/with-tenant";
 import { createDevToken } from "../src/domains/tenant/auth";
 import { createSupportToken } from "../src/domains/support";
 import { telemetry } from "../src/platform/telemetry";
 
 async function main() {
   console.log("\x1b[36m=== Abate Live Incident Exercise (Completion Plan §10.4 / T-28) ===\x1b[0m\n");
-  await seedTwoTenants();
+  await seedTwoTenants({ persistToPostgres: isPostgresRequired() });
 
   const tenantToken = createDevToken({
     tenantId: GOLDEN_01.tenantA.id,

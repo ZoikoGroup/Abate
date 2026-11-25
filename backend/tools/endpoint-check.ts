@@ -18,6 +18,7 @@ import { PassThrough } from "node:stream";
 import { app } from "../src/index";
 import { GOLDEN_01 } from "../src/fixtures/golden01";
 import { seedTwoTenants } from "../src/fixtures/seed";
+import { isPostgresRequired } from "../src/platform/db/with-tenant";
 import { createDevToken } from "../src/domains/tenant/auth";
 import { createSupportToken } from "../src/domains/support/support-auth";
 
@@ -121,7 +122,7 @@ async function runEndpointChecks() {
   console.log("ZOIKO ABATE: DAILY ENDPOINT VERIFICATION RUNNER");
   console.log("============================================================\n");
 
-  await seedTwoTenants();
+  await seedTwoTenants({ persistToPostgres: isPostgresRequired() });
 
   const tokenA = createDevToken({
     tenantId: GOLDEN_01.tenantA.id,

@@ -390,7 +390,7 @@ export const SectorPackDefinitionSchema = z.object({
   forbidden: z.array(nonEmpty),
   requiredGates: z.array(z.enum(["APPROVAL", "CONSULTATION", "REVIEW"])).min(1),
   /** May contain {{launchedPacks}}, replaced with the display names of LAUNCHED packs. */
-  claimScope: nonEmpty.max(400),
+  claimScope: copy,
   cannotOverride: z.tuple([z.literal("privacyFloor"), z.literal("aiAuthority")])
 }).strict();
 

@@ -19,7 +19,7 @@ const DurationBound = z.object({
  * Authored by the Legal & Policy Lead, never by development. A category the pack does not list is
  * "not addressed" and cannot be configured (fail closed); an empty object means addressed, unconstrained.
  */
-export const RetentionBounds = z.record(DataCategoryEnum, z.object({
+export const RetentionBounds = z.partialRecord(DataCategoryEnum, z.object({
   floor: DurationBound.optional(),
   ceiling: DurationBound.optional()
 }).strict());
