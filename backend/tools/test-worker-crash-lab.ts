@@ -539,18 +539,24 @@ async function main() {
       const oneHourAgo = new Date(Date.now() - 3600 * 1000).toISOString();
 
       // Seed events via abate_app (abate_worker has no INSERT grant on outbox_event),
+      // using individual 9-parameter INSERTs for identical live-PG and memDb behavior,
       // then transition states via abate_worker.
+      const seedRows: Array<[string, number]> = [
+        [oldPublishedId, 1],
+        [recentPublishedId, 2],
+        [pendingId, 3],
+        [deadLetterId, 4]
+      ];
       await withTenant(tenantA, async (tx) => {
-        await tx.q(
-          `INSERT INTO outbox_event (
-             id, tenant_id, aggregate, aggregate_id, aggregate_version,
-             event_type, schema_version, purpose, refs
-           ) VALUES ($1, $2, 'Hazard', $3, 1, 'HazardCreated', 'v1', 'WORKPLACE_RISK_ASSESSMENT', '[]'::jsonb),
-                    ($4, $2, 'Hazard', $3, 2, 'HazardCreated', 'v1', 'WORKPLACE_RISK_ASSESSMENT', '[]'::jsonb),
-                    ($5, $2, 'Hazard', $3, 3, 'HazardCreated', 'v1', 'WORKPLACE_RISK_ASSESSMENT', '[]'::jsonb),
-                    ($6, $2, 'Hazard', $3, 4, 'HazardCreated', 'v1', 'WORKPLACE_RISK_ASSESSMENT', '[]'::jsonb)`,
-          [oldPublishedId, tenantA, aggId, recentPublishedId, pendingId, deadLetterId]
-        );
+        for (const [id, ver] of seedRows) {
+          await tx.q(
+            `INSERT INTO outbox_event (
+               id, tenant_id, aggregate, aggregate_id, aggregate_version,
+               event_type, schema_version, purpose, refs
+             ) VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9)`,
+            [id, tenantA, "Hazard", aggId, ver, "HazardCreated", "v1", "WORKPLACE_RISK_ASSESSMENT", JSON.stringify([])]
+          );
+        }
       });
 
       await withWorker(async (tx) => {
@@ -616,8 +622,8 @@ async function main() {
           `INSERT INTO outbox_event (
              id, tenant_id, aggregate, aggregate_id, aggregate_version,
              event_type, schema_version, purpose, refs
-           ) VALUES ($1, $2, 'Hazard', $3, 1, 'HazardCreated', 'v1', 'WORKPLACE_RISK_ASSESSMENT', '[]'::jsonb)`,
-          [agedId, tenantA, aggId]
+           ) VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9)`,
+          [agedId, tenantA, "Hazard", aggId, 1, "HazardCreated", "v1", "WORKPLACE_RISK_ASSESSMENT", JSON.stringify([])]
         );
       });
       await withWorker(async (tx) => {
