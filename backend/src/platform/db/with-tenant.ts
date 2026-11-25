@@ -186,6 +186,7 @@ export async function withOps<T>(fn: (tx: Tx) => Promise<T>): Promise<T> {
     try {
       await client.query("BEGIN");
       await client.query("SET LOCAL statement_timeout = '15000ms'");
+      await client.query("SET LOCAL lock_timeout = '5000ms'");
       const out = await fn({ q: client.query.bind(client) as QueryFn, tenantId: "" });
       await client.query("COMMIT");
       return out;
@@ -211,6 +212,7 @@ export async function withMigrator<T>(fn: (tx: Tx) => Promise<T>): Promise<T> {
     try {
       await client.query("BEGIN");
       await client.query("SET LOCAL statement_timeout = '15000ms'");
+      await client.query("SET LOCAL lock_timeout = '5000ms'");
       const out = await fn({ q: client.query.bind(client) as QueryFn, tenantId: "" });
       await client.query("COMMIT");
       return out;
@@ -235,6 +237,8 @@ export async function withPlatform<T>(fn: (tx: Tx) => Promise<T>): Promise<T> {
     const client: PoolClient = await appPool.connect();
     try {
       await client.query("BEGIN");
+      await client.query("SET LOCAL statement_timeout = '15000ms'");
+      await client.query("SET LOCAL lock_timeout = '5000ms'");
       const out = await fn({ q: client.query.bind(client) as QueryFn, tenantId: "" });
       await client.query("COMMIT");
       return out;
@@ -271,6 +275,8 @@ export async function withWorker<T>(fn: (tx: Tx) => Promise<T>): Promise<T> {
     const client: PoolClient = await workerPool.connect();
     try {
       await client.query("BEGIN");
+      await client.query("SET LOCAL statement_timeout = '10000ms'");
+      await client.query("SET LOCAL lock_timeout = '5000ms'");
       const out = await fn({ q: client.query.bind(client) as QueryFn, tenantId: "" });
       await client.query("COMMIT");
       return out;

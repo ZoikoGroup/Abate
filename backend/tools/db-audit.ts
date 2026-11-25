@@ -86,6 +86,36 @@ const AUDIT_QUERIES: AuditQuery[] = [
             AND p.tablename = c.relname
         )
     `
+  },
+  {
+    name: "6. Published outbox prune DELETE grant missing on outbox_event (0089)",
+    sql: `
+      SELECT expected_role
+      FROM unnest(ARRAY['abate_worker', 'abate_ops']) AS expected_role
+      WHERE NOT EXISTS (
+        SELECT 1
+        FROM information_schema.role_table_grants g
+        WHERE g.grantee = expected_role
+          AND g.table_schema = 'public'
+          AND g.table_name = 'outbox_event'
+          AND g.privilege_type = 'DELETE'
+      )
+    `
+  },
+  {
+    name: "7. Published outbox prune DELETE RLS policies missing on outbox_event (0089)",
+    sql: `
+      SELECT expected_policy
+      FROM unnest(ARRAY['worker_prune_published', 'ops_prune_published']) AS expected_policy
+      WHERE NOT EXISTS (
+        SELECT 1
+        FROM pg_policies p
+        WHERE p.schemaname = 'public'
+          AND p.tablename = 'outbox_event'
+          AND p.policyname = expected_policy
+          AND p.cmd = 'DELETE'
+      )
+    `
   }
 ];
 
@@ -117,7 +147,9 @@ function runStaticMigrationAudit(): void {
     { label: "async_job FORCE RLS", re: /ALTER TABLE async_job FORCE ROW LEVEL SECURITY/i },
     { label: "ops_active_tenants view", re: /CREATE OR REPLACE VIEW ops_active_tenants/i },
     { label: "ops_connector_health view", re: /CREATE OR REPLACE VIEW ops_connector_health/i },
-    { label: "worker_consumer_version table", re: /CREATE TABLE IF NOT EXISTS worker_consumer_version/i }
+    { label: "worker_consumer_version table", re: /CREATE TABLE IF NOT EXISTS worker_consumer_version/i },
+    { label: "worker_prune_published policy (0089)", re: /CREATE POLICY worker_prune_published ON outbox_event FOR DELETE TO abate_worker/i },
+    { label: "ops_prune_published policy (0089)", re: /CREATE POLICY ops_prune_published ON outbox_event FOR DELETE TO abate_ops/i }
   ];
 
   let failures = 0;

@@ -403,6 +403,8 @@ export function registerOpsRoutes(app: Express): void {
         totalProcessed: metrics.totalProcessed,
         totalFailures: metrics.totalFailures,
         totalDeadLetters: stats.deadLetterCount,
+        lastOutboxPruneAt: metrics.lastOutboxPruneAt ?? null,
+        outboxPrunedTotal: metrics.outboxPrunedTotal ?? 0,
         activeWorkers: metrics.state === "RUNNING" ? 1 : 0,
         items
       });

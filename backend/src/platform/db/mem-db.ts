@@ -289,6 +289,7 @@ export class MemoryClient {
       idempotency: Array.from(memDb.idempotency.entries()),
       auditCount: memDb.auditEvents.length,
       outboxCount: memDb.outboxEvents.length,
+      outboxEvents: memDb.outboxEvents.map((e) => ({ ...e })),
       deadLetterCount: memDb.deadLetterEvents.length,
       inbox: Array.from(memDb.inboxEvents.entries()),
       sourceContracts: Array.from(memDb.sourceContracts.entries()),
@@ -357,7 +358,11 @@ export class MemoryClient {
         memDb.memberships = new Map(snap.memberships);
         memDb.idempotency = new Map(snap.idempotency);
         memDb.auditEvents = memDb.auditEvents.slice(0, snap.auditCount);
-        memDb.outboxEvents = memDb.outboxEvents.slice(0, snap.outboxCount);
+        if (snap.outboxEvents) {
+          memDb.outboxEvents = snap.outboxEvents;
+        } else {
+          memDb.outboxEvents = memDb.outboxEvents.slice(0, snap.outboxCount);
+        }
         if (snap.deadLetterCount !== undefined) memDb.deadLetterEvents = memDb.deadLetterEvents.slice(0, snap.deadLetterCount);
         memDb.inboxEvents = new Map(snap.inbox);
         if (snap.sourceContracts) memDb.sourceContracts = new Map(snap.sourceContracts);
@@ -403,6 +408,11 @@ export class MemoryClient {
       this.snapshotState = null;
       this.releaseHeldLocks();
       return { rows: [], rowCount: 0, command: "ROLLBACK", oid: 0, fields: [] };
+    }
+
+    // Statement and Lock Timeouts: SET LOCAL statement_timeout / SET LOCAL lock_timeout / SET ...
+    if (upper.startsWith("SET LOCAL") || upper.startsWith("SET ")) {
+      return { rows: [], rowCount: 0, command: "SET", oid: 0, fields: [] };
     }
 
     // Advisory lock handling (Tenant-wide serialization lock)
@@ -511,10 +521,12 @@ export class MemoryClient {
 
     // Outbox Event Insert
     if (upper.includes("INSERT INTO OUTBOX_EVENT")) {
-      const [id, tId, agg, aggId, aggVer, evtType, schemaVer, purpose, refs] = params;
+      const [id, tId, agg, aggId, aggVer, evtType, schemaVer, purpose, refs, explicitState, explicitPublishedAt] = params;
       if (this.tenantContext && tId !== this.tenantContext) {
         throw new Error("RLS WITH CHECK violation: cross-tenant write rejected");
       }
+      const eventState = explicitState || (upper.includes("'PUBLISHED'") ? "PUBLISHED" : (upper.includes("'DEAD_LETTER'") ? "DEAD_LETTER" : "PENDING"));
+      const pubAt = explicitPublishedAt !== undefined ? explicitPublishedAt : (eventState === "PUBLISHED" ? new Date().toISOString() : null);
       const event = {
         id,
         tenant_id: tId,
@@ -525,12 +537,12 @@ export class MemoryClient {
         schema_version: schemaVer,
         purpose,
         refs: typeof refs === "string" ? JSON.parse(refs) : (refs || []),
-        created_at: new Date().toISOString(),
-        published_at: null,
+        created_at: pubAt || new Date().toISOString(),
+        published_at: pubAt,
         attempts: 0,
         next_retry_at: new Date().toISOString(),
         last_error: null,
-        state: "PENDING"
+        state: eventState
       };
       memDb.outboxEvents.push(event);
       return { rows: [event], rowCount: 1, command: "INSERT", oid: 0, fields: [] };
@@ -633,6 +645,43 @@ export class MemoryClient {
       return { rows, rowCount: rows.length, command: "SELECT", oid: 0, fields: [] };
     }
 
+    // Outbox Pruning or Direct Delete: DELETE FROM outbox_event WHERE ...
+    if (upper.includes("DELETE FROM OUTBOX_EVENT")) {
+      if (upper.includes("MAKE_INTERVAL") || (upper.includes("STATE = 'PUBLISHED'") && upper.includes("PUBLISHED_AT"))) {
+        const cutoffSeconds = params[0] !== undefined ? Number(params[0]) : 0;
+        const limit = params[1] !== undefined ? Number(params[1]) : 500;
+        const cutoffTime = Date.now() - cutoffSeconds * 1000;
+
+        const toDeleteIds: string[] = [];
+        for (const ev of memDb.outboxEvents) {
+          if (ev.state === "PUBLISHED" && ev.published_at) {
+            const pubTime = new Date(ev.published_at).getTime();
+            if (pubTime < cutoffTime) {
+              toDeleteIds.push(ev.id);
+              if (toDeleteIds.length >= limit) break;
+            }
+          }
+        }
+
+        if (toDeleteIds.length > 0) {
+          const idSet = new Set(toDeleteIds);
+          memDb.outboxEvents = memDb.outboxEvents.filter((e) => !idSet.has(e.id));
+        }
+        return { rows: [], rowCount: toDeleteIds.length, command: "DELETE", oid: 0, fields: [] };
+      }
+
+      // Generic delete by id (e.g. test cleanup)
+      if (params.length > 0) {
+        const idSet = new Set(params.map(String));
+        const initialCount = memDb.outboxEvents.length;
+        memDb.outboxEvents = memDb.outboxEvents.filter((e) => !idSet.has(String(e.id)));
+        const deletedCount = initialCount - memDb.outboxEvents.length;
+        return { rows: [], rowCount: deletedCount, command: "DELETE", oid: 0, fields: [] };
+      }
+
+      return { rows: [], rowCount: 0, command: "DELETE", oid: 0, fields: [] };
+    }
+
     // Outbox Lookup by ID or Aggregate ID
     if (upper.includes("FROM OUTBOX_EVENT") && upper.includes("WHERE ID =")) {
       const id = params[0];
@@ -713,18 +762,25 @@ export class MemoryClient {
 
     // Outbox state updates / mark published
     if (upper.includes("UPDATE OUTBOX_EVENT")) {
-      if (upper.includes("SET PUBLISHED_AT")) {
+      if (upper.includes("PUBLISHED_AT")) {
         const id = params[params.length - 1];
         const ev = memDb.outboxEvents.find(e => e.id === id);
         if (ev) {
           const nowIso = new Date().toISOString();
-          ev.published_at = nowIso;
-          ev.state = "PUBLISHED";
-          if (upper.includes("NEXT_RETRY_AT = NOW()")) {
-            ev.next_retry_at = nowIso;
-          }
-          if (params.length >= 2 && params[0]) {
-            ev.last_error = params[0];
+          if (upper.includes("PUBLISHED_AT = NULL")) {
+            ev.published_at = null;
+            if (upper.includes("STATE = 'PENDING'")) ev.state = "PENDING";
+            if (upper.includes("NEXT_RETRY_AT = NOW()")) ev.next_retry_at = nowIso;
+          } else {
+            ev.state = "PUBLISHED";
+            const explicitPubAt = params.find(p => typeof p === "string" && !isNaN(Date.parse(p)) && p.includes("T"));
+            ev.published_at = explicitPubAt || nowIso;
+            if (upper.includes("NEXT_RETRY_AT = NOW()")) {
+              ev.next_retry_at = nowIso;
+            }
+            if (params.length >= 2 && params[0] && typeof params[0] === "string" && !explicitPubAt) {
+              ev.last_error = params[0];
+            }
           }
         }
         return { rows: ev ? [ev] : [], rowCount: ev ? 1 : 0, command: "UPDATE", oid: 0, fields: [] };

@@ -16,7 +16,7 @@
   --card-border: #E2DFD6;
   --muted-text: #606870;
   --light-sage: #E8ECEB;
-  
+
   --success: #1E6B52;
   --success-bg: #EAF5F1;
   --danger: #A32828;
@@ -26,7 +26,7 @@
 
   --font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, "Helvetica Neue", Arial, sans-serif;
   --font-mono: ui-monospace, SFMono-Regular, Menlo, Monaco, Consolas, "Liberation Mono", "Courier New", monospace;
-  
+
   --shadow-sm: 0 1px 3px rgba(43, 27, 56, 0.05);
   --shadow-md: 0 4px 6px -1px rgba(43, 27, 56, 0.08), 0 2px 4px -2px rgba(43, 27, 56, 0.04);
 }
@@ -488,7 +488,8 @@ body {
 }
 
 /* Lists */
-.rule-list, .subrule-list {
+.rule-list,
+.subrule-list {
   list-style: none;
   display: flex;
   flex-direction: column;
@@ -496,13 +497,15 @@ body {
   font-size: 0.875rem;
 }
 
-.rule-list li, .subrule-list li {
+.rule-list li,
+.subrule-list li {
   position: relative;
   padding-left: 1.25rem;
   line-height: 1.45;
 }
 
-.rule-list li::before, .subrule-list li::before {
+.rule-list li::before,
+.subrule-list li::before {
   content: "•";
   color: var(--coral);
   font-weight: bold;
@@ -608,9 +611,28 @@ body {
   cursor: pointer;
 }
 
+/* Disabled state uses solid, contrast-safe colours (WCAG 1.4.3 >= 4.5:1) instead of
+   opacity, which blends the label into the background and fails Axe color-contrast. */
 .btn:disabled {
-  opacity: 0.5;
+  opacity: 1;
   cursor: not-allowed;
+  box-shadow: none;
+}
+
+.btn-primary:disabled {
+  background: #5E4A70;
+  color: #FFFFFF;
+}
+
+.btn-secondary:disabled {
+  background: #F3F4F6;
+  color: #4B5259;
+  border-color: var(--card-border);
+}
+
+.btn-warning:disabled {
+  background: #92400E;
+  color: #FFFFFF;
 }
 
 /* Form Styles */
@@ -934,10 +956,21 @@ body {
   cursor: not-allowed;
 }
 
-.lab-card-btn.border-rose:hover { border-color: #F87171; }
-.lab-card-btn.border-emerald:hover { border-color: #34D399; }
-.lab-card-btn.border-amber:hover { border-color: #FBBF24; }
-.lab-card-btn.border-cyan:hover { border-color: #38BDF8; }
+.lab-card-btn.border-rose:hover {
+  border-color: #F87171;
+}
+
+.lab-card-btn.border-emerald:hover {
+  border-color: #34D399;
+}
+
+.lab-card-btn.border-amber:hover {
+  border-color: #FBBF24;
+}
+
+.lab-card-btn.border-cyan:hover {
+  border-color: #38BDF8;
+}
 
 .lab-btn-title {
   font-weight: 700;
@@ -975,10 +1008,10 @@ body {
    ============================================================= */
 
 /* Grid/flex children must be allowed to shrink below their content width */
-.tab-pane > *,
+.tab-pane>*,
 .card,
-.release-grid > *,
-.grid-2col > * {
+.release-grid>*,
+.grid-2col>* {
   min-width: 0;
 }
 
@@ -998,6 +1031,7 @@ pre {
 }
 
 @media (max-width: 1024px) {
+
   .header-top,
   .header-context-bar {
     padding-left: 1.25rem;
@@ -1139,4 +1173,3 @@ pre {
   font-size: 0.85rem;
   margin-top: 0.5rem;
 }
-

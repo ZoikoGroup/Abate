@@ -442,8 +442,12 @@
   transform: translateY(-1px);
 }
 
+/* Solid contrast-safe disabled styles (WCAG 1.4.3 >= 4.5:1) */
 .demo-run-button:disabled {
-  opacity: 0.6;
+  background-color: #5E4A70;
+  color: #FFFFFF;
+  opacity: 1;
+  box-shadow: none;
   cursor: not-allowed;
 }
 
@@ -545,7 +549,8 @@
 }
 
 .demo-next-button:disabled {
-  background-color: #CCCCCC;
+  background-color: #E5E7EB;
+  color: #374151;
   cursor: not-allowed;
 }
 

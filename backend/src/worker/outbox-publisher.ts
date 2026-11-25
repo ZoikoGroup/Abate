@@ -317,3 +317,49 @@ export async function replayDeadLetterEvent(
     };
   });
 }
+
+/**
+ * Prunes historical outbox events that have been successfully PUBLISHED and are older than
+ * olderThanHours (default: 168h = 7 days).
+ *
+ * Constitutional boundaries:
+ * 1. ONLY rows with state = 'PUBLISHED' and published_at < cutoff are deleted.
+ * 2. PENDING, PROCESSING, and DEAD_LETTER rows are NEVER touched.
+ * 3. dead_letter_event audit records are NEVER deleted, preserving operator replay attribution.
+ * 4. Processed in configurable batch chunks (default: 500) to keep lock durations bounded.
+ */
+export async function prunePublishedOutbox(
+  olderThanHours: number = 168,
+  batchSize: number = 500
+): Promise<{ prunedCount: number; olderThanHours: number }> {
+  if (olderThanHours < 1) {
+    throw new AppError("VALIDATION", "Retention threshold must be at least 1 hour.");
+  }
+  const batch = Math.min(Math.max(1, batchSize), 5000);
+  const cutoffSeconds = olderThanHours * 3600;
+
+  let totalPruned = 0;
+  while (true) {
+    const deletedCount = await withWorker(async (tx) => {
+      const res = await tx.q(
+        `DELETE FROM outbox_event
+         WHERE id IN (
+           SELECT id FROM outbox_event
+           WHERE state = 'PUBLISHED'
+             AND published_at IS NOT NULL
+             AND published_at < now() - make_interval(secs => $1::double precision)
+           LIMIT $2
+         )`,
+        [cutoffSeconds, batch]
+      );
+      return res.rowCount || 0;
+    });
+
+    totalPruned += deletedCount;
+    if (deletedCount < batch) {
+      break;
+    }
+  }
+
+  return { prunedCount: totalPruned, olderThanHours };
+}

@@ -1601,6 +1601,8 @@ export interface OpsJobsOverview {
   totalProcessed?: number;
   totalFailures?: number;
   totalDeadLetters?: number;
+  lastOutboxPruneAt?: string | null;
+  outboxPrunedTotal?: number;
   activeWorkers: number;
   items: Array<{
     id: string;
