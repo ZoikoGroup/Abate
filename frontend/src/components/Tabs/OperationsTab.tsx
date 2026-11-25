@@ -335,7 +335,7 @@ export function OperationsTab({ currentTenant, token, devTokenEnabled = true }: 
             </span>
           </div>
 
-          <div className="stats-grid" style={{ display: "grid", gridTemplateColumns: "repeat(4, 1fr)", gap: "1rem", marginBottom: "1rem" }}>
+          <div className="stats-grid" style={{ display: "grid", gridTemplateColumns: "repeat(auto-fit, minmax(min(150px, 100%), 1fr))", gap: "1rem", marginBottom: "1rem" }}>
             <div className="stat-card" style={{ padding: "0.75rem", background: "rgba(255,255,255,0.04)", borderRadius: "4px" }}>
               <div className="text-sm text-muted">Queue Depth</div>
               <div className="text-xl font-bold monospace">{opsJobs?.queueDepth ?? 0} events</div>
@@ -351,6 +351,13 @@ export function OperationsTab({ currentTenant, token, devTokenEnabled = true }: 
             <div className="stat-card" style={{ padding: "0.75rem", background: "rgba(255,255,255,0.04)", borderRadius: "4px" }}>
               <div className="text-sm text-muted">Dead-Letter Queue</div>
               <div className="text-xl font-bold monospace text-coral">{opsJobs?.totalDeadLetters ?? 0}</div>
+            </div>
+            <div className="stat-card" style={{ padding: "0.75rem", background: "rgba(255,255,255,0.04)", borderRadius: "4px" }}>
+              <div className="text-sm text-muted">Outbox Pruned</div>
+              <div className="text-xl font-bold monospace">{opsJobs?.outboxPrunedTotal ?? 0}</div>
+              {opsJobs?.lastOutboxPruneAt && (
+                <div className="text-xs text-muted">Last: {fmt(opsJobs.lastOutboxPruneAt)}</div>
+              )}
             </div>
           </div>
 

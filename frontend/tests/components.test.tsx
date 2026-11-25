@@ -8,8 +8,9 @@ import { renderToStaticMarkup } from "react-dom/server";
 import { StateView, type ViewState } from "../src/components/StateView";
 import { DashboardTab } from "../src/components/Tabs/DashboardTab";
 import { OperationsTab } from "../src/components/Tabs/OperationsTab";
+import { HazardWorkspaceCard } from "../src/components/Tabs/hazards/HazardWorkspaceCard";
 import { getSectorVocabulary, NEUTRAL_VOCABULARY } from "../src/utils/vocabulary";
-import { PRESET_TENANTS, type TenantSectorProfile } from "../src/api/client";
+import { BASELINE_RELEASE_ID, PRESET_TENANTS, type TenantSectorProfile } from "../src/api/client";
 
 // The test runner compiles JSX with the classic transform; the app build uses the automatic one.
 (globalThis as any).React = React;
@@ -148,7 +149,37 @@ function run() {
   assert.ok(opsOidcHtml.includes("Connect with Support OIDC JWT"), "Hardened OIDC mode must show Support OIDC JWT login");
   assert.ok(!opsOidcHtml.includes("Sign in as support operator"), "Hardened OIDC mode must hide dev support-token button");
 
-  console.log("✔ Frontend component unit tests passed (9 StateView states + 3 vocabularies + DashboardTab + OperationsTab OIDC).");
+  // 5. HazardWorkspaceCard renders expected heading and accessible form controls (E2E regression check)
+  const hazardCardHtml = renderToStaticMarkup(
+    React.createElement(HazardWorkspaceCard, {
+      hazards: [
+        {
+          id: "00000000-0000-4000-a004-000000000001",
+          title: "Seeded Boundary Intrusion Hazard",
+          disposition: "OPEN",
+          version: 1,
+          originating_release_id: BASELINE_RELEASE_ID,
+          owner_principal_id: "00000000-0000-4000-a001-000000000001",
+          created_at: "2026-01-01T00:00:00Z"
+        }
+      ],
+      selectedHazardId: "00000000-0000-4000-a004-000000000001",
+      hazardDetail: null,
+      token: "dev-token",
+      loading: false,
+      newHazardTitle: "Test Hazard",
+      newOriginatingReleaseId: BASELINE_RELEASE_ID,
+      onSelectHazard: () => {},
+      onChangeTitle: () => {},
+      onChangeReleaseId: () => {},
+      onCreateHazard: () => {},
+      onDraftAccepted: () => {}
+    })
+  );
+  assert.ok(hazardCardHtml.includes("<h3>Hazard Workspace</h3>"), "HazardWorkspaceCard must render Hazard Workspace heading");
+  assert.ok(hazardCardHtml.includes('aria-label="New hazard title"'), "HazardWorkspaceCard must expose New hazard title label");
+
+  console.log("✔ Frontend component unit tests passed (9 StateView states + 3 vocabularies + DashboardTab + OperationsTab OIDC + HazardWorkspaceCard).");
 }
 
 run();

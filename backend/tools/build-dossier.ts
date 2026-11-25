@@ -54,16 +54,27 @@ function getRepoRoot(): string {
   return path.resolve(__dirname, "../..");
 }
 
-function countPassingChecks(output: string): number {
-  const checkMatches = output.match(/✔/g);
-  if (checkMatches && checkMatches.length > 0) {
-    return checkMatches.length;
+function countPassingChecks(output: string): { passed: number; total: number } {
+  const ratioMatch = output.match(/(\d+)\s*\/\s*(\d+)\s*(?:tests?\s+)?(?:passed|PASSED)/i);
+  if (ratioMatch) {
+    const passed = Number(ratioMatch[1]);
+    const total = Number(ratioMatch[2]);
+    if (passed > total) {
+      throw new Error(`Invalid test report count: passed (${passed}) > total (${total})`);
+    }
+    return { passed, total };
   }
-  const summaryMatch = output.match(/All\s+(\d+)(?:\/\d+)?\s+.*pass/i);
-  if (summaryMatch) {
-    return Number(summaryMatch[1]);
+  const summaryCountMatch = output.match(/(?:All\s+)?(\d+)\s+(?:fast|boundary|decoy|pilot|checks?|tests?)\b[^\n]*pass/i);
+  if (summaryCountMatch) {
+    const count = Number(summaryCountMatch[1]);
+    return { passed: count, total: count };
   }
-  return 0;
+  // Count individual check lines only (exclude summary lines starting with ✔ Completed / ✔ Live / ✔ Built)
+  const lines = output.split(/\r?\n/);
+  const checkLines = lines.filter(
+    (line) => /✔/.test(line) && !/✔\s*(?:Completed|Live|Built|All\s+\d)/i.test(line)
+  );
+  return { passed: checkLines.length, total: checkLines.length };
 }
 
 function resolveTsxCli(): string {
@@ -89,15 +100,23 @@ function runNpmSuite(suite: { name: string; script: string; toolPath: string; ph
   const durationMs = Date.now() - start;
   const combined = `${res.stdout || ""}\n${res.stderr || ""}`;
   const exitCode = res.status ?? (res.error ? 1 : 1);
-  const testsPassed = countPassingChecks(combined);
+  let testsPassed = 0;
+  let reportError = false;
+  try {
+    const counts = countPassingChecks(combined);
+    testsPassed = counts.passed;
+  } catch (err) {
+    console.error(`\n[REPORTING ERROR] ${suite.script}: ${err instanceof Error ? err.message : err}`);
+    reportError = true;
+  }
 
   return {
     name: suite.name,
     script: suite.script,
     phase: suite.phase,
     testsPassed,
-    status: exitCode === 0 ? "PASS" : "FAIL",
-    exitCode,
+    status: exitCode === 0 && !reportError ? "PASS" : "FAIL",
+    exitCode: reportError ? 1 : exitCode,
     durationMs,
     lastRun: new Date().toISOString()
   };

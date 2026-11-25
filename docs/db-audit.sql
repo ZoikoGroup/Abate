@@ -96,3 +96,27 @@ WHERE NOT EXISTS (
     AND g.table_name = 'worker_consumer_version'
     AND g.privilege_type = expected_priv
 );
+
+-- 9. Published outbox prune DELETE grant missing on outbox_event for abate_worker/abate_ops (0089, expect 0 rows)
+SELECT expected_role
+FROM unnest(ARRAY['abate_worker', 'abate_ops']) AS expected_role
+WHERE NOT EXISTS (
+  SELECT 1
+  FROM information_schema.role_table_grants g
+  WHERE g.grantee = expected_role
+    AND g.table_schema = 'public'
+    AND g.table_name = 'outbox_event'
+    AND g.privilege_type = 'DELETE'
+);
+
+-- 10. Published outbox prune RLS policies missing on outbox_event (0089, expect 0 rows)
+SELECT expected_policy
+FROM unnest(ARRAY['worker_prune_published', 'ops_prune_published']) AS expected_policy
+WHERE NOT EXISTS (
+  SELECT 1
+  FROM pg_policies p
+  WHERE p.schemaname = 'public'
+    AND p.tablename = 'outbox_event'
+    AND p.policyname = expected_policy
+    AND p.cmd = 'DELETE'
+);

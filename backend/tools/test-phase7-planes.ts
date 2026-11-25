@@ -31,9 +31,24 @@ import { AppError } from "../src/platform/errors";
 
 console.log("\x1b[36m=== Abate Task Runner: test-phase7-planes (BE-009 Two-Plane Separation) ===\x1b[0m\n");
 
+let total = 0;
 let passed = 0;
 
+async function runSetup(name: string, fn: () => void | Promise<void>) {
+  try {
+    const res = fn();
+    if (res instanceof Promise) {
+      await res;
+    }
+    console.log(`  \x1b[36m[setup]\x1b[0m ${name}`);
+  } catch (err: any) {
+    console.error(`  \x1b[31m✖\x1b[0m ${name}: ${err.message}`);
+    process.exit(1);
+  }
+}
+
 async function runTest(name: string, fn: () => void | Promise<void>) {
+  total++;
   try {
     const res = fn();
     if (res instanceof Promise) {
@@ -51,7 +66,7 @@ const isCode = (code: string) => (err: any) => err?.code === code || (err instan
 
 async function main() {
   // Step 0: Seed base multi-tenant environment
-  await runTest("Setup: Seed isolated two-tenant environment", async () => {
+  await runSetup("Setup: Seed isolated two-tenant environment", async () => {
     const pgLive = await checkPgHealth();
     await seedTwoTenants({ persistToPostgres: pgLive });
   });
@@ -366,8 +381,8 @@ async function main() {
     assert.strictEqual(closed.stage, "CLOSED");
   });
 
-  // passed counts Setup (1) + 5 numbered tests = 6 total calls to runTest
-  console.log(`\n\x1b[32m✔ Completed Phase 7 Two-Plane Separation Test Suite: ${passed}/6 tests passed (1 setup + 5 numbered).\x1b[0m\n`);
+  assert.strictEqual(passed, total, `Reported passed (${passed}) must equal total (${total})`);
+  console.log(`\n\x1b[32m[SUCCESS] Completed Phase 7 Two-Plane Separation Test Suite: ${passed}/${total} tests passed.\x1b[0m\n`);
 }
 
 main().catch(err => {

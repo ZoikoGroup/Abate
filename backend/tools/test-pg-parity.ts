@@ -18,6 +18,7 @@ import {
   withReleaseCompiler,
   withPerformance,
   withOps,
+  withWorker,
   resetPgHealthCache
 } from "../src/platform/db/with-tenant";
 import { GOLDEN_01 } from "../src/fixtures/golden01";
@@ -28,7 +29,7 @@ import { createOrganization } from "../src/domains/tenant/commands";
 import { resolveActor } from "../src/domains/tenant/auth";
 import { compileRelease } from "../src/domains/privacy";
 import { runAiUseCase, getMonthlySpendMinor } from "../src/domains/ai";
-import { EventBus } from "../src/worker/outbox-publisher";
+import { EventBus, prunePublishedOutbox } from "../src/worker/outbox-publisher";
 import { drainBatch } from "../src/worker/daemon";
 
 const requireLive = process.argv.includes("--require-live");
@@ -173,7 +174,17 @@ async function main() {
       await mClient.query("COMMIT");
 
       await assert.rejects(
-        () => mClient.query("UPDATE audit_event SET command = 'tampered' WHERE id = (SELECT id FROM audit_event LIMIT 1)"),
+        async () => {
+          await mClient.query("BEGIN");
+          try {
+            await mClient.query("SELECT set_config('app.tenant_id', $1, true)", [tenantA]);
+            await mClient.query("UPDATE audit_event SET command = 'tampered' WHERE id = (SELECT id FROM audit_event LIMIT 1)");
+            await mClient.query("COMMIT");
+          } catch (err) {
+            await mClient.query("ROLLBACK").catch(() => {});
+            throw err;
+          }
+        },
         /append-only/i
       );
       await assert.rejects(
@@ -442,6 +453,86 @@ async function main() {
       return { defs: defs.rows[0].c, rels: rels.rows[0].c };
     });
     assert.ok(perfReadable.defs >= 0 && perfReadable.rels >= 0, "abate_performance must read outcome_definition and tenant-scoped privacy_release");
+  });
+
+  await check("Migration 0089: abate_worker can prune aged PUBLISHED outbox rows while RLS blocks deleting PENDING rows", async () => {
+    const agedPubId = crypto.randomUUID();
+    const pendingId = crypto.randomUUID();
+    const aggId = crypto.randomUUID();
+    const tenDaysAgo = new Date(Date.now() - 10 * 86400 * 1000).toISOString();
+
+    await withTenant(tenantA, async (tx) => {
+      await tx.q(
+        `INSERT INTO outbox_event (id, tenant_id, aggregate, aggregate_id, aggregate_version, event_type, schema_version, purpose, refs)
+         VALUES ($1, $2, 'hazard', $3, 1, 'HAZARD_CREATED', 'v1.0', 'WORKPLACE_RISK_ASSESSMENT', '[]'::jsonb),
+                ($4, $2, 'hazard', $3, 2, 'HAZARD_CREATED', 'v1.0', 'WORKPLACE_RISK_ASSESSMENT', '[]'::jsonb)`,
+        [agedPubId, tenantA, aggId, pendingId]
+      );
+    });
+    await withWorker(async (tx) => {
+      await tx.q(`UPDATE outbox_event SET state = 'PUBLISHED', published_at = $1 WHERE id = $2`, [tenDaysAgo, agedPubId]);
+    });
+
+    const pruneRes = await prunePublishedOutbox(168, 500);
+    assert.ok(pruneRes.prunedCount >= 1, "prunePublishedOutbox must delete aged PUBLISHED row on live PG");
+
+    await withWorker(async (tx) => {
+      const pubLeft = await tx.q(`SELECT id FROM outbox_event WHERE id = $1`, [agedPubId]);
+      assert.strictEqual(pubLeft.rowCount, 0, "Aged PUBLISHED row must be deleted");
+
+      // Direct DELETE of PENDING row must affect 0 rows due to worker_prune_published RLS USING clause
+      const delPending = await tx.q(`DELETE FROM outbox_event WHERE id = $1 RETURNING id`, [pendingId]);
+      assert.strictEqual(delPending.rowCount, 0, "abate_worker RLS must block deleting PENDING outbox rows");
+
+      const stillPending = await tx.q(`SELECT id FROM outbox_event WHERE id = $1`, [pendingId]);
+      assert.strictEqual(stillPending.rowCount, 1, "PENDING outbox row must remain intact");
+    });
+
+    const cleanupClient = await migratorPool!.connect();
+    try {
+      await cleanupClient.query("BEGIN");
+      await cleanupClient.query("SELECT set_config('app.tenant_id', $1, true)", [tenantA]);
+      await cleanupClient.query(`DELETE FROM outbox_event WHERE id = $1`, [pendingId]);
+      await cleanupClient.query("COMMIT");
+    } finally {
+      cleanupClient.release();
+    }
+  });
+
+  await check("Section 5.5 Timeouts: transaction-local statement_timeout and lock_timeout are enforced on live PG", async () => {
+    const tenantTimeouts = await withTenant(tenantA, async (tx) => {
+      const st = await tx.q(`SHOW statement_timeout`);
+      const lt = await tx.q(`SHOW lock_timeout`);
+      return {
+        statementTimeout: st.rows[0]?.statement_timeout,
+        lockTimeout: lt.rows[0]?.lock_timeout
+      };
+    });
+    assert.strictEqual(tenantTimeouts.statementTimeout, "30s", "withTenant must set SET LOCAL statement_timeout = 30000ms");
+    assert.strictEqual(tenantTimeouts.lockTimeout, "10s", "withTenant must set SET LOCAL lock_timeout = 10000ms");
+
+    const workerTimeouts = await withWorker(async (tx) => {
+      const st = await tx.q(`SHOW statement_timeout`);
+      const lt = await tx.q(`SHOW lock_timeout`);
+      return {
+        statementTimeout: st.rows[0]?.statement_timeout,
+        lockTimeout: lt.rows[0]?.lock_timeout
+      };
+    });
+    assert.strictEqual(workerTimeouts.statementTimeout, "10s", "withWorker must set SET LOCAL statement_timeout = 10000ms");
+    assert.strictEqual(workerTimeouts.lockTimeout, "5s", "withWorker must set SET LOCAL lock_timeout = 5000ms");
+
+    // Verify PostgreSQL actually cancels a runaway query under SET LOCAL statement_timeout
+    await assert.rejects(
+      async () => {
+        await withTenant(tenantA, async (tx) => {
+          await tx.q(`SET LOCAL statement_timeout = '50ms'`);
+          await tx.q(`SELECT pg_sleep(0.3)`);
+        });
+      },
+      /statement timeout/i,
+      "PostgreSQL must abort query exceeding SET LOCAL statement_timeout"
+    );
   });
 
   console.log(`\n\x1b[32m✔ Live PostgreSQL Parity & Role Isolation Suite PASSED (${passed} checks).\x1b[0m\n`);

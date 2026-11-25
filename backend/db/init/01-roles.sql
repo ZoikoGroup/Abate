@@ -14,10 +14,14 @@ BEGIN
     CREATE ROLE abate_worker LOGIN PASSWORD 'worker_pw' NOSUPERUSER NOBYPASSRLS NOCREATEDB NOCREATEROLE;
   END IF;
 
-  -- 0081_phase2_identity_map.sql GRANTs to this role but abate_migrator (NOCREATEROLE) cannot create it,
-  -- so a fresh database failed at 0081 with "permission denied to create role".
+  -- 0081_phase2_identity_map.sql and 0082_phase3_privacy_roles.sql GRANT to these roles,
+  -- but abate_migrator (NOCREATEROLE) cannot create them on a fresh non-superuser database.
   IF NOT EXISTS (SELECT FROM pg_roles WHERE rolname = 'abate_identity') THEN
     CREATE ROLE abate_identity LOGIN PASSWORD 'identity_pw' NOSUPERUSER NOBYPASSRLS NOCREATEDB NOCREATEROLE;
+  END IF;
+
+  IF NOT EXISTS (SELECT FROM pg_roles WHERE rolname = 'abate_privacy') THEN
+    CREATE ROLE abate_privacy LOGIN PASSWORD 'privacy_pw' NOSUPERUSER NOBYPASSRLS NOCREATEDB NOCREATEROLE;
   END IF;
 
   IF NOT EXISTS (SELECT FROM pg_roles WHERE rolname = 'abate_protected_compute') THEN
@@ -42,6 +46,7 @@ GRANT CONNECT ON DATABASE abate TO
   abate_app,
   abate_worker,
   abate_identity,
+  abate_privacy,
   abate_protected_compute,
   abate_release_compiler,
   abate_performance,
@@ -52,6 +57,7 @@ GRANT USAGE ON SCHEMA public TO
   abate_app,
   abate_worker,
   abate_identity,
+  abate_privacy,
   abate_protected_compute,
   abate_release_compiler,
   abate_performance,

@@ -33,9 +33,24 @@ import { derivePseudonym } from "../src/domains/work/pseudonym";
 
 console.log("\x1b[36m=== Abate Task Runner: test-phase2-ingestion (Phase 2 Suite) ===\x1b[0m\n");
 
+let total = 0;
 let passed = 0;
 
+async function runSetup(name: string, fn: () => void | Promise<void>) {
+  try {
+    const res = fn();
+    if (res instanceof Promise) {
+      await res;
+    }
+    console.log(`  \x1b[36m[setup]\x1b[0m ${name}`);
+  } catch (err: any) {
+    console.error(`  \x1b[31m✖\x1b[0m ${name}: ${err.message}`);
+    process.exit(1);
+  }
+}
+
 async function runTest(name: string, fn: () => void | Promise<void>) {
+  total++;
   try {
     const res = fn();
     if (res instanceof Promise) {
@@ -51,7 +66,7 @@ async function runTest(name: string, fn: () => void | Promise<void>) {
 
 async function main() {
   // Step 1: Seed base two-tenant fixture
-  await runTest("Setup: Seed isolated two-tenant environment", async () => {
+  await runSetup("Setup: Seed isolated two-tenant environment", async () => {
     const pgLive = await checkPgHealth();
     await seedTwoTenants({ persistToPostgres: pgLive });
   });
@@ -690,7 +705,8 @@ async function main() {
     }
   );
 
-  console.log(`\n\x1b[32m[SUCCESS] All ${passed}/10 Phase 2 Ingestion & Ledger tests PASSED.\x1b[0m\n`);
+  assert.strictEqual(passed, total, `Reported passed (${passed}) must equal total (${total})`);
+  console.log(`\n\x1b[32m[SUCCESS] All ${passed}/${total} Phase 2 Ingestion & Ledger tests PASSED.\x1b[0m\n`);
 }
 
 main().catch((err) => {

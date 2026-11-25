@@ -10,13 +10,14 @@
 
 import assert from "node:assert";
 import crypto from "node:crypto";
-import { withTenant, withWorker } from "../src/platform/db/with-tenant";
+import { checkPgHealth, migratorPool, withTenant, withWorker } from "../src/platform/db/with-tenant";
 import { GOLDEN_01 } from "../src/fixtures/golden01";
-import { EventBus } from "../src/worker/outbox-publisher";
+import { EventBus, prunePublishedOutbox } from "../src/worker/outbox-publisher";
 import {
   drainBatch,
   getWorkerMetrics,
-  resetWorkerMetrics
+  resetWorkerMetrics,
+  runScheduledOutboxPrunePass
 } from "../src/worker/daemon";
 
 interface TestReport {
@@ -520,6 +521,123 @@ async function main() {
         return (await tx.q("SELECT * FROM outbox_event LIMIT 5")).rows;
       });
       assert.ok(Array.isArray(outboxResult), "abate_worker must have access only to outbox_event");
+    }
+  );
+
+  // --------------------------------------------------------------------------
+  // TEST 7: Published Outbox Pruning (Section 5.5 Maintenance)
+  // --------------------------------------------------------------------------
+  await runTest(
+    "Published outbox pruning deletes aged PUBLISHED rows while preserving pending, processing, and dead-letter events",
+    async () => {
+      const oldPublishedId = crypto.randomUUID();
+      const recentPublishedId = crypto.randomUUID();
+      const pendingId = crypto.randomUUID();
+      const deadLetterId = crypto.randomUUID();
+      const aggId = crypto.randomUUID();
+      const eightDaysAgo = new Date(Date.now() - 8 * 86400 * 1000).toISOString();
+      const oneHourAgo = new Date(Date.now() - 3600 * 1000).toISOString();
+
+      // Seed events via abate_app (abate_worker has no INSERT grant on outbox_event),
+      // then transition states via abate_worker.
+      await withTenant(tenantA, async (tx) => {
+        await tx.q(
+          `INSERT INTO outbox_event (
+             id, tenant_id, aggregate, aggregate_id, aggregate_version,
+             event_type, schema_version, purpose, refs
+           ) VALUES ($1, $2, 'Hazard', $3, 1, 'HazardCreated', 'v1', 'WORKPLACE_RISK_ASSESSMENT', '[]'::jsonb),
+                    ($4, $2, 'Hazard', $3, 2, 'HazardCreated', 'v1', 'WORKPLACE_RISK_ASSESSMENT', '[]'::jsonb),
+                    ($5, $2, 'Hazard', $3, 3, 'HazardCreated', 'v1', 'WORKPLACE_RISK_ASSESSMENT', '[]'::jsonb),
+                    ($6, $2, 'Hazard', $3, 4, 'HazardCreated', 'v1', 'WORKPLACE_RISK_ASSESSMENT', '[]'::jsonb)`,
+          [oldPublishedId, tenantA, aggId, recentPublishedId, pendingId, deadLetterId]
+        );
+      });
+
+      await withWorker(async (tx) => {
+        await tx.q(
+          `UPDATE outbox_event SET state = 'PUBLISHED', published_at = $1 WHERE id = $2`,
+          [eightDaysAgo, oldPublishedId]
+        );
+        await tx.q(
+          `UPDATE outbox_event SET state = 'PUBLISHED', published_at = $1 WHERE id = $2`,
+          [oneHourAgo, recentPublishedId]
+        );
+        await tx.q(
+          `UPDATE outbox_event SET state = 'DEAD_LETTER' WHERE id = $1`,
+          [deadLetterId]
+        );
+      });
+
+      // Execute pruning with 7 days (168 hours) threshold
+      const pruneResult = await prunePublishedOutbox(168, 500);
+      assert.ok(pruneResult.prunedCount >= 1, "Pruning must remove at least the 8-day-old event");
+
+      // Verify outcomes
+      await withWorker(async (tx) => {
+        const oldRow = (await tx.q("SELECT id FROM outbox_event WHERE id = $1", [oldPublishedId])).rows;
+        assert.strictEqual(oldRow.length, 0, "Aged published event must be purged");
+
+        const recentRow = (await tx.q("SELECT id FROM outbox_event WHERE id = $1", [recentPublishedId])).rows;
+        assert.strictEqual(recentRow.length, 1, "Recent published event must be preserved");
+
+        const pendingRow = (await tx.q("SELECT id FROM outbox_event WHERE id = $1", [pendingId])).rows;
+        assert.strictEqual(pendingRow.length, 1, "Pending event must never be pruned");
+
+        const deadLetterRow = (await tx.q("SELECT id FROM outbox_event WHERE id = $1", [deadLetterId])).rows;
+        assert.strictEqual(deadLetterRow.length, 1, "Dead-letter event must never be pruned");
+      });
+
+      // Clean up remaining test rows (abate_worker RLS blocks deleting PENDING/DEAD_LETTER)
+      const pgLive = await checkPgHealth();
+      if (pgLive && migratorPool) {
+        await migratorPool.query("DELETE FROM outbox_event WHERE id = ANY($1::uuid[])", [
+          [recentPublishedId, pendingId, deadLetterId]
+        ]);
+      } else {
+        await withWorker(async (tx) => {
+          await tx.q("DELETE FROM outbox_event WHERE id IN ($1, $2, $3)", [recentPublishedId, pendingId, deadLetterId]);
+        });
+      }
+    }
+  );
+
+  // --------------------------------------------------------------------------
+  // TEST 9: Scheduled Outbox Prune Pass & Worker Metrics Tracking
+  // --------------------------------------------------------------------------
+  await runTest(
+    "Scheduled outbox prune pass updates worker prune metrics and timestamp",
+    async () => {
+      const agedId = crypto.randomUUID();
+      const aggId = crypto.randomUUID();
+      const tenDaysAgo = new Date(Date.now() - 10 * 86400 * 1000).toISOString();
+
+      await withTenant(tenantA, async (tx) => {
+        await tx.q(
+          `INSERT INTO outbox_event (
+             id, tenant_id, aggregate, aggregate_id, aggregate_version,
+             event_type, schema_version, purpose, refs
+           ) VALUES ($1, $2, 'Hazard', $3, 1, 'HazardCreated', 'v1', 'WORKPLACE_RISK_ASSESSMENT', '[]'::jsonb)`,
+          [agedId, tenantA, aggId]
+        );
+      });
+      await withWorker(async (tx) => {
+        await tx.q(
+          `UPDATE outbox_event SET state = 'PUBLISHED', published_at = $1 WHERE id = $2`,
+          [tenDaysAgo, agedId]
+        );
+      });
+
+      const beforeTotal = getWorkerMetrics().outboxPrunedTotal ?? 0;
+      const sweep = await runScheduledOutboxPrunePass({ olderThanHours: 168, batchSize: 100 });
+      assert.ok(sweep.prunedCount >= 1, "Scheduled prune sweep must purge the 10-day-old published event");
+      assert.ok(sweep.executedAt, "Scheduled prune sweep must record execution timestamp");
+
+      const afterMetrics = getWorkerMetrics();
+      assert.ok(afterMetrics.lastOutboxPruneAt, "Worker metrics must expose lastOutboxPruneAt");
+      assert.ok(
+        (afterMetrics.outboxPrunedTotal ?? 0) >= beforeTotal + sweep.prunedCount,
+        "Worker metrics must accumulate outboxPrunedTotal"
+      );
     }
   );
 

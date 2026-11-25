@@ -35,9 +35,24 @@ import { app } from "../src/index";
 
 console.log("\x1b[36m=== Abate Task Runner: test-phase6-ai (BE-008 Bounded AI Assistance & Safety Interventions) ===\x1b[0m\n");
 
+let total = 0;
 let passed = 0;
 
+async function runSetup(name: string, fn: () => void | Promise<void>) {
+  try {
+    const res = fn();
+    if (res instanceof Promise) {
+      await res;
+    }
+    console.log(`  \x1b[36m[setup]\x1b[0m ${name}`);
+  } catch (err: any) {
+    console.error(`  \x1b[31m✖\x1b[0m ${name}: ${err.message}`);
+    process.exit(1);
+  }
+}
+
 async function runTest(name: string, fn: () => void | Promise<void>) {
+  total++;
   try {
     const res = fn();
     if (res instanceof Promise) {
@@ -56,7 +71,7 @@ const isCode = (code: string) => (err: any) => err?.code === code || (err instan
 async function main() {
   // Step 0: Seed base multi-tenant environment
   let pgLive = false;
-  await runTest("Setup: Seed isolated two-tenant environment", async () => {
+  await runSetup("Setup: Seed isolated two-tenant environment", async () => {
     pgLive = await checkPgHealth();
     await seedTwoTenants({ persistToPostgres: pgLive });
   });
@@ -525,7 +540,8 @@ async function main() {
     }
   });
 
-  console.log(`\n\x1b[32m✔ Completed Phase 6 Bounded AI & Safety Test Suite: ${passed - 1}/14 tests passed.\x1b[0m\n`);
+  assert.strictEqual(passed, total, `Reported passed (${passed}) must equal total (${total})`);
+  console.log(`\n\x1b[32m[SUCCESS] Completed Phase 6 Bounded AI & Safety Test Suite: ${passed}/${total} tests passed.\x1b[0m\n`);
 }
 
 main().catch(err => {
