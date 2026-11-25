@@ -151,7 +151,8 @@ app.get("/api/health", async (_req: Request, res: Response) => {
     worker: {
       state: workerMetrics.state,
       queueDepth: workerMetrics.queueDepth,
-      totalDeadLetters: workerMetrics.totalDeadLetters
+      totalDeadLetters: workerMetrics.totalDeadLetters,
+      outboxPrunedTotal: workerMetrics.outboxPrunedTotal ?? 0
     },
     timestamp: new Date().toISOString(),
     constitutionalBoundaries: {

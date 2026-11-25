@@ -14,7 +14,8 @@ import {
   getConsumerHighWaterVersion,
   recordConsumerHighWaterVersion,
   DEFAULT_MAX_ATTEMPTS,
-  DEFAULT_LEASE_SECONDS
+  DEFAULT_LEASE_SECONDS,
+  prunePublishedOutbox
 } from "./outbox-publisher";
 import { runScheduledRetentionPass } from "./retention-executor";
 
@@ -31,6 +32,8 @@ export interface WorkerMetrics {
   lastRunAt: string | null;
   lastRetentionRunAt?: string | null;
   retentionPurgedTotal?: number;
+  lastOutboxPruneAt?: string | null;
+  outboxPrunedTotal?: number;
 }
 
 export interface WorkerOptions {
@@ -45,6 +48,9 @@ export interface WorkerOptions {
   simulateCrashAfterPublish?: boolean;
   enableRetentionExecutor?: boolean;
   retentionIntervalMs?: number;
+  enableOutboxPrune?: boolean;
+  outboxPruneIntervalMs?: number;
+  outboxPruneOlderThanHours?: number;
 }
 
 // Global live metrics state for operations dashboard and health endpoints
@@ -60,7 +66,9 @@ const globalMetrics: WorkerMetrics = {
   lastError: null,
   lastRunAt: null,
   lastRetentionRunAt: null,
-  retentionPurgedTotal: 0
+  retentionPurgedTotal: 0,
+  lastOutboxPruneAt: null,
+  outboxPrunedTotal: 0
 };
 
 export function getWorkerMetrics(): WorkerMetrics {
@@ -75,6 +83,24 @@ export function resetWorkerMetrics(): void {
   globalMetrics.heartbeatAt = null;
   globalMetrics.queueDepth = 0;
   globalMetrics.queueLagMs = 0;
+  globalMetrics.lastOutboxPruneAt = null;
+  globalMetrics.outboxPrunedTotal = 0;
+}
+
+/**
+ * Executes a scheduled published-outbox pruning sweep and updates worker metrics.
+ */
+export async function runScheduledOutboxPrunePass(opts: {
+  olderThanHours?: number;
+  batchSize?: number;
+} = {}): Promise<{ prunedCount: number; olderThanHours: number; executedAt: string }> {
+  const olderThanHours = opts.olderThanHours ?? 168;
+  const batchSize = opts.batchSize ?? 500;
+  const res = await prunePublishedOutbox(olderThanHours, batchSize);
+  const executedAt = new Date().toISOString();
+  globalMetrics.lastOutboxPruneAt = executedAt;
+  globalMetrics.outboxPrunedTotal = (globalMetrics.outboxPrunedTotal || 0) + res.prunedCount;
+  return { ...res, executedAt };
 }
 
 /**
@@ -195,7 +221,9 @@ export async function runWorkerDaemon(opts: WorkerOptions = {}): Promise<void> {
   const minIntervalMs = opts.minIntervalMs || 100;
   const maxIntervalMs = opts.maxIntervalMs || 5000;
   const retentionIntervalMs = opts.retentionIntervalMs || 3_600_000;
+  const outboxPruneIntervalMs = opts.outboxPruneIntervalMs || 6 * 3_600_000;
   let lastRetentionTick = 0;
+  let lastOutboxPruneTick = 0;
   let currentDelay = minIntervalMs;
 
   daemonRunning = true;
@@ -220,6 +248,13 @@ export async function runWorkerDaemon(opts: WorkerOptions = {}): Promise<void> {
           const retSummary = await runScheduledRetentionPass();
           globalMetrics.lastRetentionRunAt = retSummary.executedAt;
           globalMetrics.retentionPurgedTotal = (globalMetrics.retentionPurgedTotal || 0) + retSummary.totalPurged;
+        }
+
+        if (opts.enableOutboxPrune && Date.now() - lastOutboxPruneTick >= outboxPruneIntervalMs) {
+          lastOutboxPruneTick = Date.now();
+          await runScheduledOutboxPrunePass({
+            olderThanHours: opts.outboxPruneOlderThanHours
+          });
         }
 
         if (result.processed > 0) {
@@ -262,9 +297,20 @@ if (typeof process !== "undefined" && /daemon\.(ts|js)$/.test(process.argv[1] ||
   const parsedInterval = Number(process.env.ABATE_RETENTION_INTERVAL_MS);
   const retentionIntervalMs = Number.isFinite(parsedInterval) && parsedInterval >= 1000 ? parsedInterval : undefined;
 
+  const enableOutboxPrune =
+    process.env.ABATE_ENABLE_OUTBOX_PRUNE === "1" ||
+    process.env.ABATE_ENABLE_OUTBOX_PRUNE === "true";
+  const parsedPruneInterval = Number(process.env.ABATE_OUTBOX_PRUNE_INTERVAL_MS);
+  const outboxPruneIntervalMs = Number.isFinite(parsedPruneInterval) && parsedPruneInterval >= 1000 ? parsedPruneInterval : undefined;
+  const parsedPruneHours = Number(process.env.ABATE_OUTBOX_PRUNE_HOURS);
+  const outboxPruneOlderThanHours = Number.isFinite(parsedPruneHours) && parsedPruneHours >= 1 ? parsedPruneHours : undefined;
+
   runWorkerDaemon({
     enableRetentionExecutor,
-    retentionIntervalMs
+    retentionIntervalMs,
+    enableOutboxPrune,
+    outboxPruneIntervalMs,
+    outboxPruneOlderThanHours
   }).catch((err) => {
     console.error("Worker daemon fatal error:", err);
     process.exit(1);

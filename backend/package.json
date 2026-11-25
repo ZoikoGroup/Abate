@@ -38,6 +38,7 @@
     "build-dossier": "tsx tools/build-dossier.ts",
     "check:endpoints": "tsx tools/endpoint-check.ts",
     "worker": "tsx src/worker/daemon.ts",
+    "prune-outbox": "tsx tools/prune-outbox.ts",
     "test-worker": "tsx tools/test-worker-crash-lab.ts",
     "test-ingest": "tsx tools/test-phase2-ingestion.ts",
     "test-privacy": "tsx tools/test-reconstruction.ts",

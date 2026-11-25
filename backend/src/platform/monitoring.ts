@@ -101,6 +101,7 @@ export interface WorkerMetricsLike {
   totalProcessed: number;
   totalFailures: number;
   totalDeadLetters: number;
+  outboxPrunedTotal?: number;
 }
 
 export interface DependencyHealthLike {
@@ -329,6 +330,9 @@ export function renderPrometheusMetrics(params: {
     "# HELP abate_worker_dead_letters_total Outbox events moved to dead-letter state",
     "# TYPE abate_worker_dead_letters_total counter",
     `abate_worker_dead_letters_total ${workerMetrics.totalDeadLetters}`,
+    "# HELP abate_worker_outbox_pruned_total Aged published outbox events pruned by maintenance",
+    "# TYPE abate_worker_outbox_pruned_total counter",
+    `abate_worker_outbox_pruned_total ${workerMetrics.outboxPrunedTotal ?? 0}`,
     "# HELP abate_dependencies_up Dependency reachability (1=up, 0=down)",
     "# TYPE abate_dependencies_up gauge",
     `abate_dependencies_up{component="database"} ${deps.databaseOk ? 1 : 0}`,
