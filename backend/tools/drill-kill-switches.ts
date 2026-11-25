@@ -9,7 +9,7 @@ import path from "node:path";
 import { expressCall } from "./simulate-30d-http";
 import { seedTwoTenants } from "../src/fixtures/seed";
 import { GOLDEN_01 } from "../src/fixtures/golden01";
-import { withTenant } from "../src/platform/db/with-tenant";
+import { withTenant, isPostgresRequired } from "../src/platform/db/with-tenant";
 import { resolveActor } from "../src/domains/tenant/auth";
 import { getJurisdictionCoverage } from "../src/domains/lifecycle/jurisdiction";
 
@@ -39,7 +39,7 @@ export async function runKillSwitchDrill(opts: { quiet?: boolean; writeReport?: 
   };
 
   log("=== Abate Operational Drill: 5 Independent Kill Switches ===");
-  await seedTwoTenants();
+  await seedTwoTenants({ persistToPostgres: isPostgresRequired() });
 
   const authA = await expressCall("POST", "/api/v2/auth/token", {
     body: {

@@ -689,7 +689,7 @@ export class MemoryClient {
         if (filterUnpublishedOnly) {
           if (e.published_at) return false;
           if (e.state === "DEAD_LETTER" || e.state === "PUBLISHED") return false;
-          if (isSkipLocked && e.state === "PROCESSING") return false;
+          if (isSkipLocked && e.state === "PROCESSING" && e.next_retry_at && new Date(e.next_retry_at).getTime() > Date.now()) return false;
           if (e.next_retry_at && new Date(e.next_retry_at).getTime() > Date.now()) return false;
         }
         return true;
@@ -701,8 +701,11 @@ export class MemoryClient {
         if (litLimit) rows = rows.slice(0, Number(litLimit[1]));
       }
       if (isSkipLocked) {
+        const leaseSec = params.length >= 2 ? Number(params[1]) : 120;
+        const leaseUntil = new Date(Date.now() + leaseSec * 1000).toISOString();
         for (const m of rows) {
           m.state = "PROCESSING";
+          m.next_retry_at = leaseUntil;
         }
       }
       return { rows, rowCount: rows.length, command: "SELECT", oid: 0, fields: [] };
@@ -714,8 +717,15 @@ export class MemoryClient {
         const id = params[params.length - 1];
         const ev = memDb.outboxEvents.find(e => e.id === id);
         if (ev) {
-          ev.published_at = new Date().toISOString();
+          const nowIso = new Date().toISOString();
+          ev.published_at = nowIso;
           ev.state = "PUBLISHED";
+          if (upper.includes("NEXT_RETRY_AT = NOW()")) {
+            ev.next_retry_at = nowIso;
+          }
+          if (params.length >= 2 && params[0]) {
+            ev.last_error = params[0];
+          }
         }
         return { rows: ev ? [ev] : [], rowCount: ev ? 1 : 0, command: "UPDATE", oid: 0, fields: [] };
       }

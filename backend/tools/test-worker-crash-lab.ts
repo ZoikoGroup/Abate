@@ -53,6 +53,19 @@ async function runTest(name: string, fn: () => Promise<void>) {
 async function main() {
   const tenantA = GOLDEN_01.tenantA.id;
 
+  // Drain any pre-existing outbox backlog left by earlier suites sharing a live PostgreSQL instance
+  const preDrainBus = new EventBus();
+  const preDrainConsumer = `consumer-predrain-${crypto.randomUUID().slice(0, 8)}`;
+  for (let round = 0; round < 20; round++) {
+    const res = await drainBatch({
+      bus: preDrainBus,
+      consumerName: preDrainConsumer,
+      batchSize: 100
+    });
+    if (res.processed === 0 && res.skipped === 0 && res.failures === 0) break;
+  }
+  resetWorkerMetrics();
+
   // --------------------------------------------------------------------------
   // TEST 1: Crash after publish but before marking published
   // --------------------------------------------------------------------------
@@ -446,7 +459,10 @@ async function main() {
 
       // Version 2 is re-queued (e.g. its PUBLISHED mark was lost): the retry must be delivered, not flagged stale
       await withWorker(async (tx) => {
-        await tx.q(`UPDATE outbox_event SET state = 'PENDING', published_at = NULL WHERE id = $1`, [ids[1]]);
+        await tx.q(
+          `UPDATE outbox_event SET state = 'PENDING', published_at = NULL, next_retry_at = now() WHERE id = $1`,
+          [ids[1]]
+        );
       });
       const retry = await drainBatch({ bus: testBus, consumerName });
       assert.strictEqual(retry.skipped, 0, "Same-version retry must not be skipped");

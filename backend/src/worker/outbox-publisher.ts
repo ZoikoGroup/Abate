@@ -138,7 +138,7 @@ export async function markPublished(eventId: string, note: string | null = null)
   await withWorker(async (tx) => {
     await tx.q(
       `UPDATE outbox_event
-       SET published_at = now(), state = 'PUBLISHED', last_error = COALESCE($1, last_error)
+       SET published_at = now(), state = 'PUBLISHED', next_retry_at = now(), last_error = COALESCE($1, last_error)
        WHERE id = $2 AND state = 'PROCESSING'`,
       [note, eventId]
     );

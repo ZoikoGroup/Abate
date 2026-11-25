@@ -37,8 +37,13 @@ WORKDIR /app/backend
 ENV NODE_ENV=production
 ENV PORT=5000
 
+RUN apk upgrade --no-cache
+
 COPY package.json package-lock.json ./
-RUN npm ci --omit=dev && npm cache clean --force
+RUN npm ci --omit=dev && npm cache clean --force && \
+    rm -rf /usr/local/lib/node_modules /usr/local/bin/npm /usr/local/bin/npx /usr/local/bin/corepack /opt/yarn* && \
+    printf '#!/bin/sh\nif [ "$1" = "run" ] && [ "$2" = "start" ]; then exec node dist/index.js; fi\nif [ "$1" = "run" ] && [ "$2" = "start:worker" ]; then exec node dist/worker/daemon.js; fi\nexec node "$@"\n' > /usr/local/bin/npm && \
+    chmod +x /usr/local/bin/npm
 COPY --from=builder /app/backend/dist ./dist
 COPY --from=builder /app/backend/db ./db
 
