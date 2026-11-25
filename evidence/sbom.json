@@ -1,21 +1,21 @@
 {
   "schemaVersion": "abate.sbom.v1",
-  "generatedAt": "2026-11-20T11:47:18.232Z",
-  "commit": "ed7ee34aa5bc19e49eb64468eb0d4074ab317751",
+  "generatedAt": "2026-11-25T04:22:14.568Z",
+  "commit": "229ebb175680560f2485b9a0e38f6dec2c7fdc2a",
   "lockfileSha256": {
-    "backend": "abbba712f14bc6637d2e01d17cc3a428d9a6111de7ff9c3a1edd7ee1b6e00a0c",
+    "backend": "2ee5a3aeefdb104bbbbee990fdf985cf65bde46797fa63d8070229e5f4b4a35c",
     "frontend": "9957dce16a8cc7fa3d1718814e26503ca00bc6dd90e4467b395227cd9f8a09db",
     "tests": "773a43e9147fbc29b80831be631fca9e1078b44a6b0d14013748d454c50aaaf1"
   },
   "components": {
     "backendDependencies": {
-      "compression": "^1.8.1",
+      "compression": "^1.8.2",
       "cors": "^2.8.5",
       "dotenv": "^16.4.7",
       "express": "^4.21.2",
       "jsonwebtoken": "^9.0.2",
       "pg": "^8.13.1",
-      "zod": "^3.24.1"
+      "zod": "^4.6.7"
     },
     "backendDevDependencies": {
       "@types/compression": "^1.8.1",
