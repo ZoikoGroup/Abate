@@ -389,7 +389,8 @@ async function main() {
     });
   });
 
-  console.log(`\n\x1b[32m✔ Completed Phase 5 Retention & Jurisdiction Test Suite: ${passed}/9 tests passed.\x1b[0m\n`);
+  // passed counts Setup (1) + 9 numbered tests = 10 total calls to runTest
+  console.log(`\n\x1b[32m✔ Completed Phase 5 Retention & Jurisdiction Test Suite: ${passed}/10 tests passed (1 setup + 9 numbered).\x1b[0m\n`);
 }
 
 main().catch(err => {

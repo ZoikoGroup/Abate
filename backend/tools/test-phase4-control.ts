@@ -391,7 +391,8 @@ async function main() {
     }
   );
 
-  console.log(`\n\x1b[32m[SUCCESS] All ${passed}/8 Phase 4 Hazard & Control Governance tests PASSED.\x1b[0m\n`);
+  // passed counts Setup (1) + 8 numbered tests = 9 total calls to runTest
+  console.log(`\n\x1b[32m[SUCCESS] All ${passed}/9 Phase 4 Hazard & Control Governance tests PASSED (1 setup + 8 numbered).\x1b[0m\n`);
 }
 
 main().catch((err) => {

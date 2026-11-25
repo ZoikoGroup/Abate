@@ -366,7 +366,8 @@ async function main() {
     assert.strictEqual(closed.stage, "CLOSED");
   });
 
-  console.log(`\n\x1b[32m✔ Completed Phase 7 Two-Plane Separation Test Suite: ${passed}/5 tests passed.\x1b[0m\n`);
+  // passed counts Setup (1) + 5 numbered tests = 6 total calls to runTest
+  console.log(`\n\x1b[32m✔ Completed Phase 7 Two-Plane Separation Test Suite: ${passed}/6 tests passed (1 setup + 5 numbered).\x1b[0m\n`);
 }
 
 main().catch(err => {
