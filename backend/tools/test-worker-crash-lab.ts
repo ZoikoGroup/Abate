@@ -591,6 +591,12 @@ async function main() {
 
         const deadLetterRow = (await tx.q("SELECT id FROM outbox_event WHERE id = $1", [deadLetterId])).rows;
         assert.strictEqual(deadLetterRow.length, 1, "Dead-letter event must never be pruned");
+
+        // Assert abate_worker attempting to delete a PENDING row is refused by RLS (0 rows affected, row preserved)
+        const delPendingAttempt = await tx.q("DELETE FROM outbox_event WHERE id = $1", [pendingId]);
+        assert.strictEqual(delPendingAttempt.rowCount, 0, "abate_worker RLS must refuse deleting PENDING outbox rows");
+        const pendingRefusedCheck = (await tx.q("SELECT id FROM outbox_event WHERE id = $1", [pendingId])).rows;
+        assert.strictEqual(pendingRefusedCheck.length, 1, "Pending event must survive unauthorized delete attempt");
       });
 
       // Clean up remaining test rows (abate_worker RLS blocks deleting PENDING/DEAD_LETTER)
@@ -600,7 +606,7 @@ async function main() {
           [recentPublishedId, pendingId, deadLetterId]
         ]);
       } else {
-        await withWorker(async (tx) => {
+        await withTenant(tenantA, async (tx) => {
           await tx.q("DELETE FROM outbox_event WHERE id IN ($1, $2, $3)", [recentPublishedId, pendingId, deadLetterId]);
         });
       }

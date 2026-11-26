@@ -1,0 +1,28 @@
+# Node
+node_modules/
+dist/
+# Environment files
+.env
+.env.local
+*.env
+.env*
+!.env.example
+
+# Build artefacts
+*.tsbuildinfo
+frontend/dist/
+
+# Generated evidence files – kept out of feature commits; CI uploads them as job artefacts
+# Commit explicitly with `git add -f` only when pinning a release baseline
+frontend/public/test-report.json
+
+# Debug and local logs
+debug.log
+*.log
+
+# OS artefacts
+.DS_Store
+Thumbs.db
+
+# Editor
+.vscode/settings.json
