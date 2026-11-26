@@ -30,6 +30,7 @@ class MemoryDatabase {
   public memberships: Map<string, any> = new Map();
   public idempotency: Map<string, any> = new Map();
   public auditEvents: any[] = [];
+  public platformAuditEvents: any[] = [];
   public outboxEvents: any[] = [];
   public deadLetterEvents: any[] = [];
   public inboxEvents: Map<string, any> = new Map();
@@ -262,8 +263,8 @@ export const memDb = new MemoryDatabase();
 
 // In-Memory Transaction Client simulating Postgres RLS and transaction-local set_config
 export class MemoryClient {
-  // Worker mode mirrors the abate_worker role: cross-tenant access to outbox_event/inbox_event only
-  constructor(private readonly workerMode = false) { }
+  // Worker mode mirrors abate_worker; Ops mode mirrors abate_ops metadata policies (0092)
+  constructor(private readonly workerMode = false, private readonly opsMode = false) { }
   private tenantContext: string | null = null;
   private writePlane: "A" | "B" = "A";
   private snapshotState: string | null = null;
@@ -440,7 +441,8 @@ export class MemoryClient {
     // Fail-Closed RLS Enforcement: If querying tenant-isolated tables without tenant context, return 0 rows
     const isTenantTable = /FROM\s+(principal|organization|effective_membership|idempotency_record|audit_event|outbox_event|dead_letter_event|source_contract|connection|watermark|ingest_receipt|work_fact_revision|identity_map|metric_snapshot|privacy_decision|privacy_release|released_artifact|disclosure_ledger|hazard|cause|intervention|approval|implementation_receipt|evaluation|retention_class|legal_hold|retention_run|deletion_tombstone|tenant_policy_binding|tenant_sector_setting|decision_envelope|evidence_package|evidence_item|rights_request|ai_run|action_attempt|outcome_evaluation|ai_change_profile|ai_workdesign_assessment)/i.test(trimmed);
     const workerTable = this.workerMode && /FROM\s+(outbox_event|inbox_event|dead_letter_event)\b/i.test(trimmed);
-    if (isTenantTable && !this.tenantContext && !workerTable) {
+    const opsTable = this.opsMode && /FROM\s+(principal|organization|effective_membership|tenant_sector_setting|feature_flag)\b/i.test(trimmed);
+    if (isTenantTable && !this.tenantContext && !workerTable && !opsTable) {
       return { rows: [], rowCount: 0, command: "SELECT", oid: 0, fields: [] };
     }
 
@@ -631,7 +633,9 @@ export class MemoryClient {
 
     // Principal select
     if (upper.includes("FROM PRINCIPAL")) {
-      let rows = Array.from(memDb.principals.values()).filter(p => p.tenant_id === this.tenantContext);
+      const targetTenant = this.tenantContext || (params.length > 0 ? params[0] : null);
+      let rows = Array.from(memDb.principals.values());
+      if (targetTenant) rows = rows.filter(p => p.tenant_id === targetTenant);
       return { rows, rowCount: rows.length, command: "SELECT", oid: 0, fields: [] };
     }
 
@@ -674,7 +678,12 @@ export class MemoryClient {
       if (params.length > 0) {
         const idSet = new Set(params.map(String));
         const initialCount = memDb.outboxEvents.length;
-        memDb.outboxEvents = memDb.outboxEvents.filter((e) => !idSet.has(String(e.id)));
+        if (this.workerMode) {
+          // abate_worker is restricted by RLS policy worker_prune_published: can only delete PUBLISHED rows
+          memDb.outboxEvents = memDb.outboxEvents.filter((e) => !(idSet.has(String(e.id)) && e.state === "PUBLISHED"));
+        } else {
+          memDb.outboxEvents = memDb.outboxEvents.filter((e) => !idSet.has(String(e.id)));
+        }
         const deletedCount = initialCount - memDb.outboxEvents.length;
         return { rows: [], rowCount: deletedCount, command: "DELETE", oid: 0, fields: [] };
       }
@@ -2714,8 +2723,97 @@ export class MemoryClient {
     }
 
     if (upper.includes("FROM TENANT_SECTOR_SETTING")) {
-      const rec = this.tenantContext ? memDb.tenantSectorSettings.get(this.tenantContext) : null;
-      return { rows: rec ? [rec] : [], rowCount: rec ? 1 : 0, command: "SELECT", oid: 0, fields: [] };
+      if (this.tenantContext) {
+        const rec = memDb.tenantSectorSettings.get(this.tenantContext);
+        return { rows: rec ? [rec] : [], rowCount: rec ? 1 : 0, command: "SELECT", oid: 0, fields: [] };
+      }
+      const rows = params.length > 0
+        ? [memDb.tenantSectorSettings.get(params[0])].filter(Boolean)
+        : Array.from(memDb.tenantSectorSettings.values());
+      return { rows, rowCount: rows.length, command: "SELECT", oid: 0, fields: [] };
+    }
+
+    // Super Admin Platform Operations (0092_super_admin_platform_ops.sql)
+    if (upper.includes("INSERT INTO PLATFORM_AUDIT_EVENT")) {
+      const [id, operator, role, action, targetType, targetId, reason, details] = params;
+      const rec = {
+        id,
+        occurred_at: new Date().toISOString(),
+        operator,
+        role,
+        action,
+        target_type: targetType,
+        target_id: targetId,
+        reason: reason ?? null,
+        details: typeof details === "string" ? JSON.parse(details) : (details ?? {})
+      };
+      memDb.platformAuditEvents.push(rec);
+      return { rows: [rec], rowCount: 1, command: "INSERT", oid: 0, fields: [] };
+    }
+
+    if (upper.includes("FROM PLATFORM_AUDIT_EVENT")) {
+      const rows = [...memDb.platformAuditEvents].sort(
+        (a, b) => new Date(b.occurred_at).getTime() - new Date(a.occurred_at).getTime()
+      );
+      return { rows, rowCount: rows.length, command: "SELECT", oid: 0, fields: [] };
+    }
+
+    if (upper.includes("INSERT INTO TENANT ")) {
+      const [id, name, region, jurisdictionConfigRef, state] = params;
+      const rec = {
+        id,
+        name,
+        region,
+        jurisdiction_config_ref: jurisdictionConfigRef ?? null,
+        state: state || "ACTIVE",
+        created_at: new Date().toISOString()
+      };
+      memDb.tenants.set(id, rec);
+      return { rows: [rec], rowCount: 1, command: "INSERT", oid: 0, fields: [] };
+    }
+
+    if (upper.includes("UPDATE TENANT SET")) {
+      const id = params[params.length - 1];
+      const existing = memDb.tenants.get(id);
+      if (!existing) return { rows: [], rowCount: 0, command: "UPDATE", oid: 0, fields: [] };
+      if (upper.includes("STATE = $1") && params.length === 2) {
+        existing.state = params[0];
+      } else if (params.length >= 4) {
+        existing.name = params[0];
+        existing.region = params[1];
+        existing.jurisdiction_config_ref = params[2];
+      }
+      return { rows: [existing], rowCount: 1, command: "UPDATE", oid: 0, fields: [] };
+    }
+
+    if (upper.includes("INSERT INTO PRINCIPAL")) {
+      const [id, tId, externalSubject, kind] = params;
+      const rec = { id, tenant_id: tId, external_subject: externalSubject, kind };
+      memDb.principals.set(id, rec);
+      return { rows: [rec], rowCount: 1, command: "INSERT", oid: 0, fields: [] };
+    }
+
+    if (upper.includes("INSERT INTO EFFECTIVE_MEMBERSHIP")) {
+      const [id, tId, principalId, orgId, domainRole, validFrom] = params;
+      const rec = {
+        id,
+        tenant_id: tId,
+        principal_id: principalId,
+        organization_id: orgId,
+        domain_role: domainRole,
+        valid_from: validFrom || new Date().toISOString(),
+        valid_to: null
+      };
+      memDb.memberships.set(id, rec);
+      return { rows: [rec], rowCount: 1, command: "INSERT", oid: 0, fields: [] };
+    }
+
+    if (upper.includes("UPDATE EFFECTIVE_MEMBERSHIP SET VALID_TO")) {
+      const id = params[0];
+      const existing = memDb.memberships.get(id);
+      if (!existing) return { rows: [], rowCount: 0, command: "UPDATE", oid: 0, fields: [] };
+      existing.valid_to = new Date().toISOString();
+      return { rows: [existing], rowCount: 1, command: "UPDATE", oid: 0, fields: [] };
     }
 
     // Durable Async Jobs (0087_async_jobs_and_role_policies.sql)

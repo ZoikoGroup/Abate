@@ -15,19 +15,20 @@ jobs:
       postgres:
         image: postgres:16.2-alpine
         env:
-          POSTGRES_USER: abate_migrator
-          POSTGRES_PASSWORD: migrator_pw
+          POSTGRES_USER: abate_admin
+          POSTGRES_PASSWORD: admin_pw
           POSTGRES_DB: abate
         ports:
           - 5432:5432
         options: >-
-          --health-cmd="pg_isready -U abate_migrator -d abate"
+          --health-cmd="pg_isready -U abate_admin -d abate"
           --health-interval=5s
           --health-timeout=5s
           --health-retries=10
 
     env:
       APP_ENV: test
+      POSTGRES_PORT: ${{ vars.POSTGRES_PORT || '5432' }}
       AUTH_ISSUER: http://localhost:5000/auth
       AUTH_AUDIENCE: abate-api
       AUTH_SECRET: ci_test_auth_secret_key_abate_minimum_32_characters_long
@@ -49,25 +50,82 @@ jobs:
           npm --prefix backend ci
           npm --prefix frontend ci
 
+      - name: Initialize database roles from 01-roles.sql and verify non-superuser isolation
+        env:
+          PORT: ${{ env.POSTGRES_PORT }}
+        run: |
+          PGPASSWORD=admin_pw psql -h localhost -p "${PORT}" -U abate_admin -d abate -v ON_ERROR_STOP=1 -f backend/db/init/01-roles.sql
+          
+          # Assert that every expected role exists, can login, and has strictly NO superuser, NO bypassrls, and NO createdb
+          PGPASSWORD=admin_pw psql -h localhost -p "${PORT}" -U abate_admin -d abate -v ON_ERROR_STOP=1 -c "
+            DO \$\$
+            DECLARE
+              expected_roles text[] := ARRAY[
+                'abate_migrator',
+                'abate_app',
+                'abate_worker',
+                'abate_identity',
+                'abate_privacy',
+                'abate_protected_compute',
+                'abate_release_compiler',
+                'abate_performance',
+                'abate_ops'
+              ];
+              r_name text;
+              r record;
+            BEGIN
+              FOREACH r_name IN ARRAY expected_roles LOOP
+                SELECT rolname, rolsuper, rolbypassrls, rolcanlogin, rolcreatedb, rolcreaterole
+                INTO r
+                FROM pg_roles
+                WHERE rolname = r_name;
+
+                IF NOT FOUND THEN
+                  RAISE EXCEPTION 'CRITICAL: Expected database role % does not exist in pg_roles', r_name;
+                END IF;
+
+                IF r.rolsuper THEN
+                  RAISE EXCEPTION 'SECURITY BREACH: Role % is configured as SUPERUSER in CI', r_name;
+                END IF;
+
+                IF r.rolbypassrls THEN
+                  RAISE EXCEPTION 'SECURITY BREACH: Role % has BYPASSRLS privilege in CI', r_name;
+                END IF;
+
+                IF NOT r.rolcanlogin THEN
+                  RAISE EXCEPTION 'CONFIGURATION ERROR: Role % is not permitted to login', r_name;
+                END IF;
+
+                IF r.rolcreatedb THEN
+                  RAISE EXCEPTION 'LEAST-PRIVILEGE BREACH: Role % has CREATEDB privilege in CI', r_name;
+                END IF;
+
+                IF r.rolcreaterole THEN
+                  RAISE EXCEPTION 'LEAST-PRIVILEGE BREACH: Role % has CREATEROLE privilege in CI', r_name;
+                END IF;
+              END LOOP;
+            END \$\$;
+          "
+
       - name: Run clean database migrations
         env:
           ABATE_REQUIRE_PG: "1"
-          DATABASE_URL_MIGRATOR: postgres://abate_migrator:migrator_pw@localhost:5432/abate
-          DATABASE_URL_APP: postgres://abate_app:app_pw@localhost:5432/abate
-          DATABASE_URL_WORKER: postgres://abate_worker:worker_pw@localhost:5432/abate
+          DATABASE_URL_MIGRATOR: postgres://abate_migrator:migrator_pw@localhost:${{ env.POSTGRES_PORT }}/abate
+          DATABASE_URL_APP: postgres://abate_app:app_pw@localhost:${{ env.POSTGRES_PORT }}/abate
+          DATABASE_URL_WORKER: postgres://abate_worker:worker_pw@localhost:${{ env.POSTGRES_PORT }}/abate
         run: npm --prefix backend run migrate
 
       - name: Verify live Postgres role isolation, DB catalog audit, and migration checksums
         env:
           ABATE_REQUIRE_PG: "1"
-          DATABASE_URL_MIGRATOR: postgres://abate_migrator:migrator_pw@localhost:5432/abate
-          DATABASE_URL_APP: postgres://abate_app:app_pw@localhost:5432/abate
-          DATABASE_URL_WORKER: postgres://abate_worker:worker_pw@localhost:5432/abate
-          DATABASE_URL_IDENTITY: postgres://abate_identity:identity_pw@localhost:5432/abate
-          DATABASE_URL_PROTECTED_COMPUTE: postgres://abate_protected_compute:protected_compute_pw@localhost:5432/abate
-          DATABASE_URL_RELEASE_COMPILER: postgres://abate_release_compiler:release_compiler_pw@localhost:5432/abate
-          DATABASE_URL_PERFORMANCE: postgres://abate_performance:performance_pw@localhost:5432/abate
-          DATABASE_URL_OPS: postgres://abate_ops:ops_pw@localhost:5432/abate
+          DATABASE_URL_MIGRATOR: postgres://abate_migrator:migrator_pw@localhost:${{ env.POSTGRES_PORT }}/abate
+          DATABASE_URL_APP: postgres://abate_app:app_pw@localhost:${{ env.POSTGRES_PORT }}/abate
+          DATABASE_URL_WORKER: postgres://abate_worker:worker_pw@localhost:${{ env.POSTGRES_PORT }}/abate
+          DATABASE_URL_IDENTITY: postgres://abate_identity:identity_pw@localhost:${{ env.POSTGRES_PORT }}/abate
+          DATABASE_URL_PROTECTED_COMPUTE: postgres://abate_protected_compute:protected_compute_pw@localhost:${{ env.POSTGRES_PORT }}/abate
+          DATABASE_URL_RELEASE_COMPILER: postgres://abate_release_compiler:release_compiler_pw@localhost:${{ env.POSTGRES_PORT }}/abate
+          DATABASE_URL_PERFORMANCE: postgres://abate_performance:performance_pw@localhost:${{ env.POSTGRES_PORT }}/abate
+          DATABASE_URL_OPS: postgres://abate_ops:ops_pw@localhost:${{ env.POSTGRES_PORT }}/abate
         run: |
           npm --prefix backend run verify-pg -- --require-live
           npm --prefix backend run db:audit -- --require-live
@@ -76,9 +134,9 @@ jobs:
       - name: Verify idempotent migration re-run and schema snapshot (no drift)
         env:
           ABATE_REQUIRE_PG: "1"
-          DATABASE_URL_MIGRATOR: postgres://abate_migrator:migrator_pw@localhost:5432/abate
-          DATABASE_URL_APP: postgres://abate_app:app_pw@localhost:5432/abate
-          DATABASE_URL_WORKER: postgres://abate_worker:worker_pw@localhost:5432/abate
+          DATABASE_URL_MIGRATOR: postgres://abate_migrator:migrator_pw@localhost:${{ env.POSTGRES_PORT }}/abate
+          DATABASE_URL_APP: postgres://abate_app:app_pw@localhost:${{ env.POSTGRES_PORT }}/abate
+          DATABASE_URL_WORKER: postgres://abate_worker:worker_pw@localhost:${{ env.POSTGRES_PORT }}/abate
         run: |
           if ! command -v pg_dump >/dev/null 2>&1 || ! pg_dump --version | grep -q ' 16\.'; then
             for attempt in 1 2 3; do
@@ -92,25 +150,26 @@ jobs:
             done
           fi
           npm --prefix backend run migrate
-          pg_dump --schema-only "postgres://abate_migrator:migrator_pw@localhost:5432/abate" | grep -Ev '^\\(un)?restrict ' > /tmp/abate-schema-1.sql
+          pg_dump --schema-only "postgres://abate_migrator:migrator_pw@localhost:${{ env.POSTGRES_PORT }}/abate" | grep -Ev '^\\(un)?restrict ' > /tmp/abate-schema-1.sql
           npm --prefix backend run migrate
-          pg_dump --schema-only "postgres://abate_migrator:migrator_pw@localhost:5432/abate" | grep -Ev '^\\(un)?restrict ' > /tmp/abate-schema-2.sql
+          pg_dump --schema-only "postgres://abate_migrator:migrator_pw@localhost:${{ env.POSTGRES_PORT }}/abate" | grep -Ev '^\\(un)?restrict ' > /tmp/abate-schema-2.sql
           diff -u /tmp/abate-schema-1.sql /tmp/abate-schema-2.sql
 
       - name: Verify upgrade migration path from previous release (0001..0083 -> HEAD)
         env:
           ABATE_REQUIRE_PG: "1"
-          DATABASE_URL_MIGRATOR: postgres://abate_migrator:migrator_pw@localhost:5432/abate_upgrade
-          DATABASE_URL_APP: postgres://abate_app:app_pw@localhost:5432/abate_upgrade
-          DATABASE_URL_WORKER: postgres://abate_worker:worker_pw@localhost:5432/abate_upgrade
-          DATABASE_URL_IDENTITY: postgres://abate_identity:identity_pw@localhost:5432/abate_upgrade
-          DATABASE_URL_PROTECTED_COMPUTE: postgres://abate_protected_compute:protected_compute_pw@localhost:5432/abate_upgrade
-          DATABASE_URL_RELEASE_COMPILER: postgres://abate_release_compiler:release_compiler_pw@localhost:5432/abate_upgrade
-          DATABASE_URL_PERFORMANCE: postgres://abate_performance:performance_pw@localhost:5432/abate_upgrade
-          DATABASE_URL_OPS: postgres://abate_ops:ops_pw@localhost:5432/abate_upgrade
+          DATABASE_URL_MIGRATOR: postgres://abate_migrator:migrator_pw@localhost:${{ env.POSTGRES_PORT }}/abate_upgrade
+          DATABASE_URL_APP: postgres://abate_app:app_pw@localhost:${{ env.POSTGRES_PORT }}/abate_upgrade
+          DATABASE_URL_WORKER: postgres://abate_worker:worker_pw@localhost:${{ env.POSTGRES_PORT }}/abate_upgrade
+          DATABASE_URL_IDENTITY: postgres://abate_identity:identity_pw@localhost:${{ env.POSTGRES_PORT }}/abate_upgrade
+          DATABASE_URL_PROTECTED_COMPUTE: postgres://abate_protected_compute:protected_compute_pw@localhost:${{ env.POSTGRES_PORT }}/abate_upgrade
+          DATABASE_URL_RELEASE_COMPILER: postgres://abate_release_compiler:release_compiler_pw@localhost:${{ env.POSTGRES_PORT }}/abate_upgrade
+          DATABASE_URL_PERFORMANCE: postgres://abate_performance:performance_pw@localhost:${{ env.POSTGRES_PORT }}/abate_upgrade
+          DATABASE_URL_OPS: postgres://abate_ops:ops_pw@localhost:${{ env.POSTGRES_PORT }}/abate_upgrade
         run: |
-          psql "postgres://abate_migrator:migrator_pw@localhost:5432/abate" -c "DROP DATABASE IF EXISTS abate_upgrade;"
-          psql "postgres://abate_migrator:migrator_pw@localhost:5432/abate" -c "CREATE DATABASE abate_upgrade;"
+          PGPASSWORD=admin_pw psql -h localhost -p "${POSTGRES_PORT}" -U abate_admin -d postgres -c "DROP DATABASE IF EXISTS abate_upgrade;"
+          PGPASSWORD=admin_pw psql -h localhost -p "${POSTGRES_PORT}" -U abate_admin -d postgres -c "CREATE DATABASE abate_upgrade OWNER abate_migrator;"
+          PGPASSWORD=admin_pw psql -h localhost -p "${POSTGRES_PORT}" -U abate_admin -d abate_upgrade -f backend/db/init/01-roles.sql
           npm --prefix backend run migrate -- --up-to=0083
           npm --prefix backend run migrate
           npm --prefix backend run db:audit -- --require-live
@@ -119,14 +178,14 @@ jobs:
         env:
           CI: "true"
           ABATE_REQUIRE_PG: "1"
-          DATABASE_URL_MIGRATOR: postgres://abate_migrator:migrator_pw@localhost:5432/abate
-          DATABASE_URL_APP: postgres://abate_app:app_pw@localhost:5432/abate
-          DATABASE_URL_WORKER: postgres://abate_worker:worker_pw@localhost:5432/abate
-          DATABASE_URL_IDENTITY: postgres://abate_identity:identity_pw@localhost:5432/abate
-          DATABASE_URL_PROTECTED_COMPUTE: postgres://abate_protected_compute:protected_compute_pw@localhost:5432/abate
-          DATABASE_URL_RELEASE_COMPILER: postgres://abate_release_compiler:release_compiler_pw@localhost:5432/abate
-          DATABASE_URL_PERFORMANCE: postgres://abate_performance:performance_pw@localhost:5432/abate
-          DATABASE_URL_OPS: postgres://abate_ops:ops_pw@localhost:5432/abate
+          DATABASE_URL_MIGRATOR: postgres://abate_migrator:migrator_pw@localhost:${{ env.POSTGRES_PORT }}/abate
+          DATABASE_URL_APP: postgres://abate_app:app_pw@localhost:${{ env.POSTGRES_PORT }}/abate
+          DATABASE_URL_WORKER: postgres://abate_worker:worker_pw@localhost:${{ env.POSTGRES_PORT }}/abate
+          DATABASE_URL_IDENTITY: postgres://abate_identity:identity_pw@localhost:${{ env.POSTGRES_PORT }}/abate
+          DATABASE_URL_PROTECTED_COMPUTE: postgres://abate_protected_compute:protected_compute_pw@localhost:${{ env.POSTGRES_PORT }}/abate
+          DATABASE_URL_RELEASE_COMPILER: postgres://abate_release_compiler:release_compiler_pw@localhost:${{ env.POSTGRES_PORT }}/abate
+          DATABASE_URL_PERFORMANCE: postgres://abate_performance:performance_pw@localhost:${{ env.POSTGRES_PORT }}/abate
+          DATABASE_URL_OPS: postgres://abate_ops:ops_pw@localhost:${{ env.POSTGRES_PORT }}/abate
         run: |
           npm --prefix backend run seed-demo -- --pg
           npm --prefix backend run verify-pg-smoke
@@ -138,19 +197,19 @@ jobs:
       - name: Run Live PostgreSQL Constitutional, Sector, Challenge, Drill & 30-Day HTTP Suites (G-01 / T-02)
         env:
           ABATE_REQUIRE_PG: "1"
-          DATABASE_URL_MIGRATOR: postgres://abate_migrator:migrator_pw@localhost:5432/abate
-          DATABASE_URL_APP: postgres://abate_app:app_pw@localhost:5432/abate
-          DATABASE_URL_WORKER: postgres://abate_worker:worker_pw@localhost:5432/abate
-          DATABASE_URL_IDENTITY: postgres://abate_identity:identity_pw@localhost:5432/abate
-          DATABASE_URL_PROTECTED_COMPUTE: postgres://abate_protected_compute:protected_compute_pw@localhost:5432/abate
-          DATABASE_URL_RELEASE_COMPILER: postgres://abate_release_compiler:release_compiler_pw@localhost:5432/abate
-          DATABASE_URL_PERFORMANCE: postgres://abate_performance:performance_pw@localhost:5432/abate
-          DATABASE_URL_OPS: postgres://abate_ops:ops_pw@localhost:5432/abate
+          DATABASE_URL_MIGRATOR: postgres://abate_migrator:migrator_pw@localhost:${{ env.POSTGRES_PORT }}/abate
+          DATABASE_URL_APP: postgres://abate_app:app_pw@localhost:${{ env.POSTGRES_PORT }}/abate
+          DATABASE_URL_WORKER: postgres://abate_worker:worker_pw@localhost:${{ env.POSTGRES_PORT }}/abate
+          DATABASE_URL_IDENTITY: postgres://abate_identity:identity_pw@localhost:${{ env.POSTGRES_PORT }}/abate
+          DATABASE_URL_PROTECTED_COMPUTE: postgres://abate_protected_compute:protected_compute_pw@localhost:${{ env.POSTGRES_PORT }}/abate
+          DATABASE_URL_RELEASE_COMPILER: postgres://abate_release_compiler:release_compiler_pw@localhost:${{ env.POSTGRES_PORT }}/abate
+          DATABASE_URL_PERFORMANCE: postgres://abate_performance:performance_pw@localhost:${{ env.POSTGRES_PORT }}/abate
+          DATABASE_URL_OPS: postgres://abate_ops:ops_pw@localhost:${{ env.POSTGRES_PORT }}/abate
         run: |
           reset_pg_db() {
-            psql "postgres://abate_migrator:migrator_pw@localhost:5432/postgres" -c "SELECT pg_terminate_backend(pid) FROM pg_stat_activity WHERE datname = 'abate' AND pid <> pg_backend_pid();" >/dev/null
-            psql "postgres://abate_migrator:migrator_pw@localhost:5432/postgres" -c "DROP DATABASE IF EXISTS abate;" >/dev/null
-            psql "postgres://abate_migrator:migrator_pw@localhost:5432/postgres" -c "CREATE DATABASE abate OWNER abate_migrator;" >/dev/null
+            PGPASSWORD=admin_pw psql -h localhost -p "${POSTGRES_PORT}" -U abate_admin -d postgres -c "SELECT pg_terminate_backend(pid) FROM pg_stat_activity WHERE datname = 'abate' AND pid <> pg_backend_pid();" >/dev/null
+            PGPASSWORD=admin_pw psql -h localhost -p "${POSTGRES_PORT}" -U abate_admin -d postgres -c "DROP DATABASE IF EXISTS abate;" >/dev/null
+            PGPASSWORD=admin_pw psql -h localhost -p "${POSTGRES_PORT}" -U abate_admin -d postgres -c "CREATE DATABASE abate OWNER abate_migrator;" >/dev/null
             npm --prefix backend run migrate >/dev/null
           }
           reset_pg_db
@@ -330,27 +389,28 @@ jobs:
       postgres:
         image: postgres:16.2-alpine
         env:
-          POSTGRES_USER: abate_migrator
-          POSTGRES_PASSWORD: migrator_pw
+          POSTGRES_USER: abate_admin
+          POSTGRES_PASSWORD: admin_pw
           POSTGRES_DB: abate
         ports:
           - 5432:5432
         options: >-
-          --health-cmd="pg_isready -U abate_migrator -d abate"
+          --health-cmd="pg_isready -U abate_admin -d abate"
           --health-interval=5s
           --health-timeout=5s
           --health-retries=10
     env:
       APP_ENV: test
+      POSTGRES_PORT: ${{ vars.POSTGRES_PORT || '5432' }}
       ABATE_REQUIRE_PG: "1"
-      DATABASE_URL_MIGRATOR: postgres://abate_migrator:migrator_pw@localhost:5432/abate
-      DATABASE_URL_APP: postgres://abate_app:app_pw@localhost:5432/abate
-      DATABASE_URL_WORKER: postgres://abate_worker:worker_pw@localhost:5432/abate
-      DATABASE_URL_IDENTITY: postgres://abate_identity:identity_pw@localhost:5432/abate
-      DATABASE_URL_PROTECTED_COMPUTE: postgres://abate_protected_compute:protected_compute_pw@localhost:5432/abate
-      DATABASE_URL_RELEASE_COMPILER: postgres://abate_release_compiler:release_compiler_pw@localhost:5432/abate
-      DATABASE_URL_PERFORMANCE: postgres://abate_performance:performance_pw@localhost:5432/abate
-      DATABASE_URL_OPS: postgres://abate_ops:ops_pw@localhost:5432/abate
+      DATABASE_URL_MIGRATOR: postgres://abate_migrator:migrator_pw@localhost:${{ vars.POSTGRES_PORT || '5432' }}/abate
+      DATABASE_URL_APP: postgres://abate_app:app_pw@localhost:${{ vars.POSTGRES_PORT || '5432' }}/abate
+      DATABASE_URL_WORKER: postgres://abate_worker:worker_pw@localhost:${{ vars.POSTGRES_PORT || '5432' }}/abate
+      DATABASE_URL_IDENTITY: postgres://abate_identity:identity_pw@localhost:${{ vars.POSTGRES_PORT || '5432' }}/abate
+      DATABASE_URL_PROTECTED_COMPUTE: postgres://abate_protected_compute:protected_compute_pw@localhost:${{ vars.POSTGRES_PORT || '5432' }}/abate
+      DATABASE_URL_RELEASE_COMPILER: postgres://abate_release_compiler:release_compiler_pw@localhost:${{ vars.POSTGRES_PORT || '5432' }}/abate
+      DATABASE_URL_PERFORMANCE: postgres://abate_performance:performance_pw@localhost:${{ vars.POSTGRES_PORT || '5432' }}/abate
+      DATABASE_URL_OPS: postgres://abate_ops:ops_pw@localhost:${{ vars.POSTGRES_PORT || '5432' }}/abate
       AUTH_ISSUER: http://localhost:5000/auth
       AUTH_AUDIENCE: abate-api
       AUTH_SECRET: ci_test_auth_secret_key_abate_minimum_32_characters_long
@@ -371,6 +431,44 @@ jobs:
           npm --prefix backend ci
           npm --prefix frontend ci
           npm --prefix tests ci
+
+      - name: Initialize database roles from 01-roles.sql and verify non-superuser isolation
+        env:
+          PORT: ${{ env.POSTGRES_PORT }}
+        run: |
+          PGPASSWORD=admin_pw psql -h localhost -p "${PORT}" -U abate_admin -d abate -v ON_ERROR_STOP=1 -f backend/db/init/01-roles.sql
+          PGPASSWORD=admin_pw psql -h localhost -p "${PORT}" -U abate_admin -d abate -v ON_ERROR_STOP=1 -c "
+            DO \$\$
+            DECLARE
+              expected_roles text[] := ARRAY[
+                'abate_migrator',
+                'abate_app',
+                'abate_worker',
+                'abate_identity',
+                'abate_privacy',
+                'abate_protected_compute',
+                'abate_release_compiler',
+                'abate_performance',
+                'abate_ops'
+              ];
+              r_name text;
+              r record;
+            BEGIN
+              FOREACH r_name IN ARRAY expected_roles LOOP
+                SELECT rolname, rolsuper, rolbypassrls, rolcanlogin, rolcreatedb, rolcreaterole
+                INTO r
+                FROM pg_roles
+                WHERE rolname = r_name;
+                IF NOT FOUND THEN
+                  RAISE EXCEPTION 'CRITICAL: Expected database role % does not exist', r_name;
+                END IF;
+                IF r.rolsuper OR r.rolbypassrls OR r.rolcreatedb OR r.rolcreaterole OR NOT r.rolcanlogin THEN
+                  RAISE EXCEPTION 'SECURITY BREACH: Role % has invalid attributes (super=%, bypassrls=%, createdb=%, createrole=%, login=%)',
+                    r_name, r.rolsuper, r.rolbypassrls, r.rolcreatedb, r.rolcreaterole, r.rolcanlogin;
+                END IF;
+              END LOOP;
+            END \$\$;
+          "
 
       - name: Migrate and seed live PostgreSQL for Playwright E2E
         run: |

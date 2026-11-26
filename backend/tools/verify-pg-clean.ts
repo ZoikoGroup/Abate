@@ -13,6 +13,11 @@ import {
   appPool,
   migratorPool,
   workerPool,
+  identityPool,
+  protectedComputePool,
+  releaseCompilerPool,
+  performancePool,
+  opsPool,
   withTenant,
   withPlatform,
   withWorker,
@@ -103,18 +108,86 @@ async function main() {
   process.env.ABATE_REQUIRE_PG = "1";
   resetPgHealthCache();
 
-  await check("Live PostgreSQL: abate_app, abate_worker, and abate_privacy are NOSUPERUSER NOBYPASSRLS", async () => {
+  await check("Live PostgreSQL: All 9 roles exist and are NOSUPERUSER NOBYPASSRLS NOCREATEDB NOCREATEROLE", async () => {
     assert.ok(migratorPool, "migratorPool configured");
+    const expectedRoles = [
+      "abate_migrator",
+      "abate_app",
+      "abate_worker",
+      "abate_identity",
+      "abate_privacy",
+      "abate_protected_compute",
+      "abate_release_compiler",
+      "abate_performance",
+      "abate_ops"
+    ];
     const client = await migratorPool.connect();
     try {
       const res = await client.query(
-        `SELECT rolname, rolsuper, rolbypassrls FROM pg_roles WHERE rolname IN ('abate_app', 'abate_worker', 'abate_privacy') ORDER BY rolname`
+        `SELECT rolname, rolsuper, rolbypassrls, rolcreatedb, rolcreaterole, rolcanlogin
+         FROM pg_roles
+         WHERE rolname = ANY($1::text[])
+         ORDER BY rolname`,
+        [expectedRoles]
       );
-      assert.ok(res.rows.length >= 2, "Expected abate_app and abate_worker roles to exist");
-      for (const row of res.rows) {
+      const byName = new Map(res.rows.map(r => [r.rolname, r]));
+      for (const expected of expectedRoles) {
+        const row = byName.get(expected);
+        assert.ok(row, `Expected database role ${expected} is missing from pg_roles`);
         assert.strictEqual(row.rolsuper, false, `${row.rolname} must NOT be superuser`);
         assert.strictEqual(row.rolbypassrls, false, `${row.rolname} must NOT have BYPASSRLS`);
+        assert.strictEqual(row.rolcreatedb, false, `${row.rolname} must NOT have CREATEDB`);
+        assert.strictEqual(row.rolcreaterole, false, `${row.rolname} must NOT have CREATEROLE`);
+        assert.strictEqual(row.rolcanlogin, true, `${row.rolname} must be permitted to login`);
       }
+    } finally {
+      client.release();
+    }
+  });
+
+  await check("Live PostgreSQL Connection Pools: Every pool connects as non-superuser without BYPASSRLS via current_user", async () => {
+    const poolsToVerify = [
+      { name: "migratorPool", pool: migratorPool, expectedRole: "abate_migrator" },
+      { name: "appPool", pool: appPool, expectedRole: "abate_app" },
+      { name: "workerPool", pool: workerPool, expectedRole: "abate_worker" },
+      { name: "identityPool", pool: identityPool, expectedRole: "abate_identity" },
+      { name: "protectedComputePool", pool: protectedComputePool, expectedRole: "abate_protected_compute" },
+      { name: "releaseCompilerPool", pool: releaseCompilerPool, expectedRole: "abate_release_compiler" },
+      { name: "performancePool", pool: performancePool, expectedRole: "abate_performance" },
+      { name: "opsPool", pool: opsPool, expectedRole: "abate_ops" }
+    ];
+    for (const { name, pool, expectedRole } of poolsToVerify) {
+      assert.ok(pool, `${name} must be configured`);
+      const client = await pool.connect();
+      try {
+        const res = await client.query(
+          `SELECT current_user AS cu, rolsuper, rolbypassrls, rolcreatedb, rolcreaterole
+           FROM pg_roles
+           WHERE rolname = current_user`
+        );
+        assert.strictEqual(res.rows.length, 1, `Role for ${name} not found in pg_roles`);
+        const row = res.rows[0];
+        assert.strictEqual(row.cu, expectedRole, `${name} must connect as ${expectedRole}, connected as ${row.cu}`);
+        assert.strictEqual(row.rolsuper, false, `${name} (${row.cu}) must NOT be superuser`);
+        assert.strictEqual(row.rolbypassrls, false, `${name} (${row.cu}) must NOT have BYPASSRLS`);
+        assert.strictEqual(row.rolcreatedb, false, `${name} (${row.cu}) must NOT have CREATEDB`);
+        assert.strictEqual(row.rolcreaterole, false, `${name} (${row.cu}) must NOT have CREATEROLE`);
+      } finally {
+        client.release();
+      }
+    }
+  });
+
+  await check("Live PostgreSQL: No unapplied schema migrations (schema_migrations matches db/migrations/*.sql)", async () => {
+    assert.ok(migratorPool, "migratorPool configured");
+    const client = await migratorPool.connect();
+    try {
+      const res = await client.query<{ version: string }>("SELECT version FROM schema_migrations");
+      const applied = new Set(res.rows.map(r => r.version));
+      const migrationsDir = path.resolve(__dirname, "../db/migrations");
+      const files = fs.readdirSync(migrationsDir).filter(f => f.endsWith(".sql")).sort();
+      const unapplied = files.filter(f => !applied.has(f));
+      assert.strictEqual(unapplied.length, 0, `Unapplied migrations found: ${unapplied.join(", ")}`);
     } finally {
       client.release();
     }

@@ -535,6 +535,89 @@ async function main() {
     );
   });
 
+  await check("Migration 0091: narrow security_invoker ops views, column-only grants, and zero migrator table read access", async () => {
+    // (c) Verify abate_migrator has no read policy on tenant or connection and sees 0 rows directly
+    const migratorClient = await migratorPool!.connect();
+    try {
+      const policies = await migratorClient.query(
+        `SELECT tablename, policyname FROM pg_policies
+         WHERE schemaname = 'public' AND tablename IN ('tenant', 'connection')
+           AND 'abate_migrator' = ANY(roles) AND cmd IN ('SELECT', 'ALL')`
+      );
+      assert.strictEqual(policies.rowCount, 0, "abate_migrator must have zero SELECT policies on tenant or connection");
+
+      const tenantRows = await migratorClient.query(`SELECT id FROM tenant`);
+      assert.strictEqual(tenantRows.rowCount, 0, "abate_migrator direct SELECT on tenant must yield 0 rows under FORCE RLS");
+      const connRows = await migratorClient.query(`SELECT id FROM connection`);
+      assert.strictEqual(connRows.rowCount, 0, "abate_migrator direct SELECT on connection must yield 0 rows under FORCE RLS");
+    } finally {
+      migratorClient.release();
+    }
+
+    // (a) & (b) Verify abate_ops can read ONLY granted columns of tenant & connection, and fails on other columns/tables
+    await withOps(async (tx) => {
+      const t = await tx.q(`SELECT id, region FROM tenant LIMIT 1`);
+      assert.ok(t.rows.length >= 1, "abate_ops must read granted columns (id, region) on tenant");
+
+      await assert.rejects(
+        () => tx.q(`SELECT name FROM tenant LIMIT 1`),
+        /permission denied/i,
+        "abate_ops must be denied reading non-granted column tenant.name"
+      );
+      await assert.rejects(
+        () => tx.q(`SELECT jurisdiction_config_ref FROM tenant LIMIT 1`),
+        /permission denied/i,
+        "abate_ops must be denied reading non-granted column tenant.jurisdiction_config_ref"
+      );
+
+      await tx.q(`SELECT id, source, state, last_success_at, expected_cadence_seconds FROM connection LIMIT 1`);
+      await assert.rejects(
+        () => tx.q(`SELECT tenant_id FROM connection LIMIT 1`),
+        /permission denied/i,
+        "abate_ops must be denied reading non-granted column connection.tenant_id"
+      );
+      await assert.rejects(
+        () => tx.q(`SELECT contract_id FROM connection LIMIT 1`),
+        /permission denied/i,
+        "abate_ops must be denied reading non-granted column connection.contract_id"
+      );
+      await assert.rejects(
+        () => tx.q(`SELECT count(*) FROM work_fact_revision`),
+        /permission denied/i,
+        "abate_ops must be denied access to business table work_fact_revision"
+      );
+
+      // (d) Both ops views work for abate_ops
+      const activeView = await tx.q(`SELECT id, region, state FROM ops_active_tenants`);
+      assert.ok(activeView.rows.some((r: any) => r.id === tenantA), "ops_active_tenants must return Tenant A for abate_ops");
+      await tx.q(`SELECT id, source, state, last_success_at, expected_cadence_seconds FROM ops_connector_health`);
+    });
+
+    // (a), (b), (d) Verify abate_worker can read ONLY (id, region) on tenant & ops_active_tenants, and fails on tenant.name, connection, and business tables
+    await withWorker(async (tx) => {
+      const t = await tx.q(`SELECT id, region FROM tenant LIMIT 1`);
+      assert.ok(t.rows.length >= 1, "abate_worker must read granted columns (id, region) on tenant");
+      const activeView = await tx.q(`SELECT id, region, state FROM ops_active_tenants`);
+      assert.ok(activeView.rows.some((r: any) => r.id === tenantA), "ops_active_tenants must return Tenant A for abate_worker");
+
+      await assert.rejects(
+        () => tx.q(`SELECT name FROM tenant LIMIT 1`),
+        /permission denied/i,
+        "abate_worker must be denied reading non-granted column tenant.name"
+      );
+      await assert.rejects(
+        () => tx.q(`SELECT id FROM connection LIMIT 1`),
+        /permission denied/i,
+        "abate_worker must have zero access to connection"
+      );
+      await assert.rejects(
+        () => tx.q(`SELECT id FROM ops_connector_health LIMIT 1`),
+        /permission denied/i,
+        "abate_worker must be denied access to ops_connector_health"
+      );
+    });
+  });
+
   console.log(`\n\x1b[32m✔ Live PostgreSQL Parity & Role Isolation Suite PASSED (${passed} checks).\x1b[0m\n`);
   process.exit(0);
 }

@@ -197,7 +197,18 @@ export async function withOps<T>(fn: (tx: Tx) => Promise<T>): Promise<T> {
       client.release();
     }
   }
-  return withPlatform(fn);
+  const memClient = new MemoryClient(false, true);
+  try {
+    await memClient.query("BEGIN");
+    const out = await fn({ q: memClient.query.bind(memClient) as QueryFn, tenantId: "" });
+    await memClient.query("COMMIT");
+    return out;
+  } catch (e) {
+    await memClient.query("ROLLBACK");
+    throw e;
+  } finally {
+    memClient.release();
+  }
 }
 
 /**
@@ -223,7 +234,18 @@ export async function withMigrator<T>(fn: (tx: Tx) => Promise<T>): Promise<T> {
       client.release();
     }
   }
-  return withPlatform(fn);
+  const memClient = new MemoryClient(false, true);
+  try {
+    await memClient.query("BEGIN");
+    const out = await fn({ q: memClient.query.bind(memClient) as QueryFn, tenantId: "" });
+    await memClient.query("COMMIT");
+    return out;
+  } catch (e) {
+    await memClient.query("ROLLBACK");
+    throw e;
+  } finally {
+    memClient.release();
+  }
 }
 
 /**

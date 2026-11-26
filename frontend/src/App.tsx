@@ -1,5 +1,5 @@
 // frontend/src/App.tsx
-import { useState, useEffect, useCallback, useRef, lazy, Suspense, type FormEvent } from "react";
+import { useState, useEffect, useCallback, useRef, lazy, Suspense } from "react";
 import {
   api,
   ApiError,
@@ -11,6 +11,7 @@ import {
   exchangeOidcAuth,
   logoutSession,
   createPkceAuthorizationParams,
+  requestSuperAdminToken,
   COOKIE_SESSION_TOKEN,
   PRESET_TENANTS,
   type OidcConfig,
@@ -23,10 +24,13 @@ import {
   type AuditEvent
 } from "./api/client";
 import { Navbar } from "./components/Navbar";
+import { LoginScreen } from "./components/LoginScreen";
 import { StateView } from "./components/StateView";
 import { OrganizationsTab } from "./components/Tabs/OrganizationsTab";
 import { getSectorUi, isSectorPackActive } from "./utils/vocabulary";
 import "./index.css";
+
+const SuperAdminConsole = lazy(() => import("./components/SuperAdmin/SuperAdminConsole").then((m) => ({ default: m.SuperAdminConsole })));
 
 const DashboardTab = lazy(() => import("./components/Tabs/DashboardTab").then((m) => ({ default: m.DashboardTab })));
 const ConstitutionalTab = lazy(() => import("./components/Tabs/ConstitutionalTab").then((m) => ({ default: m.ConstitutionalTab })));
@@ -93,7 +97,14 @@ export default function App() {
   const [token, setToken] = useState<string | null>(null);
   const [authenticatedSubject, setAuthenticatedSubject] = useState<string | null>(null);
   const [requiresOidcLogin, setRequiresOidcLogin] = useState(false);
-  const [oidcJwtInput, setOidcJwtInput] = useState("");
+  const [explicitLoginScreen, setExplicitLoginScreen] = useState(() => {
+    if (typeof window !== "undefined") {
+      return window.location.pathname === "/login" || window.location.hash === "#login";
+    }
+    return false;
+  });
+  const [superAdminToken, setSuperAdminToken] = useState<string | null>(null);
+  const [superAdminOperator, setSuperAdminOperator] = useState<string | null>(null);
   const [oidcLoginError, setOidcLoginError] = useState<string | null>(null);
   const [tenantInfo, setTenantInfo] = useState<TenantInfo | null>(null);
   const [availableTenants, setAvailableTenants] = useState<TenantWorkspaceItem[]>([]);
@@ -305,15 +316,14 @@ export default function App() {
     window.location.assign(authUrl.toString());
   };
 
-  const handleOidcTokenExchange = async (e: FormEvent) => {
-    e.preventDefault();
-    const raw = oidcJwtInput.trim();
+  const handleOidcJwtExchange = async (rawJwt: string) => {
+    const raw = rawJwt.trim();
     if (!raw) return;
     setLoading(true);
     setOidcLoginError(null);
     try {
       await exchangeOidcAuth({ idToken: raw });
-      setOidcJwtInput("");
+      setExplicitLoginScreen(false);
       await fetchTenantData(activeTenantId, activeRole, oidcConfig);
     } catch (err: any) {
       setOidcLoginError(err?.message || "OIDC verification failed.");
@@ -322,14 +332,64 @@ export default function App() {
     }
   };
 
+  const handleTenantSignIn = async (tenantId: string, role: string, subject?: string) => {
+    setLoading(true);
+    setOidcLoginError(null);
+    try {
+      const preset = PRESET_TENANTS.find((t) => t.id === tenantId) || PRESET_TENANTS[0];
+      const tokenResp = await requestToken(tenantId, subject || preset.subject, role);
+      setActiveTenantId(tenantId);
+      setActiveRole(role);
+      setToken(tokenResp.token);
+      setAuthenticatedSubject(tokenResp.subject);
+      setSuperAdminToken(null);
+      setSuperAdminOperator(null);
+      setExplicitLoginScreen(false);
+      setRequiresOidcLogin(false);
+      await loadTenantWorkspace(tokenResp.token);
+    } catch (err: any) {
+      setOidcLoginError(err?.message || "Tenant sign-in failed.");
+    } finally {
+      setLoading(false);
+    }
+  };
+
+  const handleSuperAdminSignIn = async (operator: string) => {
+    setLoading(true);
+    setOidcLoginError(null);
+    try {
+      const resp = await requestSuperAdminToken(operator);
+      setSuperAdminToken(resp.token);
+      setSuperAdminOperator(resp.operator);
+      setToken(null);
+      setAuthenticatedSubject(null);
+      setExplicitLoginScreen(false);
+    } catch (err: any) {
+      setOidcLoginError(err?.message || "Super Admin sign-in failed.");
+    } finally {
+      setLoading(false);
+    }
+  };
+
+  const handleExchangeSuperAdminJwt = async (jwt: string) => {
+    setSuperAdminToken(jwt.trim());
+    setSuperAdminOperator("oidc-super-admin");
+    setToken(null);
+    setAuthenticatedSubject(null);
+    setExplicitLoginScreen(false);
+  };
+
   const handleSignOut = async () => {
     await logoutSession();
     setToken(null);
     setAuthenticatedSubject(null);
+    setSuperAdminToken(null);
+    setSuperAdminOperator(null);
     setTenantInfo(null);
     setOrganizations([]);
     setAuditEvents([]);
     setRequiresOidcLogin(true);
+    setExplicitLoginScreen(true);
   };
 
   if (showDemoConsole && devTokenEnabled) {
@@ -339,6 +399,18 @@ export default function App() {
           <LiveDemoConsole onClose={() => handleToggleDemo(false)} />
         </Suspense>
       </div>
+    );
+  }
+
+  if (superAdminToken && superAdminOperator) {
+    return (
+      <Suspense fallback={<StateView state={{ kind: "loading", message: "Loading Super Admin Console..." }} />}>
+        <SuperAdminConsole
+          adminToken={superAdminToken}
+          operator={superAdminOperator}
+          onSignOut={() => void handleSignOut()}
+        />
+      </Suspense>
     );
   }
 
@@ -353,61 +425,28 @@ export default function App() {
         onRefresh={handleRefreshAll}
         loading={loading}
         onOpenDemo={devTokenEnabled ? () => handleToggleDemo(true) : undefined}
+        onOpenSuperAdmin={devTokenEnabled ? () => void handleSuperAdminSignIn("superadmin@zoikoabate.dev") : undefined}
         devTokenEnabled={devTokenEnabled}
         authenticatedSubject={authenticatedSubject}
-        onSignOut={handleSignOut}
+        onSignOut={() => void handleSignOut()}
         availableTenants={availableTenants}
         activeTenantName={tenantInfo?.name || null}
       />
 
-      {!devTokenEnabled && requiresOidcLogin ? (
-        <main className="main-content">
-          <section className="card" aria-labelledby="oidc-signin-heading" style={{ maxWidth: 640, margin: "2rem auto" }}>
-            <h1 id="oidc-signin-heading" style={{ color: "#2B1B38", marginBottom: "0.75rem" }}>
-              Sign in with your Identity Provider
-            </h1>
-            <p style={{ marginBottom: "1rem", color: "#2F343A" }}>
-              Development token issuance is disabled in this environment. Authenticate via OIDC to establish an HttpOnly session.
-            </p>
-            {oidcLoginError && (
-              <div className="error-banner" role="alert" style={{ marginBottom: "1rem" }}>
-                <span>{oidcLoginError}</span>
-              </div>
-            )}
-            {oidcConfig?.authorizationEndpoint && oidcConfig?.clientId && (
-              <div style={{ marginBottom: "1.5rem" }}>
-                <button
-                  type="button"
-                  className="btn btn-primary"
-                  onClick={() => void handleStartPkceLogin()}
-                  disabled={loading}
-                >
-                  Continue with OIDC Provider (PKCE)
-                </button>
-              </div>
-            )}
-            <form onSubmit={(e) => void handleOidcTokenExchange(e)}>
-              <div style={{ marginBottom: "0.75rem" }}>
-                <label htmlFor="oidc-jwt-input" className="context-label" style={{ display: "block", marginBottom: "0.35rem" }}>
-                  Verified OIDC ID / Access JWT (Pilot Session Exchange)
-                </label>
-                <input
-                  id="oidc-jwt-input"
-                  type="password"
-                  className="select-control"
-                  style={{ width: "100%" }}
-                  value={oidcJwtInput}
-                  onChange={(e) => setOidcJwtInput(e.target.value)}
-                  placeholder="eyJhbGciOiJSUzI1NiIs..."
-                  autoComplete="off"
-                />
-              </div>
-              <button type="submit" className="btn btn-secondary" disabled={loading || !oidcJwtInput.trim()}>
-                {loading ? "Verifying..." : "Exchange OIDC JWT for Session Cookie"}
-              </button>
-            </form>
-          </section>
-        </main>
+      {explicitLoginScreen || (!devTokenEnabled && requiresOidcLogin) ? (
+        <LoginScreen
+          devTokenEnabled={devTokenEnabled}
+          oidcConfig={oidcConfig}
+          health={health}
+          loading={loading}
+          error={oidcLoginError}
+          onTenantSignIn={handleTenantSignIn}
+          onSuperAdminSignIn={handleSuperAdminSignIn}
+          onStartPkceLogin={handleStartPkceLogin}
+          onExchangeOidcJwt={handleOidcJwtExchange}
+          onExchangeSuperAdminJwt={handleExchangeSuperAdminJwt}
+          onOpenDemo={devTokenEnabled ? () => handleToggleDemo(true) : undefined}
+        />
       ) : (
         <>
           <nav className="tabs-navigation" aria-label="Abate Workspaces">
