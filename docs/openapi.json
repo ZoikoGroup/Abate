@@ -3064,6 +3064,278 @@
           }
         }
       }
+    },
+    "/auth/super-admin-token": {
+      "post": {
+        "tags": [
+          "Super Admin Platform"
+        ],
+        "summary": "Issue dev-only Super Admin bearer token (disabled outside local/test)",
+        "security": [],
+        "responses": {
+          "200": {
+            "description": "Signed platform-super-admin bearer token"
+          },
+          "404": {
+            "description": "Disabled in hardened environments"
+          }
+        }
+      }
+    },
+    "/admin/overview": {
+      "get": {
+        "tags": [
+          "Super Admin Platform"
+        ],
+        "summary": "Retrieve zero-impersonation platform overview telemetry, tenant counts, SLOs, and operational alerts",
+        "responses": {
+          "200": {
+            "description": "AdminOverview payload"
+          },
+          "401": {
+            "description": "Unauthenticated or tenant token refused"
+          },
+          "403": {
+            "description": "Super Admin scope required"
+          }
+        }
+      }
+    },
+    "/admin/tenants": {
+      "get": {
+        "tags": [
+          "Super Admin Platform"
+        ],
+        "summary": "List tenant metadata and active sector pack assignments (no workforce data)",
+        "responses": {
+          "200": {
+            "description": "{ items: AdminTenantRecord[] }"
+          }
+        }
+      },
+      "post": {
+        "tags": [
+          "Super Admin Platform"
+        ],
+        "summary": "Provision a new tenant, root organization, and initial sector pack setting",
+        "responses": {
+          "201": {
+            "description": "Created AdminTenantRecord"
+          }
+        }
+      }
+    },
+    "/admin/tenants/{tenantId}": {
+      "patch": {
+        "tags": [
+          "Super Admin Platform"
+        ],
+        "summary": "Update tenant metadata (name, region, jurisdictionConfigRef)",
+        "parameters": [
+          {
+            "name": "tenantId",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "type": "string",
+              "format": "uuid"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "Updated tenant metadata"
+          },
+          "404": {
+            "description": "Tenant not found"
+          }
+        }
+      }
+    },
+    "/admin/tenants/{tenantId}/state": {
+      "post": {
+        "tags": [
+          "Super Admin Platform"
+        ],
+        "summary": "Activate or suspend a tenant with platform audit trail",
+        "parameters": [
+          {
+            "name": "tenantId",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "type": "string",
+              "format": "uuid"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "{ id, state }"
+          },
+          "404": {
+            "description": "Tenant not found"
+          }
+        }
+      }
+    },
+    "/admin/tenants/{tenantId}/sector-pack": {
+      "put": {
+        "tags": [
+          "Super Admin Platform"
+        ],
+        "summary": "Set tenant sector pack assignment",
+        "parameters": [
+          {
+            "name": "tenantId",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "type": "string",
+              "format": "uuid"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "{ tenantId, sectorKey, packKey }"
+          }
+        }
+      }
+    },
+    "/admin/tenants/{tenantId}/principals": {
+      "get": {
+        "tags": [
+          "Super Admin Platform"
+        ],
+        "summary": "List tenant principals and role memberships (access metadata only)",
+        "parameters": [
+          {
+            "name": "tenantId",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "type": "string",
+              "format": "uuid"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "{ tenantId, items: AdminPrincipalMembership[] }"
+          }
+        }
+      }
+    },
+    "/admin/tenants/{tenantId}/memberships": {
+      "post": {
+        "tags": [
+          "Super Admin Platform"
+        ],
+        "summary": "Provision principal if needed and assign domain role membership",
+        "parameters": [
+          {
+            "name": "tenantId",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "type": "string",
+              "format": "uuid"
+            }
+          }
+        ],
+        "responses": {
+          "201": {
+            "description": "Created AdminPrincipalMembership"
+          }
+        }
+      }
+    },
+    "/admin/tenants/{tenantId}/memberships/{membershipId}/revoke": {
+      "post": {
+        "tags": [
+          "Super Admin Platform"
+        ],
+        "summary": "Revoke an active role membership",
+        "parameters": [
+          {
+            "name": "tenantId",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "type": "string",
+              "format": "uuid"
+            }
+          },
+          {
+            "name": "membershipId",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "type": "string",
+              "format": "uuid"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "{ membershipId, revoked: true }"
+          },
+          "404": {
+            "description": "Membership not found"
+          }
+        }
+      }
+    },
+    "/admin/governance": {
+      "get": {
+        "tags": [
+          "Super Admin Platform"
+        ],
+        "summary": "List registered sector and jurisdiction governance packs",
+        "responses": {
+          "200": {
+            "description": "{ sectorPacks: AdminGovernancePack[] }"
+          }
+        }
+      }
+    },
+    "/admin/feature-flags": {
+      "get": {
+        "tags": [
+          "Super Admin Platform"
+        ],
+        "summary": "List tenant and platform feature flags",
+        "responses": {
+          "200": {
+            "description": "{ items: AdminFeatureFlagRecord[] }"
+          }
+        }
+      },
+      "post": {
+        "tags": [
+          "Super Admin Platform"
+        ],
+        "summary": "Enable or disable a tenant feature flag with audit logging",
+        "responses": {
+          "200": {
+            "description": "{ tenantId, flag, enabled }"
+          }
+        }
+      }
+    },
+    "/admin/audit": {
+      "get": {
+        "tags": [
+          "Super Admin Platform"
+        ],
+        "summary": "List immutable platform administration audit events",
+        "responses": {
+          "200": {
+            "description": "{ items: AdminPlatformAuditEvent[] }"
+          }
+        }
+      }
     }
   }
 }

@@ -141,7 +141,7 @@ const AUDIT_QUERIES: AuditQuery[] = [
     `
   },
   {
-    name: "10. Unexpected table-level or unapproved column-level grants on tenant/connection for abate_ops or abate_worker (0091/0092)",
+    name: "10. Unexpected table-level or unapproved column-level grants on tenant/connection for abate_ops or abate_worker (0091/0092/0093)",
     sql: `
       SELECT grantee, table_name, privilege_type, NULL::text AS column_name
       FROM information_schema.role_table_grants
@@ -156,7 +156,7 @@ const AUDIT_QUERIES: AuditQuery[] = [
       WHERE table_schema = 'public'
         AND table_name = 'tenant'
         AND grantee = 'abate_worker'
-        AND (privilege_type <> 'SELECT' OR column_name NOT IN ('id', 'region'))
+        AND (privilege_type <> 'SELECT' OR column_name NOT IN ('id', 'region', 'state'))
       UNION ALL
       SELECT grantee, table_name, privilege_type, column_name
       FROM information_schema.role_column_grants
@@ -176,14 +176,16 @@ const AUDIT_QUERIES: AuditQuery[] = [
     `
   },
   {
-    name: "11. Missing required narrow column grants on tenant/connection for ops views (0091)",
+    name: "11. Missing required narrow column grants on tenant/connection for ops views (0091/0093)",
     sql: `
       SELECT expected.grantee, expected.table_name, expected.column_name
       FROM (VALUES
         ('abate_ops', 'tenant', 'id'),
         ('abate_ops', 'tenant', 'region'),
+        ('abate_ops', 'tenant', 'state'),
         ('abate_worker', 'tenant', 'id'),
         ('abate_worker', 'tenant', 'region'),
+        ('abate_worker', 'tenant', 'state'),
         ('abate_ops', 'connection', 'id'),
         ('abate_ops', 'connection', 'source'),
         ('abate_ops', 'connection', 'state'),
@@ -237,7 +239,8 @@ function runStaticMigrationAudit(): void {
     { label: "ops_active_tenants security_invoker (0091)", re: /ALTER VIEW ops_active_tenants SET \(security_invoker = true\)/i },
     { label: "ops_connector_health security_invoker (0091)", re: /ALTER VIEW ops_connector_health SET \(security_invoker = true\)/i },
     { label: "tenant_ops_active_view_read policy (0091)", re: /CREATE POLICY tenant_ops_active_view_read ON tenant/i },
-    { label: "connection_ops_health_view_read policy (0091)", re: /CREATE POLICY connection_ops_health_view_read ON connection/i }
+    { label: "connection_ops_health_view_read policy (0091)", re: /CREATE POLICY connection_ops_health_view_read ON connection/i },
+    { label: "abate_worker tenant.state column grant (0093)", re: /GRANT SELECT \(state\) ON tenant TO abate_worker/i }
   ];
 
   let failures = 0;

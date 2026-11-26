@@ -56,6 +56,10 @@ const FeatureFlagBody = z.object({
   reason: z.string().min(3).max(500)
 }).strict();
 
+const UUID_RE = /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i;
+const toNullableUuid = (val: string | null | undefined): string | null =>
+  val && UUID_RE.test(val) ? val : null;
+
 async function recordPlatformAudit(
   tx: { q: (sql: string, params?: any[]) => Promise<any> },
   args: {
@@ -192,8 +196,8 @@ export function registerAdminRoutes(app: Express): void {
             region: t.region,
             state: t.state || "ACTIVE",
             jurisdictionConfigRef: t.jurisdiction_config_ref ?? null,
-            sectorKey: sec?.sector_key || "legal",
-            packKey: sec?.pack_key || "legal",
+            sectorKey: sec?.sector_key || "LEGAL",
+            packKey: sec?.pack_key || getSectorMapping("LEGAL")?.packKey || "generic",
             createdAt: t.created_at
           };
         });
@@ -231,7 +235,7 @@ export function registerAdminRoutes(app: Express): void {
           `INSERT INTO tenant_sector_setting (tenant_id, sector_key, pack_key, updated_by, updated_at)
            VALUES ($1, $2, $3, $4, now())
            ON CONFLICT (tenant_id) DO UPDATE SET sector_key = EXCLUDED.sector_key, pack_key = EXCLUDED.pack_key, updated_by = EXCLUDED.updated_by, updated_at = now()`,
-          [tenantId, pack.sector, pack.packKey, admin.operator]
+          [tenantId, pack.sector, pack.packKey, toNullableUuid(admin.operator)]
         );
         await recordPlatformAudit(tx, {
           operator: admin.operator,
@@ -333,7 +337,7 @@ export function registerAdminRoutes(app: Express): void {
           `INSERT INTO tenant_sector_setting (tenant_id, sector_key, pack_key, updated_by, updated_at)
            VALUES ($1, $2, $3, $4, now())
            ON CONFLICT (tenant_id) DO UPDATE SET sector_key = EXCLUDED.sector_key, pack_key = EXCLUDED.pack_key, updated_by = EXCLUDED.updated_by, updated_at = now()`,
-          [tenantId, pack.sector, pack.packKey, admin.operator]
+          [tenantId, pack.sector, pack.packKey, toNullableUuid(admin.operator)]
         );
         await recordPlatformAudit(tx, {
           operator: admin.operator,
@@ -453,7 +457,10 @@ export function registerAdminRoutes(app: Express): void {
       const tenantId = String(req.params.tenantId);
       const membershipId = String(req.params.membershipId);
       await withOps(async (tx) => {
-        const upd = await tx.q(`UPDATE effective_membership SET valid_to = now() WHERE id = $1`, [membershipId]);
+        const upd = await tx.q(
+          `UPDATE effective_membership SET valid_to = GREATEST(now(), valid_from + interval '1 millisecond') WHERE id = $1`,
+          [membershipId]
+        );
         if (upd.rowCount === 0) {
           throw new AppError("NOT_FOUND", "Membership not found.");
         }
@@ -516,13 +523,13 @@ export function registerAdminRoutes(app: Express): void {
     try {
       const admin = await authenticateSuperAdmin(getHeader(req, "authorization"));
       const body = FeatureFlagBody.parse(req.body);
-      const id = crypto.randomUUID();
+      const changedAt = new Date().toISOString();
       await withOps(async (tx) => {
         await tx.q(
-          `INSERT INTO feature_flag (id, tenant_id, flag, enabled, changed_by, changed_at)
-           VALUES ($1, $2, $3, $4, $5, now())
-           ON CONFLICT (tenant_id, flag) DO UPDATE SET enabled = EXCLUDED.enabled, changed_by = EXCLUDED.changed_by, changed_at = now()`,
-          [id, body.tenantId, body.flag, body.enabled, admin.operator]
+          `INSERT INTO feature_flag (tenant_id, flag, enabled, changed_by, changed_at)
+           VALUES ($1, $2, $3, $4, $5)
+           ON CONFLICT (tenant_id, flag) DO UPDATE SET enabled = EXCLUDED.enabled, changed_by = EXCLUDED.changed_by, changed_at = EXCLUDED.changed_at`,
+          [body.tenantId, body.flag, body.enabled, admin.operator, changedAt]
         );
         await recordPlatformAudit(tx, {
           operator: admin.operator,

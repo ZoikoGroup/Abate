@@ -1,7 +1,7 @@
 import { test, expect } from "@playwright/test";
 import AxeBuilder from "@axe-core/playwright";
 
-const BASE_URL = process.env.BASE_URL || "http://localhost:5173";
+const BASE_URL = process.env.BASE_URL || process.env.PLAYWRIGHT_TEST_BASE_URL || "http://127.0.0.1:5173";
 
 test.describe("Login Screen, Sign Out, and Super Admin Console", () => {
   test("can sign out to Login screen, switch to Super Admin, manage tenants, and pass Axe", async ({ page }) => {

@@ -564,10 +564,16 @@ export class MemoryClient {
     // Organization Select
     if (upper.includes("FROM ORGANIZATION")) {
       let rows = Array.from(memDb.organizations.values());
-      // RLS filter
-      rows = rows.filter(o => o.tenant_id === this.tenantContext);
-      if (params.length > 0) {
-        rows = rows.filter(o => o.id === params[0]);
+      if (this.opsMode && !this.tenantContext) {
+        if (upper.includes("TENANT_ID = $1") && params.length > 0) {
+          rows = rows.filter(o => o.tenant_id === params[0]);
+        }
+      } else {
+        // RLS filter
+        rows = rows.filter(o => o.tenant_id === this.tenantContext);
+        if (params.length > 0) {
+          rows = rows.filter(o => o.id === params[0]);
+        }
       }
       return { rows, rowCount: rows.length, command: "SELECT", oid: 0, fields: [] };
     }
