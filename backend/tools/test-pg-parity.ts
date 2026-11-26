@@ -535,7 +535,7 @@ async function main() {
     );
   });
 
-  await check("Migration 0091: narrow security_invoker ops views, column-only grants, and zero migrator table read access", async () => {
+  await check("Migration 0091/0092: narrow security_invoker ops views, column-only grants, super-admin tenant metadata, and zero migrator table read access", async () => {
     // (c) Verify abate_migrator has no read policy on tenant or connection and sees 0 rows directly
     const migratorClient = await migratorPool!.connect();
     try {
@@ -554,21 +554,14 @@ async function main() {
       migratorClient.release();
     }
 
-    // (a) & (b) Verify abate_ops can read ONLY granted columns of tenant & connection, and fails on other columns/tables
+    // (a) & (b) Verify abate_ops can read ONLY granted columns of tenant (0091/0092) & connection (0091), and fails on non-granted columns/tables
     await withOps(async (tx) => {
       const t = await tx.q(`SELECT id, region FROM tenant LIMIT 1`);
       assert.ok(t.rows.length >= 1, "abate_ops must read granted columns (id, region) on tenant");
 
-      await assert.rejects(
-        () => tx.q(`SELECT name FROM tenant LIMIT 1`),
-        /permission denied/i,
-        "abate_ops must be denied reading non-granted column tenant.name"
-      );
-      await assert.rejects(
-        () => tx.q(`SELECT jurisdiction_config_ref FROM tenant LIMIT 1`),
-        /permission denied/i,
-        "abate_ops must be denied reading non-granted column tenant.jurisdiction_config_ref"
-      );
+      // 0092: abate_ops holds least-privilege Super Admin metadata grants on tenant
+      const meta = await tx.q(`SELECT id, name, region, jurisdiction_config_ref, state, created_at FROM tenant LIMIT 1`);
+      assert.ok(meta.rows.length >= 1, "abate_ops must read 0092 super-admin tenant metadata columns");
 
       await tx.q(`SELECT id, source, state, last_success_at, expected_cadence_seconds FROM connection LIMIT 1`);
       await assert.rejects(

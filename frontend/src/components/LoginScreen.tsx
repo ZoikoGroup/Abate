@@ -71,7 +71,7 @@ export function LoginScreen({
         <div style={{ display: "flex", justifyContent: "space-between", alignItems: "center", flexWrap: "wrap", gap: "0.75rem", marginBottom: "1rem" }}>
           <div>
             <h1 id="login-heading" style={{ color: "#2B1B38", margin: 0 }}>
-              Sign in to Zoiko Abate
+              {devTokenEnabled ? "Sign in to Zoiko Abate" : "Sign in with your Identity Provider"}
             </h1>
             <p style={{ margin: "0.25rem 0 0", color: "#2F343A", fontSize: "0.95rem" }}>
               Organizational work-design & psychosocial-risk assurance. <strong>Change the work. Not the worker.</strong>

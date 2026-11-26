@@ -116,7 +116,7 @@ export function registerAdminRoutes(app: Express): void {
       const storeHealth = await getObjectStore(runtimeCfg).health();
       const workerMetrics = getWorkerMetrics();
       const sloReport = buildSloReport(telemetry.snapshot());
-      const alerts = evaluateOperationalAlerts({
+      const alertReport = evaluateOperationalAlerts({
         cfg: runtimeCfg,
         sloReport,
         workerMetrics,
@@ -165,7 +165,11 @@ export function registerAdminRoutes(app: Express): void {
         },
         counts: { ...counts, ...workerCounts },
         slo: sloReport,
-        alerts
+        alerts: alertReport.alerts,
+        alertSummary: {
+          overallStatus: alertReport.overallStatus,
+          ...alertReport.summary
+        }
       });
     } catch (err) {
       toErrorResponse(err, res);

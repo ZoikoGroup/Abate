@@ -265,6 +265,10 @@ export function SuperAdminConsole({ adminToken, operator, onSignOut }: SuperAdmi
       t.id.toLowerCase().includes(tenantSearch.toLowerCase())
   );
 
+  const alertList = overview
+    ? (Array.isArray(overview.alerts) ? overview.alerts : ((overview.alerts as any)?.alerts ?? []))
+    : [];
+
   return (
     <div className="app-container">
       <header className="app-header">
@@ -272,7 +276,7 @@ export function SuperAdminConsole({ adminToken, operator, onSignOut }: SuperAdmi
           <div className="brand-group">
             <div className="brand-logo"><span className="logo-symbol">Ω</span></div>
             <div>
-              <div className="brand-title">ZOIKO ABATE — SUPER ADMIN</div>
+              <h1 className="brand-title" style={{ margin: 0 }}>ZOIKO ABATE — SUPER ADMIN</h1>
               <div className="brand-subtitle">Platform Operations, Tenant Lifecycle & Governance Console</div>
             </div>
             <div className="mission-pill"><span>Zero-Impersonation Perimeter</span></div>
@@ -336,20 +340,25 @@ export function SuperAdminConsole({ adminToken, operator, onSignOut }: SuperAdmi
             </div>
 
             <h3 style={{ marginTop: "1.5rem" }}>Active Operational Alerts</h3>
-            {overview.alerts.length === 0 ? (
+            {alertList.length === 0 ? (
               <p className="muted">No active operational alerts.</p>
             ) : (
               <table className="data-table">
                 <thead><tr><th>Rule</th><th>Severity</th><th>State</th><th>Detail</th></tr></thead>
                 <tbody>
-                  {overview.alerts.map((a, idx) => (
-                    <tr key={idx}>
-                      <td>{a.id}</td>
-                      <td><span className={`badge ${a.severity === "CRITICAL" ? "badge-coral" : "badge-dark"}`}>{a.severity}</span></td>
-                      <td>{a.firing ? "FIRING" : "OK"}</td>
-                      <td>{a.message}</td>
-                    </tr>
-                  ))}
+                  {alertList.map((a: any, idx: number) => {
+                    const sev = String(a.severity || "").toUpperCase();
+                    const stateText = a.state ?? (a.firing ? "FIRING" : "OK");
+                    const detail = a.summary ?? a.message ?? "";
+                    return (
+                      <tr key={a.id ?? idx}>
+                        <td>{a.id}</td>
+                        <td><span className={`badge ${sev === "CRITICAL" ? "badge-coral" : "badge-dark"}`}>{sev}</span></td>
+                        <td>{stateText}</td>
+                        <td>{detail}</td>
+                      </tr>
+                    );
+                  })}
                 </tbody>
               </table>
             )}
@@ -384,16 +393,16 @@ export function SuperAdminConsole({ adminToken, operator, onSignOut }: SuperAdmi
                 <h3>Edit Tenant: {editingTenant.name}</h3>
                 <div style={{ display: "grid", gridTemplateColumns: "1fr 1fr 1fr auto auto", gap: "0.5rem", alignItems: "end" }}>
                   <div>
-                    <label className="context-label">Name</label>
-                    <input className="select-control" value={editName} onChange={(e) => setEditName(e.target.value)} required />
+                    <label htmlFor="admin-edit-name" className="context-label">Name</label>
+                    <input id="admin-edit-name" className="select-control" value={editName} onChange={(e) => setEditName(e.target.value)} required />
                   </div>
                   <div>
-                    <label className="context-label">Region</label>
-                    <input className="select-control" value={editRegion} onChange={(e) => setEditRegion(e.target.value)} required />
+                    <label htmlFor="admin-edit-region" className="context-label">Region</label>
+                    <input id="admin-edit-region" className="select-control" value={editRegion} onChange={(e) => setEditRegion(e.target.value)} required />
                   </div>
                   <div>
-                    <label className="context-label">Jurisdiction Ref</label>
-                    <input className="select-control" value={editJurisdiction} onChange={(e) => setEditJurisdiction(e.target.value)} />
+                    <label htmlFor="admin-edit-jurisdiction" className="context-label">Jurisdiction Ref</label>
+                    <input id="admin-edit-jurisdiction" className="select-control" value={editJurisdiction} onChange={(e) => setEditJurisdiction(e.target.value)} />
                   </div>
                   <button type="submit" className="btn btn-primary" disabled={busy}>Save</button>
                   <button type="button" className="btn btn-secondary" onClick={() => setEditingTenant(null)}>Cancel</button>
@@ -566,29 +575,29 @@ export function SuperAdminConsole({ adminToken, operator, onSignOut }: SuperAdmi
             <h3>Tenant Feature Flags</h3>
             <form onSubmit={handleSetFeatureFlag} style={{ display: "grid", gridTemplateColumns: "1fr 1fr 1fr 1fr auto", gap: "0.75rem", alignItems: "end", marginBottom: "1rem" }}>
               <div>
-                <label className="context-label">Tenant</label>
-                <select className="select-control" style={{ width: "100%" }} value={flagTenantId} onChange={(e) => setFlagTenantId(e.target.value)}>
+                <label htmlFor="admin-flag-tenant" className="context-label">Tenant</label>
+                <select id="admin-flag-tenant" className="select-control" style={{ width: "100%" }} value={flagTenantId} onChange={(e) => setFlagTenantId(e.target.value)}>
                   {tenants.map((t) => <option key={t.id} value={t.id}>{t.name}</option>)}
                 </select>
               </div>
               <div>
-                <label className="context-label">Flag</label>
-                <select className="select-control" style={{ width: "100%" }} value={flagName} onChange={(e) => setFlagName(e.target.value as any)}>
+                <label htmlFor="admin-flag-name" className="context-label">Flag</label>
+                <select id="admin-flag-name" className="select-control" style={{ width: "100%" }} value={flagName} onChange={(e) => setFlagName(e.target.value as any)}>
                   <option value="planeBOutcomes">planeBOutcomes</option>
                   <option value="aiWorkDesign">aiWorkDesign</option>
                   <option value="aiProposals">aiProposals</option>
                 </select>
               </div>
               <div>
-                <label className="context-label">State</label>
-                <select className="select-control" style={{ width: "100%" }} value={flagEnabled ? "true" : "false"} onChange={(e) => setFlagEnabled(e.target.value === "true")}>
+                <label htmlFor="admin-flag-state" className="context-label">State</label>
+                <select id="admin-flag-state" className="select-control" style={{ width: "100%" }} value={flagEnabled ? "true" : "false"} onChange={(e) => setFlagEnabled(e.target.value === "true")}>
                   <option value="true">ENABLED</option>
                   <option value="false">DISABLED</option>
                 </select>
               </div>
               <div>
-                <label className="context-label">Reason</label>
-                <input className="select-control" style={{ width: "100%" }} value={flagReason} onChange={(e) => setFlagReason(e.target.value)} required />
+                <label htmlFor="admin-flag-reason" className="context-label">Reason</label>
+                <input id="admin-flag-reason" className="select-control" style={{ width: "100%" }} value={flagReason} onChange={(e) => setFlagReason(e.target.value)} required />
               </div>
               <button type="submit" className="btn btn-primary" disabled={busy}>Apply Flag</button>
             </form>
@@ -692,7 +701,7 @@ export function SuperAdminConsole({ adminToken, operator, onSignOut }: SuperAdmi
               </button>
             </div>
             {lookupRecord && (
-              <pre style={{ background: "#F5F2F8", padding: "0.75rem", borderRadius: 6 }}>{JSON.stringify(lookupRecord, null, 2)}</pre>
+              <pre tabIndex={0} aria-label="Request lookup JSON" style={{ background: "#F5F2F8", padding: "0.75rem", borderRadius: 6, overflowX: "auto" }}>{JSON.stringify(lookupRecord, null, 2)}</pre>
             )}
             <table className="data-table">
               <thead><tr><th>Time</th><th>Request ID</th><th>Error Name</th><th>Fingerprint</th></tr></thead>
@@ -717,7 +726,7 @@ export function SuperAdminConsole({ adminToken, operator, onSignOut }: SuperAdmi
               <div>
                 <p><strong>Dossier Status:</strong> <span className="badge badge-dark">{dossier.status}</span> · <strong>Commit:</strong> <code>{dossier.commitSha || "unknown"}</code></p>
                 <p><strong>Checks Passing:</strong> {dossier.totalChecksPassed ?? "—"}</p>
-                <pre style={{ background: "#F5F2F8", padding: "1rem", borderRadius: 6, overflowX: "auto", maxHeight: 420 }}>
+                <pre tabIndex={0} aria-label="Release dossier JSON" style={{ background: "#F5F2F8", padding: "1rem", borderRadius: 6, overflowX: "auto", maxHeight: 420 }}>
                   {JSON.stringify(dossier, null, 2)}
                 </pre>
               </div>

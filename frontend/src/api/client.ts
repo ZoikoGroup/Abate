@@ -1864,7 +1864,8 @@ export interface AdminOverview {
     deadLetterCount: number;
   };
   slo: SloReport;
-  alerts: Array<{ id?: string; rule?: string; severity: string; firing?: boolean; message: string }>;
+  alerts: Array<{ id: string; severity: string; state?: string; firing?: boolean; summary?: string; message?: string }>;
+  alertSummary?: { overallStatus: string; firingCount: number; criticalCount: number; warningCount: number };
 }
 
 export interface AdminTenantRecord {

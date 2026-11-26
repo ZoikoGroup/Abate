@@ -83,7 +83,7 @@ export function Navbar({
               type="button"
               className="btn btn-secondary btn-sm"
               onClick={onSignOut}
-              aria-label="Sign out of session"
+              aria-label={devTokenEnabled ? "Sign out of session" : "Sign out of OIDC session"}
             >
               Sign Out
             </button>
