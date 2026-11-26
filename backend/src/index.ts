@@ -31,6 +31,7 @@ import { registerIngestRoutes } from "./routes/ingest";
 import { registerControlRoutes } from "./routes/control";
 import { registerLifecycleRoutes } from "./routes/lifecycle";
 import { registerOpsRoutes } from "./routes/ops";
+import { registerAdminRoutes } from "./routes/admin";
 import { registerAiActionRoutes } from "./routes/ai-actions";
 import { registerPlanesRoutes } from "./routes/planes";
 import { registerSectorWorkRoutes } from "./routes/sector-work";
@@ -96,7 +97,7 @@ app.use((req: Request, res: Response, next: NextFunction) => {
   if (typeof req.headers.authorization === "string" && req.headers.authorization.startsWith("CookieSession ")) {
     delete req.headers.authorization;
   }
-  if (!req.headers.authorization && !req.path.startsWith("/api/v2/ops/") && req.headers.cookie) {
+  if (!req.headers.authorization && !req.path.startsWith("/api/v2/ops/") && !req.path.startsWith("/api/v2/admin/") && req.headers.cookie) {
     const cookieToken = readCookieFromHeader(req.headers.cookie, SESSION_COOKIE_NAME);
     if (cookieToken) {
       const runtimeCfg = loadConfig();
@@ -707,6 +708,7 @@ app.post("/api/v2/metrics/:id/recalculate", async (req: Request, res: Response) 
 registerControlRoutes(app);
 registerLifecycleRoutes(app);
 registerOpsRoutes(app);
+registerAdminRoutes(app);
 registerAiActionRoutes(app);
 registerPlanesRoutes(app);
 // -------------------------------------------------------------

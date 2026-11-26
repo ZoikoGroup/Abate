@@ -35,12 +35,12 @@ const AUDIT_QUERIES: AuditQuery[] = [
     `
   },
   {
-    name: "2. Dangerous role attributes on runtime roles (abate_* except abate_migrator)",
+    name: "2. Dangerous role attributes on all abate_* roles (including abate_migrator)",
     sql: `
       SELECT rolname, rolsuper, rolbypassrls, rolcreaterole, rolcreatedb
       FROM pg_roles
       WHERE rolname LIKE 'abate_%'
-        AND rolname <> 'abate_migrator'
+        AND rolname <> 'abate_admin'
         AND (rolsuper OR rolbypassrls OR rolcreaterole OR rolcreatedb)
     `
   },
@@ -116,6 +116,92 @@ const AUDIT_QUERIES: AuditQuery[] = [
           AND p.cmd = 'DELETE'
       )
     `
+  },
+  {
+    name: "8. abate_migrator retains read policy on tenant or connection (0091 must drop 0090 read policies)",
+    sql: `
+      SELECT tablename, policyname
+      FROM pg_policies
+      WHERE schemaname = 'public'
+        AND tablename IN ('tenant', 'connection')
+        AND 'abate_migrator' = ANY(roles)
+        AND cmd IN ('SELECT', 'ALL')
+    `
+  },
+  {
+    name: "9. Ops views missing security_invoker=true option (0091)",
+    sql: `
+      SELECT c.relname AS view_name, c.reloptions
+      FROM pg_class c
+      JOIN pg_namespace n ON n.oid = c.relnamespace
+      WHERE n.nspname = 'public'
+        AND c.relkind = 'v'
+        AND c.relname IN ('ops_active_tenants', 'ops_connector_health')
+        AND (c.reloptions IS NULL OR NOT ('security_invoker=true' = ANY(c.reloptions)))
+    `
+  },
+  {
+    name: "10. Unexpected table-level or unapproved column-level grants on tenant/connection for abate_ops or abate_worker (0091/0092/0093)",
+    sql: `
+      SELECT grantee, table_name, privilege_type, NULL::text AS column_name
+      FROM information_schema.role_table_grants
+      WHERE table_schema = 'public'
+        AND (
+          (table_name = 'connection' AND grantee IN ('abate_ops', 'abate_worker')) OR
+          (table_name = 'tenant' AND grantee = 'abate_worker')
+        )
+      UNION ALL
+      SELECT grantee, table_name, privilege_type, column_name
+      FROM information_schema.role_column_grants
+      WHERE table_schema = 'public'
+        AND table_name = 'tenant'
+        AND grantee = 'abate_worker'
+        AND (privilege_type <> 'SELECT' OR column_name NOT IN ('id', 'region', 'state'))
+      UNION ALL
+      SELECT grantee, table_name, privilege_type, column_name
+      FROM information_schema.role_column_grants
+      WHERE table_schema = 'public'
+        AND table_name = 'tenant'
+        AND grantee = 'abate_ops'
+        AND column_name NOT IN ('id', 'name', 'region', 'jurisdiction_config_ref', 'state', 'created_at')
+      UNION ALL
+      SELECT grantee, table_name, privilege_type, column_name
+      FROM information_schema.role_column_grants
+      WHERE table_schema = 'public'
+        AND table_name = 'connection'
+        AND (
+          (grantee = 'abate_worker') OR
+          (grantee = 'abate_ops' AND (privilege_type <> 'SELECT' OR column_name NOT IN ('id', 'source', 'state', 'last_success_at', 'expected_cadence_seconds')))
+        )
+    `
+  },
+  {
+    name: "11. Missing required narrow column grants on tenant/connection for ops views (0091/0093)",
+    sql: `
+      SELECT expected.grantee, expected.table_name, expected.column_name
+      FROM (VALUES
+        ('abate_ops', 'tenant', 'id'),
+        ('abate_ops', 'tenant', 'region'),
+        ('abate_ops', 'tenant', 'state'),
+        ('abate_worker', 'tenant', 'id'),
+        ('abate_worker', 'tenant', 'region'),
+        ('abate_worker', 'tenant', 'state'),
+        ('abate_ops', 'connection', 'id'),
+        ('abate_ops', 'connection', 'source'),
+        ('abate_ops', 'connection', 'state'),
+        ('abate_ops', 'connection', 'last_success_at'),
+        ('abate_ops', 'connection', 'expected_cadence_seconds')
+      ) AS expected(grantee, table_name, column_name)
+      WHERE NOT EXISTS (
+        SELECT 1
+        FROM information_schema.role_column_grants g
+        WHERE g.table_schema = 'public'
+          AND g.grantee = expected.grantee
+          AND g.table_name = expected.table_name
+          AND g.column_name = expected.column_name
+          AND g.privilege_type = 'SELECT'
+      )
+    `
   }
 ];
 
@@ -149,7 +235,12 @@ function runStaticMigrationAudit(): void {
     { label: "ops_connector_health view", re: /CREATE OR REPLACE VIEW ops_connector_health/i },
     { label: "worker_consumer_version table", re: /CREATE TABLE IF NOT EXISTS worker_consumer_version/i },
     { label: "worker_prune_published policy (0089)", re: /CREATE POLICY worker_prune_published ON outbox_event FOR DELETE TO abate_worker/i },
-    { label: "ops_prune_published policy (0089)", re: /CREATE POLICY ops_prune_published ON outbox_event FOR DELETE TO abate_ops/i }
+    { label: "ops_prune_published policy (0089)", re: /CREATE POLICY ops_prune_published ON outbox_event FOR DELETE TO abate_ops/i },
+    { label: "ops_active_tenants security_invoker (0091)", re: /ALTER VIEW ops_active_tenants SET \(security_invoker = true\)/i },
+    { label: "ops_connector_health security_invoker (0091)", re: /ALTER VIEW ops_connector_health SET \(security_invoker = true\)/i },
+    { label: "tenant_ops_active_view_read policy (0091)", re: /CREATE POLICY tenant_ops_active_view_read ON tenant/i },
+    { label: "connection_ops_health_view_read policy (0091)", re: /CREATE POLICY connection_ops_health_view_read ON connection/i },
+    { label: "abate_worker tenant.state column grant (0093)", re: /GRANT SELECT \(state\) ON tenant TO abate_worker/i }
   ];
 
   let failures = 0;

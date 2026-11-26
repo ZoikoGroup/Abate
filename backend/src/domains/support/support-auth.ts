@@ -14,32 +14,66 @@ const initialCfg = loadConfig();
  */
 export const SUPPORT_AUDIENCE = `${initialCfg.authAudience}:support`;
 export const SUPPORT_SCOPE = "platform-support";
+export const SUPER_ADMIN_SCOPE = "platform-super-admin";
 
 export interface SupportIdentity {
   operator: string;
-  scope: typeof SUPPORT_SCOPE;
+  scope: typeof SUPPORT_SCOPE | typeof SUPER_ADMIN_SCOPE;
+  role: "OPS_SUPPORT" | "SUPER_ADMIN";
 }
 
 export function createSupportToken(payload: { operator: string }): string {
   const cfg = loadConfig();
   return jwt.sign(
-    { sub: payload.operator, scope: SUPPORT_SCOPE },
+    { sub: payload.operator, scope: SUPPORT_SCOPE, role: "OPS_SUPPORT" },
     cfg.supportAuthSecret,
     { issuer: cfg.authIssuer, audience: `${cfg.authAudience}:support`, expiresIn: "1h" }
   );
 }
 
-function validateSupportClaims(decoded: any): SupportIdentity {
-  // A support credential bound to a tenant would be impersonation by another name
-  if (!decoded || decoded.scope !== SUPPORT_SCOPE || !decoded.sub || decoded.tenant_id !== undefined) {
-    throw new AppError("UNAUTHENTICATED", "Invalid or expired support token.");
+export function createSuperAdminToken(payload: { operator: string }): string {
+  const cfg = loadConfig();
+  return jwt.sign(
+    { sub: payload.operator, scope: SUPER_ADMIN_SCOPE, role: "SUPER_ADMIN" },
+    cfg.supportAuthSecret,
+    { issuer: cfg.authIssuer, audience: `${cfg.authAudience}:support`, expiresIn: "2h" }
+  );
+}
+
+function validateSupportClaims(decoded: any, requireSuperAdmin = false): SupportIdentity {
+  // A support or super-admin credential bound to a tenant would be impersonation by another name
+  if (!decoded || !decoded.sub || decoded.tenant_id !== undefined) {
+    throw new AppError("UNAUTHENTICATED", "Invalid or expired platform operator token.");
   }
-  return { operator: decoded.sub as string, scope: SUPPORT_SCOPE };
+  const isSuper = decoded.scope === SUPER_ADMIN_SCOPE;
+  const isSupport = decoded.scope === SUPPORT_SCOPE;
+  if (!isSuper && !isSupport) {
+    throw new AppError("UNAUTHENTICATED", "Invalid platform operator scope.");
+  }
+  if (requireSuperAdmin && !isSuper) {
+    throw new AppError("FORBIDDEN", "Super Admin privileges are required for this operation.");
+  }
+  return {
+    operator: decoded.sub as string,
+    scope: isSuper ? SUPER_ADMIN_SCOPE : SUPPORT_SCOPE,
+    role: isSuper ? "SUPER_ADMIN" : "OPS_SUPPORT"
+  };
 }
 
 export async function authenticateSupport(authHeader: string | null | undefined): Promise<SupportIdentity> {
+  return authenticatePlatformOperator(authHeader, false);
+}
+
+export async function authenticateSuperAdmin(authHeader: string | null | undefined): Promise<SupportIdentity> {
+  return authenticatePlatformOperator(authHeader, true);
+}
+
+async function authenticatePlatformOperator(
+  authHeader: string | null | undefined,
+  requireSuperAdmin: boolean
+): Promise<SupportIdentity> {
   if (!authHeader || !authHeader.startsWith("Bearer ")) {
-    throw new AppError("UNAUTHENTICATED", "Support authentication required.");
+    throw new AppError("UNAUTHENTICATED", "Platform operator authentication required.");
   }
 
   const token = authHeader.slice(7);
@@ -50,11 +84,11 @@ export async function authenticateSupport(authHeader: string | null | undefined)
 
   if (OIDC_ASYMMETRIC_ALGS.includes(alg as jwt.Algorithm)) {
     const claims = await verifyOidcJwt(token, { audience: supportAudience, cfg });
-    return validateSupportClaims(claims);
+    return validateSupportClaims(claims, requireSuperAdmin);
   }
 
   if (!isDevTokenEnabled(cfg)) {
-    throw new AppError("UNAUTHENTICATED", "OIDC support token required when dev tokens are disabled.");
+    throw new AppError("UNAUTHENTICATED", "OIDC platform operator token required when dev tokens are disabled.");
   }
 
   let decoded: any;
@@ -65,8 +99,8 @@ export async function authenticateSupport(authHeader: string | null | undefined)
       audience: supportAudience
     });
   } catch {
-    throw new AppError("UNAUTHENTICATED", "Invalid or expired support token.");
+    throw new AppError("UNAUTHENTICATED", "Invalid or expired platform operator token.");
   }
 
-  return validateSupportClaims(decoded);
+  return validateSupportClaims(decoded, requireSuperAdmin);
 }

@@ -10,6 +10,7 @@ interface NavbarProps {
   onRefresh: () => void;
   loading: boolean;
   onOpenDemo?: () => void;
+  onOpenSuperAdmin?: () => void;
   devTokenEnabled?: boolean;
   authenticatedSubject?: string | null;
   onSignOut?: () => void;
@@ -26,6 +27,7 @@ export function Navbar({
   onRefresh,
   loading,
   onOpenDemo,
+  onOpenSuperAdmin,
   devTokenEnabled = true,
   authenticatedSubject = null,
   onSignOut,
@@ -65,12 +67,23 @@ export function Navbar({
               ✨ Live Demo Console
             </button>
           )}
-          {!devTokenEnabled && authenticatedSubject && onSignOut && (
+          {devTokenEnabled && onOpenSuperAdmin && (
+            <button
+              type="button"
+              className="btn btn-secondary btn-sm"
+              onClick={onOpenSuperAdmin}
+              aria-label="Open Super Admin Console"
+              style={{ borderColor: "#2B1B38", color: "#2B1B38", fontWeight: 600 }}
+            >
+              🛡️ Super Admin
+            </button>
+          )}
+          {authenticatedSubject && onSignOut && (
             <button
               type="button"
               className="btn btn-secondary btn-sm"
               onClick={onSignOut}
-              aria-label="Sign out of OIDC session"
+              aria-label={devTokenEnabled ? "Sign out of session" : "Sign out of OIDC session"}
             >
               Sign Out
             </button>
