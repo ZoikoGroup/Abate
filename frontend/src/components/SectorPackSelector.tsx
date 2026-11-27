@@ -12,9 +12,11 @@ interface SectorPackSelectorProps {
 
 /** Extra wording shown beside a sector in the list, so a preview or test pack is never mistaken for a launched one. */
 const STATUS_NOTE: Record<string, string> = {
-  PREVIEW: " (preview, pending policy review)",
+  PREVIEW: " (preview, pending policy review) — not enabled",
   FIXTURE: " (test fixture, not a launched pack)"
 };
+
+const isSelectablePack = (status: string): boolean => status === "BASELINE" || status === "LAUNCHED";
 
 export function SectorPackSelector({ token, sectorProfile, onChanged }: SectorPackSelectorProps) {
   const sectors = sectorProfile?.availableSectors ?? [];
@@ -27,9 +29,10 @@ export function SectorPackSelector({ token, sectorProfile, onChanged }: SectorPa
   const selectedKey = choice ?? sectorProfile.sectorKey;
   const selected = sectors.find(s => s.sectorKey === selectedKey);
   const unchanged = selectedKey === sectorProfile.sectorKey;
+  const selectedBlocked = Boolean(selected && !isSelectablePack(selected.status));
 
   const handleApply = async () => {
-    if (!token || !selected) return;
+    if (!token || !selected || !isSelectablePack(selected.status)) return;
     setSaving(true);
     setFeedback(null);
     try {
@@ -74,7 +77,7 @@ export function SectorPackSelector({ token, sectorProfile, onChanged }: SectorPa
             onChange={(e) => { setChoice(e.target.value); setFeedback(null); }}
           >
             {sectors.map(s => (
-              <option key={s.sectorKey} value={s.sectorKey}>
+              <option key={s.sectorKey} value={s.sectorKey} disabled={!isSelectablePack(s.status)}>
                 {s.displayName}{STATUS_NOTE[s.status] ?? ""}
               </option>
             ))}
@@ -84,7 +87,7 @@ export function SectorPackSelector({ token, sectorProfile, onChanged }: SectorPa
           type="button"
           className="btn btn-primary"
           onClick={handleApply}
-          disabled={saving || unchanged || !token}
+          disabled={saving || unchanged || selectedBlocked || !token}
         >
           {saving ? "Saving..." : "Apply Sector Pack"}
         </button>

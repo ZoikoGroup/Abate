@@ -16,6 +16,7 @@
     "seed-demo": "tsx tools/seed-demo.ts",
     "test-fast": "tsx tools/test-fast.ts",
     "test-super-admin": "tsx tools/test-super-admin.ts",
+    "test-admin-matrix": "tsx tools/test-admin-matrix.ts",
     "test-completion": "tsx tools/test-completion-gates.ts",
     "test-additive": "tsx tools/test-additive-updates.ts",
     "check:gates": "tsx tools/check-completion-gates.ts",

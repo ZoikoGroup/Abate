@@ -20,6 +20,12 @@ frontend/public/test-report.json
 debug.log
 *.log
 
+# Playwright / E2E test outputs
+test-results/
+tests/test-results/
+playwright-report/
+tests/playwright-report/
+
 # OS artefacts
 .DS_Store
 Thumbs.db

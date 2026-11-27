@@ -9,6 +9,7 @@
 // 5. Proves GET /api/v2/sector/rules returns sector-specific rules & overlays without code branches.
 
 import assert from "node:assert";
+process.env.ABATE_ALLOW_PREVIEW_PACK_TESTS = "1";
 import { expressCall } from "./simulate-30d-http";
 import { GOLDEN_01 } from "../src/fixtures/golden01";
 import { seedTwoTenants } from "../src/fixtures/seed";

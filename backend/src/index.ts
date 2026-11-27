@@ -17,7 +17,7 @@ import { createOrganization, getOrganization, listOrganizations, getTenant } fro
 import { rateLimitMiddleware } from "./platform/rate-limit";
 import { applyCursorPagination, setPaginationHeaders, validateAllowedQueryParams } from "./platform/pagination";
 import { compileRelease, getRelease } from "./domains/privacy";
-import { resolveTenantSectorProfile, setTenantSectorSetting, describeSectorScope } from "./domains/lifecycle";
+import { resolveTenantSectorProfile, setTenantSectorSetting, describeSectorScope, getSectorMapping } from "./domains/lifecycle";
 import { SECTOR_KEY_PATTERN } from "./domains/lifecycle/sector-pack";
 import { telemetry, telemetryMiddleware, classifyRoute } from "./platform/telemetry";
 import { buildSloReport } from "./platform/slo";
@@ -32,6 +32,7 @@ import { registerControlRoutes } from "./routes/control";
 import { registerLifecycleRoutes } from "./routes/lifecycle";
 import { registerOpsRoutes } from "./routes/ops";
 import { registerAdminRoutes } from "./routes/admin";
+import { registerTenantAdminRoutes } from "./routes/tenant-admin";
 import { registerAiActionRoutes } from "./routes/ai-actions";
 import { registerPlanesRoutes } from "./routes/planes";
 import { registerSectorWorkRoutes } from "./routes/sector-work";
@@ -366,6 +367,15 @@ app.put("/api/v2/tenant/sector-profile", async (req: Request, res: Response) => 
     }
     const input = SetTenantSectorProfileBody.parse(req.body);
     authorize(actor, "tenant.sector_profile.set", undefined, who.purpose);
+    const candidatePack = getSectorMapping(input.sectorKey);
+    const runtimeCfg = loadConfig();
+    const allowPreviewTests = !isHardenedEnv(runtimeCfg.appEnv) && process.env.ABATE_ALLOW_PREVIEW_PACK_TESTS === "1";
+    if (candidatePack && candidatePack.status !== "BASELINE" && candidatePack.status !== "LAUNCHED" && !allowPreviewTests) {
+      throw new AppError(
+        "FORBIDDEN",
+        `Sector pack '${input.sectorKey}' is '${candidatePack.status.toLowerCase()}' (preview, not enabled) and cannot be enabled for tenant use.`
+      );
+    }
     const result = await runCommand({
       tenantId: who.tenantId,
       operation: "tenant.sector_profile.set",
@@ -709,6 +719,7 @@ registerControlRoutes(app);
 registerLifecycleRoutes(app);
 registerOpsRoutes(app);
 registerAdminRoutes(app);
+registerTenantAdminRoutes(app);
 registerAiActionRoutes(app);
 registerPlanesRoutes(app);
 // -------------------------------------------------------------

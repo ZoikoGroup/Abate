@@ -39,6 +39,10 @@ BEGIN
   IF NOT EXISTS (SELECT FROM pg_roles WHERE rolname = 'abate_ops') THEN
     CREATE ROLE abate_ops LOGIN PASSWORD 'ops_pw' NOSUPERUSER NOBYPASSRLS NOCREATEDB NOCREATEROLE;
   END IF;
+
+  IF NOT EXISTS (SELECT FROM pg_roles WHERE rolname = 'abate_platform_admin') THEN
+    CREATE ROLE abate_platform_admin LOGIN PASSWORD 'platform_admin_pw' NOSUPERUSER NOBYPASSRLS NOCREATEDB NOCREATEROLE;
+  END IF;
 END $$;
 
 GRANT CONNECT ON DATABASE abate TO
@@ -50,7 +54,8 @@ GRANT CONNECT ON DATABASE abate TO
   abate_protected_compute,
   abate_release_compiler,
   abate_performance,
-  abate_ops;
+  abate_ops,
+  abate_platform_admin;
 
 GRANT USAGE, CREATE ON SCHEMA public TO abate_migrator;
 GRANT USAGE ON SCHEMA public TO
@@ -61,4 +66,5 @@ GRANT USAGE ON SCHEMA public TO
   abate_protected_compute,
   abate_release_compiler,
   abate_performance,
-  abate_ops;
+  abate_ops,
+  abate_platform_admin;

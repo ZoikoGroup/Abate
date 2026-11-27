@@ -440,14 +440,20 @@ export function registerControlRoutes(app: Express): void {
       const ifMatch = getHeader(req, "if-match");
 
       const out = await withTenant(who.tenantId, async (tx) => {
+        // Check authority before state/version checks so unauthorized roles (including EMPLOYER_ADMIN) always receive 403
+        if (role !== "APPROVER" && role !== "RISK_OWNER") {
+          throw new AppError("FORBIDDEN", "Actor lacks approval authority for this intervention.");
+        }
+
         const iRes = await tx.q("SELECT * FROM intervention WHERE id = $1 AND tenant_id = $2 FOR UPDATE", [controlId, who.tenantId]);
         if (!iRes.rowCount || iRes.rowCount === 0) {
           throw new AppError("NOT_FOUND", "Control not found.");
         }
         const control = iRes.rows[0];
 
-        // Version-bound guard: v4 approval cannot approve v5
-        if (!ifMatch || Number(ifMatch) !== control.version) {
+        // Version-bound guard: v4 approval cannot approve v5 (accepts bare "1" or quoted ETag '"1"')
+        const cleanIfMatch = ifMatch ? ifMatch.replace(/^W\//, "").replace(/^"|"$/g, "").trim() : "";
+        if (!cleanIfMatch || Number(cleanIfMatch) !== control.version) {
           throw new AppError("CONFLICT", `Version mismatch: Approval target version ${ifMatch} does not match current control version ${control.version}.`);
         }
 
@@ -455,10 +461,6 @@ export function registerControlRoutes(app: Express): void {
           throw new AppError("CONFLICT", `Cannot approve control in state ${control.state}.`);
         }
 
-        // Check authority: Approver or Risk Owner
-        if (role !== "APPROVER" && role !== "RISK_OWNER") {
-          throw new AppError("FORBIDDEN", "Actor lacks approval authority for this intervention.");
-        }
         requireSeparationOfDuties(control.owner_principal_id, actor.principalId);
 
         // Phase 5 Policy Resolution and Decision Envelope binding
@@ -619,11 +621,16 @@ export function registerControlRoutes(app: Express): void {
     }
   });
 
-  // Set Hazard Disposition
+  // Set Hazard Disposition (requires explicit APPROVAL_ROLES authority: RISK_OWNER or APPROVER)
   app.post("/api/v2/hazards/:id/disposition", async (req: Request, res: Response) => {
     try {
       const who = await authenticate(getHeader(req, "authorization"));
-      await resolveActor(who.tenantId, who.subject, new Date(), who.role);
+      const actor = await resolveActor(who.tenantId, who.subject, new Date(), who.role);
+      const role = who.role || actor.memberships[0]?.domain_role || "";
+      if (role !== "APPROVER" && role !== "RISK_OWNER") {
+        throw new AppError("FORBIDDEN", "Actor lacks approval authority to set hazard disposition (requires RISK_OWNER or APPROVER).");
+      }
+      authorize(actor, "hazard.disposition", { tenantId: who.tenantId }, who.purpose);
       const hazardId = String(req.params.id);
       const input = SetDispositionInput.parse(req.body);
 

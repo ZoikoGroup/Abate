@@ -80,6 +80,7 @@ test.describe("Stage B Item 6: Hardened OIDC Session Login & Dev Token Lockdown 
           DATABASE_URL_MIGRATOR: "postgres://disabled:disabled@127.0.0.1:1/abate",
           DATABASE_URL_APP: "postgres://disabled:disabled@127.0.0.1:1/abate",
           DATABASE_URL_WORKER: "postgres://disabled:disabled@127.0.0.1:1/abate",
+          DATABASE_URL_PLATFORM_ADMIN: "postgres://disabled:disabled@127.0.0.1:1/abate",
           ABATE_DISABLE_DEV_TOKEN: "1",
           PORT: String(BACKEND_PORT),
           CLIENT_URL: FRONTEND_URL,

@@ -12,7 +12,8 @@ import {
 } from "../platform/oidc";
 import { toErrorResponse, AppError } from "../platform/errors";
 import { TokenRequestBody } from "../contracts";
-import { authenticate, resolveActor, createDevToken } from "../domains/tenant/auth";
+import { authenticate, resolveActor, createDevToken, computeAllowedActions } from "../domains/tenant/auth";
+import { formatClearAdminSessionCookies } from "../domains/support";
 import { getTenant } from "../domains/tenant/commands";
 import { withTenant } from "../platform/db/with-tenant";
 import { resolveTenantSectorProfile, describeSectorScope } from "../domains/lifecycle";
@@ -154,13 +155,17 @@ export function registerAuthRoutes(app: Express): void {
     }
   });
 
-  // Terminate session and clear HttpOnly OIDC cookie
+  // Terminate session and clear HttpOnly OIDC cookie + dedicated admin cookies
   app.post("/api/v2/auth/logout", (_req: Request, res: Response) => {
-    res.setHeader("Set-Cookie", formatClearSessionCookie(loadConfig()));
+    const cfg = loadConfig();
+    res.setHeader("Set-Cookie", [
+      formatClearSessionCookie(cfg),
+      ...formatClearAdminSessionCookies(cfg)
+    ]);
     res.status(204).send();
   });
 
-  // Principal Profile & Allowed Navigations (Guide §D.1 / §F.1 / Completion Plan §7.1)
+  // Principal Profile, Server-Driven Allowed Navigations & Allowed Actions (Guide §D.1 / §F.1 / Completion Plan §7.1)
   app.get("/api/v2/me", async (req: Request, res: Response) => {
     try {
       const who = await authenticate(getHeader(req, "authorization"));
@@ -181,6 +186,8 @@ export function registerAuthRoutes(app: Express): void {
         !effectiveRoles.has("DPO") &&
         !effectiveRoles.has("PRIVACY_OFFICER") &&
         (effectiveRoles.has("VIEWER") || effectiveRoles.has("WORKER_REP") || effectiveRoles.has("EMPLOYEE") || effectiveRoles.has("MEMBER"));
+
+      const allowedActions = computeAllowedActions(actor, who.role, who.purpose);
 
       const allowedNav: string[] = [
         "DASHBOARD",
@@ -204,6 +211,14 @@ export function registerAuthRoutes(app: Express): void {
         allowedNav.push("INGESTION", "RETENTION", "BOUNDED_AI", "OUTCOMES", "ISOLATION", "OUTBOX", "OPS");
       }
 
+      if (
+        allowedActions.includes("tenant.users.manage") ||
+        allowedActions.includes("tenant.users.read") ||
+        effectiveRoles.has("EMPLOYER_ADMIN")
+      ) {
+        allowedNav.push("TENANT_ADMIN");
+      }
+
       res.status(200).json({
         principalId: actor.principalId,
         tenantId: who.tenantId,
@@ -215,7 +230,8 @@ export function registerAuthRoutes(app: Express): void {
           organizationId: m.organization_id,
           domainRole: m.domain_role
         })),
-        allowedNav
+        allowedNav,
+        allowedActions
       });
     } catch (err) {
       toErrorResponse(err, res);

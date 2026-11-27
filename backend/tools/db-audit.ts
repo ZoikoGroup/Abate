@@ -57,6 +57,7 @@ const AUDIT_QUERIES: AuditQuery[] = [
           'abate_release_compiler',
           'abate_performance',
           'abate_ops',
+          'abate_platform_admin',
           'abate_privacy',
           'abate_identity'
         )
@@ -141,29 +142,22 @@ const AUDIT_QUERIES: AuditQuery[] = [
     `
   },
   {
-    name: "10. Unexpected table-level or unapproved column-level grants on tenant/connection for abate_ops or abate_worker (0091/0092/0093)",
+    name: "10. Unexpected table-level or unapproved column-level grants on tenant/connection for abate_ops or abate_worker (0091/0093/0094)",
     sql: `
       SELECT grantee, table_name, privilege_type, NULL::text AS column_name
       FROM information_schema.role_table_grants
       WHERE table_schema = 'public'
         AND (
-          (table_name = 'connection' AND grantee IN ('abate_ops', 'abate_worker')) OR
-          (table_name = 'tenant' AND grantee = 'abate_worker')
+          (table_name = 'connection' AND grantee IN ('abate_ops', 'abate_worker', 'abate_platform_admin')) OR
+          (table_name = 'tenant' AND grantee IN ('abate_ops', 'abate_worker', 'abate_platform_admin'))
         )
       UNION ALL
       SELECT grantee, table_name, privilege_type, column_name
       FROM information_schema.role_column_grants
       WHERE table_schema = 'public'
         AND table_name = 'tenant'
-        AND grantee = 'abate_worker'
+        AND grantee IN ('abate_worker', 'abate_ops')
         AND (privilege_type <> 'SELECT' OR column_name NOT IN ('id', 'region', 'state'))
-      UNION ALL
-      SELECT grantee, table_name, privilege_type, column_name
-      FROM information_schema.role_column_grants
-      WHERE table_schema = 'public'
-        AND table_name = 'tenant'
-        AND grantee = 'abate_ops'
-        AND column_name NOT IN ('id', 'name', 'region', 'jurisdiction_config_ref', 'state', 'created_at')
       UNION ALL
       SELECT grantee, table_name, privilege_type, column_name
       FROM information_schema.role_column_grants
@@ -171,12 +165,12 @@ const AUDIT_QUERIES: AuditQuery[] = [
         AND table_name = 'connection'
         AND (
           (grantee = 'abate_worker') OR
-          (grantee = 'abate_ops' AND (privilege_type <> 'SELECT' OR column_name NOT IN ('id', 'source', 'state', 'last_success_at', 'expected_cadence_seconds')))
+          (grantee IN ('abate_ops', 'abate_platform_admin') AND (privilege_type <> 'SELECT' OR column_name NOT IN ('id', 'source', 'state', 'last_success_at', 'expected_cadence_seconds')))
         )
     `
   },
   {
-    name: "11. Missing required narrow column grants on tenant/connection for ops views (0091/0093)",
+    name: "11. Missing required narrow column grants on tenant/connection for ops views (0091/0093/0094)",
     sql: `
       SELECT expected.grantee, expected.table_name, expected.column_name
       FROM (VALUES
@@ -190,7 +184,12 @@ const AUDIT_QUERIES: AuditQuery[] = [
         ('abate_ops', 'connection', 'source'),
         ('abate_ops', 'connection', 'state'),
         ('abate_ops', 'connection', 'last_success_at'),
-        ('abate_ops', 'connection', 'expected_cadence_seconds')
+        ('abate_ops', 'connection', 'expected_cadence_seconds'),
+        ('abate_platform_admin', 'connection', 'id'),
+        ('abate_platform_admin', 'connection', 'source'),
+        ('abate_platform_admin', 'connection', 'state'),
+        ('abate_platform_admin', 'connection', 'last_success_at'),
+        ('abate_platform_admin', 'connection', 'expected_cadence_seconds')
       ) AS expected(grantee, table_name, column_name)
       WHERE NOT EXISTS (
         SELECT 1
@@ -201,6 +200,73 @@ const AUDIT_QUERIES: AuditQuery[] = [
           AND g.column_name = expected.column_name
           AND g.privilege_type = 'SELECT'
       )
+    `
+  },
+  {
+    name: "12. abate_platform_admin grants on prohibited tenant business, protected, or invitation tables (0094)",
+    sql: `
+      SELECT grantee, table_name, privilege_type
+      FROM information_schema.role_table_grants
+      WHERE table_schema = 'public'
+        AND grantee = 'abate_platform_admin'
+        AND table_name IN (
+          'work_fact_revision', 'metric_snapshot', 'disclosure_ledger', 'identity_map',
+          'privacy_decision', 'privacy_release', 'released_artifact',
+          'hazard', 'cause', 'intervention', 'approval', 'implementation_receipt', 'evaluation',
+          'audit_event', 'ai_run', 'action_attempt',
+          'outcome_evaluation', 'ai_change_profile', 'ai_workdesign_assessment',
+          'retention_class', 'legal_hold', 'evidence_package', 'evidence_item',
+          'rights_request', 'correction', 'source_contract', 'watermark', 'async_job', 'tenant_invitation'
+        )
+      UNION ALL
+      SELECT grantee, table_name, privilege_type
+      FROM information_schema.role_column_grants
+      WHERE table_schema = 'public'
+        AND grantee = 'abate_platform_admin'
+        AND table_name IN (
+          'work_fact_revision', 'metric_snapshot', 'disclosure_ledger', 'identity_map',
+          'privacy_decision', 'privacy_release', 'released_artifact',
+          'hazard', 'cause', 'intervention', 'approval', 'implementation_receipt', 'evaluation',
+          'audit_event', 'ai_run', 'action_attempt',
+          'outcome_evaluation', 'ai_change_profile', 'ai_workdesign_assessment',
+          'retention_class', 'legal_hold', 'evidence_package', 'evidence_item',
+          'rights_request', 'correction', 'source_contract', 'watermark', 'async_job', 'tenant_invitation'
+        )
+    `
+  },
+  {
+    name: "13. abate_platform_admin UPDATE/DELETE grants on append-only platform_audit_event (0094)",
+    sql: `
+      SELECT grantee, table_name, privilege_type
+      FROM information_schema.role_table_grants
+      WHERE table_schema = 'public'
+        AND table_name = 'platform_audit_event'
+        AND grantee IN ('abate_platform_admin', 'abate_ops', 'abate_app', 'abate_worker')
+        AND privilege_type IN ('UPDATE', 'DELETE')
+    `
+  },
+  {
+    name: "14. abate_ops retains broad admin grants revoked by 0094",
+    sql: `
+      SELECT grantee, table_name, privilege_type
+      FROM information_schema.role_column_grants
+      WHERE table_schema = 'public'
+        AND grantee = 'abate_ops'
+        AND table_name IN (
+          'organization', 'principal', 'effective_membership',
+          'tenant_sector_setting', 'feature_flag', 'platform_user',
+          'admin_approval_request', 'tenant_invitation', 'platform_audit_event'
+        )
+      UNION ALL
+      SELECT grantee, table_name, privilege_type
+      FROM information_schema.role_table_grants
+      WHERE table_schema = 'public'
+        AND grantee = 'abate_ops'
+        AND table_name IN (
+          'organization', 'principal', 'effective_membership',
+          'tenant_sector_setting', 'feature_flag', 'platform_user',
+          'admin_approval_request', 'tenant_invitation', 'platform_audit_event'
+        )
     `
   }
 ];
@@ -240,7 +306,11 @@ function runStaticMigrationAudit(): void {
     { label: "ops_connector_health security_invoker (0091)", re: /ALTER VIEW ops_connector_health SET \(security_invoker = true\)/i },
     { label: "tenant_ops_active_view_read policy (0091)", re: /CREATE POLICY tenant_ops_active_view_read ON tenant/i },
     { label: "connection_ops_health_view_read policy (0091)", re: /CREATE POLICY connection_ops_health_view_read ON connection/i },
-    { label: "abate_worker tenant.state column grant (0093)", re: /GRANT SELECT \(state\) ON tenant TO abate_worker/i }
+    { label: "abate_worker tenant.state column grant (0093)", re: /GRANT SELECT \(state\) ON tenant TO abate_worker/i },
+    { label: "abate_platform_admin role & column-limited policies (0094)", re: /CREATE POLICY tenant_platform_admin_manage ON tenant/i },
+    { label: "four-eyes distinct approver DB constraint (0094)", re: /chk_four_eyes_distinct_approver/i },
+    { label: "tenant_invitation FORCE RLS (0094)", re: /ALTER TABLE tenant_invitation FORCE ROW LEVEL SECURITY/i },
+    { label: "abate_ops admin grants revoked (0094)", re: /REVOKE ALL ON principal FROM abate_ops/i }
   ];
 
   let failures = 0;
@@ -295,6 +365,7 @@ async function main() {
       "abate_release_compiler",
       "abate_performance",
       "abate_ops",
+      "abate_platform_admin",
       "abate_identity"
     ];
     const rolesRes = await client.query<{ rolname: string }>(

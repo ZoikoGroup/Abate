@@ -3070,14 +3070,86 @@
         "tags": [
           "Super Admin Platform"
         ],
-        "summary": "Issue dev-only Super Admin bearer token (disabled outside local/test)",
+        "summary": "Issue dev-only Super Admin bearer token and SameSite=Strict admin session cookies (disabled outside local/test)",
         "security": [],
         "responses": {
           "200": {
-            "description": "Signed platform-super-admin bearer token"
+            "description": "Signed platform-super-admin bearer token and CSRF token"
           },
           "404": {
             "description": "Disabled in hardened environments"
+          }
+        }
+      }
+    },
+    "/admin/session/logout": {
+      "post": {
+        "tags": [
+          "Super Admin Platform"
+        ],
+        "summary": "Clear dedicated HttpOnly SameSite=Strict Super Admin session and CSRF cookies",
+        "security": [],
+        "responses": {
+          "204": {
+            "description": "Admin cookies cleared"
+          }
+        }
+      }
+    },
+    "/admin/session/oidc/exchange": {
+      "post": {
+        "tags": [
+          "Super Admin Platform"
+        ],
+        "summary": "Exchange an asymmetric OIDC Super Admin JWT (with MFA amr/acr and auth_time) for HttpOnly SameSite=Strict admin session cookies",
+        "security": [],
+        "responses": {
+          "200": {
+            "description": "Verified OIDC Super Admin session and CSRF token"
+          },
+          "401": {
+            "description": "Missing/invalid OIDC JWT or missing MFA amr/acr claim"
+          },
+          "403": {
+            "description": "Super Admin scope required"
+          }
+        }
+      }
+    },
+    "/admin/session/step-up": {
+      "post": {
+        "tags": [
+          "Super Admin Platform"
+        ],
+        "summary": "Verify step-up re-authentication within configured window (checks real IdP auth_time and MFA amr/acr in staging/production)",
+        "responses": {
+          "200": {
+            "description": "Upgraded step-up session and expiry timestamp"
+          },
+          "401": {
+            "description": "Unauthenticated, missing MFA, or stale IdP auth_time"
+          },
+          "403": {
+            "description": "Super Admin scope or CSRF check failed"
+          }
+        }
+      }
+    },
+    "/admin/me": {
+      "get": {
+        "tags": [
+          "Super Admin Platform"
+        ],
+        "summary": "Retrieve Super Admin identity, step-up state, safety banner, and server-driven navigation and action permissions",
+        "responses": {
+          "200": {
+            "description": "AdminMeProfile"
+          },
+          "401": {
+            "description": "Unauthenticated or tenant token refused"
+          },
+          "403": {
+            "description": "Super Admin scope required"
           }
         }
       }
@@ -3087,7 +3159,7 @@
         "tags": [
           "Super Admin Platform"
         ],
-        "summary": "Retrieve zero-impersonation platform overview telemetry, tenant counts, SLOs, and operational alerts",
+        "summary": "Retrieve zero-impersonation platform overview telemetry, tenant counts, SLOs, pending approvals, and operational alerts",
         "responses": {
           "200": {
             "description": "AdminOverview payload"
@@ -3117,20 +3189,26 @@
         "tags": [
           "Super Admin Platform"
         ],
-        "summary": "Provision a new tenant, root organization, and initial sector pack setting",
+        "summary": "Provision a new tenant, root organization, and initial launched or baseline sector pack setting (requires reason)",
         "responses": {
           "201": {
-            "description": "Created AdminTenantRecord"
+            "description": "Created AdminTenantRecord with ETag"
+          },
+          "400": {
+            "description": "Validation error or unknown fields"
+          },
+          "403": {
+            "description": "Preview sector pack blocked"
           }
         }
       }
     },
     "/admin/tenants/{tenantId}": {
-      "patch": {
+      "get": {
         "tags": [
           "Super Admin Platform"
         ],
-        "summary": "Update tenant metadata (name, region, jurisdictionConfigRef)",
+        "summary": "Retrieve single tenant metadata and current ETag version",
         "parameters": [
           {
             "name": "tenantId",
@@ -3139,6 +3217,39 @@
             "schema": {
               "type": "string",
               "format": "uuid"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "AdminTenantRecord"
+          },
+          "404": {
+            "description": "Tenant not found"
+          }
+        }
+      },
+      "patch": {
+        "tags": [
+          "Super Admin Platform"
+        ],
+        "summary": "Update tenant metadata with optimistic If-Match version check and mandatory reason",
+        "parameters": [
+          {
+            "name": "tenantId",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "type": "string",
+              "format": "uuid"
+            }
+          },
+          {
+            "name": "If-Match",
+            "in": "header",
+            "required": false,
+            "schema": {
+              "type": "string"
             }
           }
         ],
@@ -3148,6 +3259,9 @@
           },
           "404": {
             "description": "Tenant not found"
+          },
+          "409": {
+            "description": "Stale If-Match version conflict"
           }
         }
       }
@@ -3157,7 +3271,7 @@
         "tags": [
           "Super Admin Platform"
         ],
-        "summary": "Activate or suspend a tenant with platform audit trail",
+        "summary": "Reactivate tenant immediately or request four-eyes tenant suspension (requires step-up and reason)",
         "parameters": [
           {
             "name": "tenantId",
@@ -3167,11 +3281,66 @@
               "type": "string",
               "format": "uuid"
             }
+          },
+          {
+            "name": "If-Match",
+            "in": "header",
+            "required": false,
+            "schema": {
+              "type": "string"
+            }
           }
         ],
         "responses": {
           "200": {
-            "description": "{ id, state }"
+            "description": "{ id, state: 'ACTIVE', version }"
+          },
+          "202": {
+            "description": "Suspension queued for four-eyes approval (PENDING_APPROVAL)"
+          },
+          "401": {
+            "description": "Step-up re-authentication required or expired"
+          },
+          "404": {
+            "description": "Tenant not found"
+          },
+          "409": {
+            "description": "Stale If-Match version conflict"
+          }
+        }
+      }
+    },
+    "/admin/tenants/{tenantId}/offboard-request": {
+      "post": {
+        "tags": [
+          "Super Admin Platform"
+        ],
+        "summary": "Request four-eyes tenant offboarding through retention, hold, and tombstone workflow (never hard deletes)",
+        "parameters": [
+          {
+            "name": "tenantId",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "type": "string",
+              "format": "uuid"
+            }
+          },
+          {
+            "name": "If-Match",
+            "in": "header",
+            "required": false,
+            "schema": {
+              "type": "string"
+            }
+          }
+        ],
+        "responses": {
+          "202": {
+            "description": "Offboard request queued for four-eyes approval"
+          },
+          "401": {
+            "description": "Step-up re-authentication required"
           },
           "404": {
             "description": "Tenant not found"
@@ -3184,7 +3353,7 @@
         "tags": [
           "Super Admin Platform"
         ],
-        "summary": "Set tenant sector pack assignment",
+        "summary": "Assign baseline sector pack or request four-eyes enablement of a launched sector pack (preview packs blocked)",
         "parameters": [
           {
             "name": "tenantId",
@@ -3199,6 +3368,15 @@
         "responses": {
           "200": {
             "description": "{ tenantId, sectorKey, packKey }"
+          },
+          "202": {
+            "description": "Launched pack enablement queued for four-eyes approval"
+          },
+          "401": {
+            "description": "Step-up re-authentication required"
+          },
+          "403": {
+            "description": "Preview or fixture sector pack blocked"
           }
         }
       }
@@ -3208,7 +3386,7 @@
         "tags": [
           "Super Admin Platform"
         ],
-        "summary": "List tenant principals and role memberships (access metadata only)",
+        "summary": "List pseudonymous principal IDs, masked identifiers, and role memberships (every view audited)",
         "parameters": [
           {
             "name": "tenantId",
@@ -3222,7 +3400,7 @@
         ],
         "responses": {
           "200": {
-            "description": "{ tenantId, items: AdminPrincipalMembership[] }"
+            "description": "{ tenantId, privacyMode, items: AdminPrincipalMembership[] }"
           }
         }
       }
@@ -3232,7 +3410,7 @@
         "tags": [
           "Super Admin Platform"
         ],
-        "summary": "Provision principal if needed and assign domain role membership",
+        "summary": "Bootstrap initial EMPLOYER_ADMIN membership only (strictly refuses approval roles and platform staff)",
         "parameters": [
           {
             "name": "tenantId",
@@ -3246,7 +3424,10 @@
         ],
         "responses": {
           "201": {
-            "description": "Created AdminPrincipalMembership"
+            "description": "Created pseudonymous AdminPrincipalMembership"
+          },
+          "403": {
+            "description": "Role separation violation (only EMPLOYER_ADMIN bootstrap permitted)"
           }
         }
       }
@@ -3256,7 +3437,7 @@
         "tags": [
           "Super Admin Platform"
         ],
-        "summary": "Revoke an active role membership",
+        "summary": "Revoke an active role membership with mandatory reason and optimistic concurrency support",
         "parameters": [
           {
             "name": "tenantId",
@@ -3287,12 +3468,181 @@
         }
       }
     },
+    "/admin/platform-users": {
+      "get": {
+        "tags": [
+          "Super Admin Platform"
+        ],
+        "summary": "List named platform staff accounts (SUPER_ADMIN and OPS_SUPPORT)",
+        "responses": {
+          "200": {
+            "description": "{ items: AdminPlatformUser[] }"
+          }
+        }
+      },
+      "post": {
+        "tags": [
+          "Super Admin Platform"
+        ],
+        "summary": "Create named platform staff account (refuses shared names; four-eyes for SUPER_ADMIN or break-glass)",
+        "responses": {
+          "201": {
+            "description": "Created OPS_SUPPORT platform user"
+          },
+          "202": {
+            "description": "SUPER_ADMIN or break-glass creation queued for four-eyes approval"
+          },
+          "400": {
+            "description": "Shared account name refused or validation error"
+          },
+          "401": {
+            "description": "Step-up re-authentication required"
+          }
+        }
+      }
+    },
+    "/admin/platform-users/{userId}/role": {
+      "patch": {
+        "tags": [
+          "Super Admin Platform"
+        ],
+        "summary": "Change platform staff role (four-eyes required when promoting to SUPER_ADMIN)",
+        "parameters": [
+          {
+            "name": "userId",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "type": "string",
+              "format": "uuid"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "Updated platform role"
+          },
+          "202": {
+            "description": "Promotion to SUPER_ADMIN queued for four-eyes approval"
+          },
+          "404": {
+            "description": "Platform user not found"
+          }
+        }
+      }
+    },
+    "/admin/platform-users/{userId}/disable": {
+      "post": {
+        "tags": [
+          "Super Admin Platform"
+        ],
+        "summary": "Disable a platform staff account (four-eyes required for disabling SUPER_ADMIN; self-disable refused)",
+        "parameters": [
+          {
+            "name": "userId",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "type": "string",
+              "format": "uuid"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "Platform user disabled"
+          },
+          "202": {
+            "description": "SUPER_ADMIN disable queued for four-eyes approval"
+          },
+          "409": {
+            "description": "Cannot disable own active Super Admin account"
+          }
+        }
+      }
+    },
+    "/admin/approvals": {
+      "get": {
+        "tags": [
+          "Super Admin Platform"
+        ],
+        "summary": "List four-eyes admin approval requests (filterable by status)",
+        "responses": {
+          "200": {
+            "description": "{ items: AdminApprovalRequestRecord[] }"
+          }
+        }
+      }
+    },
+    "/admin/approvals/{id}/approve": {
+      "post": {
+        "tags": [
+          "Super Admin Platform"
+        ],
+        "summary": "Approve and execute a pending four-eyes request as a second distinct Super Admin (requires step-up)",
+        "parameters": [
+          {
+            "name": "id",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "type": "string",
+              "format": "uuid"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "Approved and executed action receipt"
+          },
+          "401": {
+            "description": "Step-up re-authentication required"
+          },
+          "403": {
+            "description": "Four-eyes violation (self-approval refused)"
+          },
+          "409": {
+            "description": "Replayed or expired approval request refused"
+          }
+        }
+      }
+    },
+    "/admin/approvals/{id}/reject": {
+      "post": {
+        "tags": [
+          "Super Admin Platform"
+        ],
+        "summary": "Reject a pending four-eyes request as a second distinct Super Admin (requires step-up)",
+        "parameters": [
+          {
+            "name": "id",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "type": "string",
+              "format": "uuid"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "{ id, status: 'REJECTED', rejectedBy }"
+          },
+          "403": {
+            "description": "Requester cannot decide own approval request"
+          },
+          "409": {
+            "description": "Approval request already decided"
+          }
+        }
+      }
+    },
     "/admin/governance": {
       "get": {
         "tags": [
           "Super Admin Platform"
         ],
-        "summary": "List registered sector and jurisdiction governance packs",
+        "summary": "List registered sector and jurisdiction governance packs with preview not-enabled flags",
         "responses": {
           "200": {
             "description": "{ sectorPacks: AdminGovernancePack[] }"
@@ -3316,10 +3666,126 @@
         "tags": [
           "Super Admin Platform"
         ],
-        "summary": "Enable or disable a tenant feature flag with audit logging",
+        "summary": "Disable a feature flag immediately or request four-eyes enablement (requires step-up and reason)",
         "responses": {
           "200": {
-            "description": "{ tenantId, flag, enabled }"
+            "description": "{ tenantId, flag, enabled: false }"
+          },
+          "202": {
+            "description": "Feature flag enablement queued for four-eyes approval"
+          },
+          "401": {
+            "description": "Step-up re-authentication required"
+          }
+        }
+      }
+    },
+    "/admin/entitlements": {
+      "get": {
+        "tags": [
+          "Super Admin Platform"
+        ],
+        "summary": "List commercial tenant entitlements (never privacy overrides)",
+        "responses": {
+          "200": {
+            "description": "{ items: AdminEntitlementRecord[] }"
+          }
+        }
+      },
+      "post": {
+        "tags": [
+          "Super Admin Platform"
+        ],
+        "summary": "Set commercial tenant entitlement (refuses privacy-floor override keys with 403)",
+        "responses": {
+          "200": {
+            "description": "Saved AdminEntitlementRecord"
+          },
+          "403": {
+            "description": "Privacy-floor override key refused"
+          },
+          "409": {
+            "description": "Stale If-Match version conflict"
+          }
+        }
+      }
+    },
+    "/admin/ai-quota": {
+      "get": {
+        "tags": [
+          "Super Admin Platform"
+        ],
+        "summary": "List per-tenant AI monthly quota configurations (metadata only)",
+        "responses": {
+          "200": {
+            "description": "{ items: AdminAiQuotaRecord[] }"
+          }
+        }
+      }
+    },
+    "/admin/tenants/{tenantId}/ai-quota": {
+      "put": {
+        "tags": [
+          "Super Admin Platform"
+        ],
+        "summary": "Configure per-tenant monthly AI budget cap with optimistic If-Match and mandatory reason",
+        "parameters": [
+          {
+            "name": "tenantId",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "type": "string",
+              "format": "uuid"
+            }
+          },
+          {
+            "name": "If-Match",
+            "in": "header",
+            "required": false,
+            "schema": {
+              "type": "string"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "Updated AI quota configuration"
+          },
+          "404": {
+            "description": "Tenant not found"
+          },
+          "409": {
+            "description": "Stale If-Match version conflict"
+          }
+        }
+      }
+    },
+    "/admin/kill-switches": {
+      "post": {
+        "tags": [
+          "Super Admin Platform"
+        ],
+        "summary": "Request four-eyes activation or reset of an AI or tool kill switch (supports optional expiry)",
+        "responses": {
+          "202": {
+            "description": "Kill switch request queued for four-eyes approval"
+          },
+          "401": {
+            "description": "Step-up re-authentication required"
+          }
+        }
+      }
+    },
+    "/admin/operations": {
+      "get": {
+        "tags": [
+          "Super Admin Platform"
+        ],
+        "summary": "Content-free platform operational summary (worker heartbeat, queue depth, dead letters, connector freshness)",
+        "responses": {
+          "200": {
+            "description": "AdminOperationsOverview"
           }
         }
       }
@@ -3329,10 +3795,407 @@
         "tags": [
           "Super Admin Platform"
         ],
-        "summary": "List immutable platform administration audit events",
+        "summary": "Search and filter immutable platform administration audit events",
         "responses": {
           "200": {
             "description": "{ items: AdminPlatformAuditEvent[] }"
+          }
+        }
+      }
+    },
+    "/admin/audit/export": {
+      "post": {
+        "tags": [
+          "Super Admin Platform"
+        ],
+        "summary": "Audited export of platform administration audit events as JSON or CSV (export itself is audited)",
+        "responses": {
+          "200": {
+            "description": "JSON bundle or CSV text export"
+          }
+        }
+      }
+    },
+    "/tenant-admin/users": {
+      "get": {
+        "tags": [
+          "Tenant Admin"
+        ],
+        "summary": "List principals and effective-dated role memberships within caller's tenant",
+        "responses": {
+          "200": {
+            "description": "{ tenantId, items: TenantAdminUserRecord[] }"
+          },
+          "403": {
+            "description": "Requires tenant administration read role"
+          }
+        }
+      }
+    },
+    "/tenant-admin/users/{principalId}": {
+      "get": {
+        "tags": [
+          "Tenant Admin"
+        ],
+        "summary": "Retrieve single tenant principal with ETag (foreign and missing IDs return identical 404)",
+        "parameters": [
+          {
+            "name": "principalId",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "type": "string",
+              "format": "uuid"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "TenantAdminUserRecord"
+          },
+          "404": {
+            "description": "User not found"
+          }
+        }
+      }
+    },
+    "/tenant-admin/users/{principalId}/deactivate": {
+      "post": {
+        "tags": [
+          "Tenant Admin"
+        ],
+        "summary": "Deactivate a tenant user via idempotent command with If-Match check and audit trail",
+        "parameters": [
+          {
+            "name": "principalId",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "type": "string",
+              "format": "uuid"
+            }
+          },
+          {
+            "name": "Idempotency-Key",
+            "in": "header",
+            "required": true,
+            "schema": {
+              "type": "string"
+            }
+          },
+          {
+            "name": "If-Match",
+            "in": "header",
+            "required": false,
+            "schema": {
+              "type": "string"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "{ principalId, active: false, version }"
+          },
+          "403": {
+            "description": "Requires EMPLOYER_ADMIN role"
+          },
+          "404": {
+            "description": "User not found"
+          },
+          "409": {
+            "description": "Self-deactivation or stale If-Match conflict"
+          }
+        }
+      }
+    },
+    "/tenant-admin/users/{principalId}/reactivate": {
+      "post": {
+        "tags": [
+          "Tenant Admin"
+        ],
+        "summary": "Reactivate a deactivated tenant user via idempotent command",
+        "parameters": [
+          {
+            "name": "principalId",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "type": "string",
+              "format": "uuid"
+            }
+          },
+          {
+            "name": "Idempotency-Key",
+            "in": "header",
+            "required": true,
+            "schema": {
+              "type": "string"
+            }
+          },
+          {
+            "name": "If-Match",
+            "in": "header",
+            "required": false,
+            "schema": {
+              "type": "string"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "{ principalId, active: true, version }"
+          },
+          "404": {
+            "description": "User not found"
+          },
+          "409": {
+            "description": "Stale If-Match conflict"
+          }
+        }
+      }
+    },
+    "/tenant-admin/memberships": {
+      "post": {
+        "tags": [
+          "Tenant Admin"
+        ],
+        "summary": "Assign effective-dated domain role membership inside caller's tenant",
+        "parameters": [
+          {
+            "name": "Idempotency-Key",
+            "in": "header",
+            "required": true,
+            "schema": {
+              "type": "string"
+            }
+          }
+        ],
+        "responses": {
+          "201": {
+            "description": "Created effective-dated membership with approver-authority indicator"
+          },
+          "403": {
+            "description": "Requires EMPLOYER_ADMIN role"
+          },
+          "404": {
+            "description": "Organization or principal not found in tenant"
+          }
+        }
+      }
+    },
+    "/tenant-admin/memberships/{membershipId}/end": {
+      "post": {
+        "tags": [
+          "Tenant Admin"
+        ],
+        "summary": "End an effective-dated role membership and recheck remaining approver authority",
+        "parameters": [
+          {
+            "name": "membershipId",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "type": "string",
+              "format": "uuid"
+            }
+          },
+          {
+            "name": "Idempotency-Key",
+            "in": "header",
+            "required": true,
+            "schema": {
+              "type": "string"
+            }
+          },
+          {
+            "name": "If-Match",
+            "in": "header",
+            "required": false,
+            "schema": {
+              "type": "string"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "Ended membership and remaining approver authority summary"
+          },
+          "404": {
+            "description": "Membership not found"
+          },
+          "409": {
+            "description": "Stale If-Match conflict"
+          }
+        }
+      }
+    },
+    "/tenant-admin/invitations": {
+      "get": {
+        "tags": [
+          "Tenant Admin"
+        ],
+        "summary": "List OIDC invitations strictly within caller's tenant",
+        "responses": {
+          "200": {
+            "description": "{ tenantId, items: TenantInvitationRecord[] }"
+          }
+        }
+      },
+      "post": {
+        "tags": [
+          "Tenant Admin"
+        ],
+        "summary": "Create OIDC invitation with masked email storage and effective-dated role grant",
+        "parameters": [
+          {
+            "name": "Idempotency-Key",
+            "in": "header",
+            "required": true,
+            "schema": {
+              "type": "string"
+            }
+          }
+        ],
+        "responses": {
+          "201": {
+            "description": "Created TenantInvitationRecord"
+          },
+          "403": {
+            "description": "Requires EMPLOYER_ADMIN role"
+          }
+        }
+      }
+    },
+    "/tenant-admin/invitations/{invitationId}/revoke": {
+      "post": {
+        "tags": [
+          "Tenant Admin"
+        ],
+        "summary": "Revoke a pending OIDC invitation inside caller's tenant",
+        "parameters": [
+          {
+            "name": "invitationId",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "type": "string",
+              "format": "uuid"
+            }
+          },
+          {
+            "name": "Idempotency-Key",
+            "in": "header",
+            "required": true,
+            "schema": {
+              "type": "string"
+            }
+          },
+          {
+            "name": "If-Match",
+            "in": "header",
+            "required": false,
+            "schema": {
+              "type": "string"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "{ id, status: 'REVOKED', version }"
+          },
+          "404": {
+            "description": "Invitation not found"
+          },
+          "409": {
+            "description": "Already revoked or stale If-Match conflict"
+          }
+        }
+      }
+    },
+    "/tenant-admin/organizations/{orgId}": {
+      "patch": {
+        "tags": [
+          "Tenant Admin"
+        ],
+        "summary": "Rename or reparent an organization unit inside caller's tenant",
+        "parameters": [
+          {
+            "name": "orgId",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "type": "string",
+              "format": "uuid"
+            }
+          },
+          {
+            "name": "Idempotency-Key",
+            "in": "header",
+            "required": true,
+            "schema": {
+              "type": "string"
+            }
+          },
+          {
+            "name": "If-Match",
+            "in": "header",
+            "required": false,
+            "schema": {
+              "type": "string"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "Updated organization unit with ETag"
+          },
+          "400": {
+            "description": "Validation error or self-parent cycle"
+          },
+          "404": {
+            "description": "Organization not found"
+          },
+          "409": {
+            "description": "Stale If-Match conflict"
+          }
+        }
+      }
+    },
+    "/tenant-admin/audit": {
+      "get": {
+        "tags": [
+          "Tenant Admin"
+        ],
+        "summary": "Search and filter own tenant's append-only audit log",
+        "responses": {
+          "200": {
+            "description": "{ tenantId, items: AuditEvent[] }"
+          }
+        }
+      }
+    },
+    "/tenant-admin/rights-requests": {
+      "get": {
+        "tags": [
+          "Tenant Admin"
+        ],
+        "summary": "List own tenant's data-subject rights request history",
+        "responses": {
+          "200": {
+            "description": "{ tenantId, items: RightsRequestRecord[] }"
+          }
+        }
+      }
+    },
+    "/tenant-admin/usage": {
+      "get": {
+        "tags": [
+          "Tenant Admin"
+        ],
+        "summary": "Unified tenant usage summary: AI quota remaining, entitlements, and tenant-scoped connector health",
+        "responses": {
+          "200": {
+            "description": "TenantAdminUsageSummary"
           }
         }
       }

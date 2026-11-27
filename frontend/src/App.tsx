@@ -46,15 +46,17 @@ const OperationsTab = lazy(() => import("./components/Tabs/OperationsTab").then(
 const OutboxTab = lazy(() => import("./components/Tabs/OutboxTab").then((m) => ({ default: m.OutboxTab })));
 const AuditTab = lazy(() => import("./components/Tabs/AuditTab").then((m) => ({ default: m.AuditTab })));
 const AuditVerifierTab = lazy(() => import("./components/Tabs/AuditVerifierTab").then((m) => ({ default: m.AuditVerifierTab })));
+const TenantAdminTab = lazy(() => import("./components/Tabs/TenantAdminTab").then((m) => ({ default: m.TenantAdminTab })));
 const LiveDemoConsole = lazy(() => import("./components/Demo/LiveDemoConsole").then((m) => ({ default: m.LiveDemoConsole })));
 
-type TabKey = "dashboard" | "constitutional" | "isolation" | "organizations" | "ingestion" | "analytics" | "hazards" | "retention" | "ai" | "outcomes" | "sector" | "operations" | "outbox" | "audit" | "verifier";
+type TabKey = "dashboard" | "constitutional" | "isolation" | "organizations" | "tenant_admin" | "ingestion" | "analytics" | "hazards" | "retention" | "ai" | "outcomes" | "sector" | "operations" | "outbox" | "audit" | "verifier";
 
 const VALID_TAB_KEYS: readonly TabKey[] = [
   "dashboard",
   "constitutional",
   "isolation",
   "organizations",
+  "tenant_admin",
   "ingestion",
   "analytics",
   "hazards",
@@ -70,7 +72,7 @@ const VALID_TAB_KEYS: readonly TabKey[] = [
 
 function parseTabFromHash(): TabKey | null {
   if (typeof window === "undefined") return null;
-  const match = window.location.hash.match(/^#tab=([a-z]+)$/i);
+  const match = window.location.hash.match(/^#tab=([a-z_]+)$/i);
   if (!match) return null;
   const candidate = match[1].toLowerCase() as TabKey;
   return VALID_TAB_KEYS.includes(candidate) ? candidate : null;
@@ -110,6 +112,7 @@ export default function App() {
   const [availableTenants, setAvailableTenants] = useState<TenantWorkspaceItem[]>([]);
   const [sectorProfile, setSectorProfile] = useState<TenantSectorProfile | null>(null);
   const [allowedNav, setAllowedNav] = useState<string[] | null>(null);
+  const [allowedActions, setAllowedActions] = useState<string[] | undefined>(undefined);
   const [organizations, setOrganizations] = useState<Organization[]>([]);
   const [auditEvents, setAuditEvents] = useState<AuditEvent[]>([]);
   const [loading, setLoading] = useState(false);
@@ -195,6 +198,7 @@ export default function App() {
     setSectorProfile(secProfile);
     setAvailableTenants(tenantsList);
     setAllowedNav(Array.isArray(me?.allowedNav) ? me.allowedNav : null);
+    setAllowedActions(Array.isArray(me?.allowedActions) ? me.allowedActions : undefined);
     if (secProfile && !isSectorPackActive(secProfile)) {
       setActiveTab(prev => (prev === "sector" ? "organizations" : prev));
     }
@@ -408,6 +412,11 @@ export default function App() {
         <SuperAdminConsole
           adminToken={superAdminToken}
           operator={superAdminOperator}
+          devTokenEnabled={devTokenEnabled}
+          onUpdateSession={(nextToken, nextOperator) => {
+            setSuperAdminToken(nextToken);
+            setSuperAdminOperator(nextOperator);
+          }}
           onSignOut={() => void handleSignOut()}
         />
       </Suspense>
@@ -476,6 +485,15 @@ export default function App() {
                 onClick={() => setActiveTab("organizations")}
               >
                 {devTokenEnabled ? "Organizations & Idempotency" : "Organizations"}
+              </button>
+            )}
+            {isNavAllowed("TENANT_ADMIN") && (
+              <button
+                type="button"
+                className={`tab-button ${activeTab === "tenant_admin" ? "active" : ""}`}
+                onClick={() => setActiveTab("tenant_admin")}
+              >
+                Tenant Admin
               </button>
             )}
             {isNavAllowed("INGESTION") && (
@@ -641,6 +659,18 @@ export default function App() {
                 token={token}
                 organizations={organizations}
                 sectorProfile={sectorProfile}
+                onSectorProfileChange={setSectorProfile}
+                onRefresh={() => fetchTenantData(activeTenantId, activeRole)}
+              />
+            )}
+
+            {activeTab === "tenant_admin" && (
+              <TenantAdminTab
+                currentTenant={currentTenant}
+                token={token}
+                organizations={organizations}
+                sectorProfile={sectorProfile}
+                allowedActions={allowedActions}
                 onSectorProfileChange={setSectorProfile}
                 onRefresh={() => fetchTenantData(activeTenantId, activeRole)}
               />

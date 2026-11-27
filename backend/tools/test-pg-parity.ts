@@ -13,11 +13,13 @@ import {
   releaseCompilerPool,
   performancePool,
   opsPool,
+  platformAdminPool,
   withTenant,
   withProtectedCompute,
   withReleaseCompiler,
   withPerformance,
   withOps,
+  withPlatformAdmin,
   withWorker,
   resetPgHealthCache
 } from "../src/platform/db/with-tenant";
@@ -535,7 +537,7 @@ async function main() {
     );
   });
 
-  await check("Migration 0091/0092: narrow security_invoker ops views, column-only grants, super-admin tenant metadata, and zero migrator table read access", async () => {
+  await check("Migration 0091/0092/0094: narrow ops views, dedicated abate_platform_admin role, de-escalated abate_ops, and four-eyes DB guard", async () => {
     // (c) Verify abate_migrator has no read policy on tenant or connection and sees 0 rows directly
     const migratorClient = await migratorPool!.connect();
     try {
@@ -554,38 +556,97 @@ async function main() {
       migratorClient.release();
     }
 
-    // (a) & (b) Verify abate_ops can read granted columns of tenant (0091/0092), connection (0091), and both ops views
+    // (a) & (b) Verify abate_ops can read ONLY narrow operational columns/views (0094 revoked 0092 admin writes from abate_ops)
     await withOps(async (tx) => {
-      const t = await tx.q(`SELECT id, region FROM tenant LIMIT 1`);
-      assert.ok(t.rows.length >= 1, "abate_ops must read granted columns (id, region) on tenant");
-
-      // 0092: abate_ops holds least-privilege Super Admin metadata grants on tenant
-      const meta = await tx.q(`SELECT id, name, region, jurisdiction_config_ref, state, created_at FROM tenant LIMIT 1`);
-      assert.ok(meta.rows.length >= 1, "abate_ops must read 0092 super-admin tenant metadata columns");
-
+      const t = await tx.q(`SELECT id, region, state FROM tenant LIMIT 1`);
+      assert.ok(t.rows.length >= 1, "abate_ops must read granted columns (id, region, state) on tenant");
       await tx.q(`SELECT id, source, state, last_success_at, expected_cadence_seconds FROM connection LIMIT 1`);
-
-      // (d) Both ops views work for abate_ops
       const activeView = await tx.q(`SELECT id, region, state FROM ops_active_tenants`);
       assert.ok(activeView.rows.some((r: any) => r.id === tenantA), "ops_active_tenants must return Tenant A for abate_ops");
       await tx.q(`SELECT id, source, state, last_success_at, expected_cadence_seconds FROM ops_connector_health`);
     });
 
     // Run each negative permission probe in its own transaction so a PostgreSQL error does not abort subsequent queries (25P02)
+    for (const [sql, msg] of [
+      ["SELECT name FROM tenant LIMIT 1", "abate_ops must be denied reading non-granted column tenant.name after 0094"],
+      ["SELECT count(*) FROM principal", "abate_ops must be denied reading principal after 0094"],
+      ["SELECT count(*) FROM effective_membership", "abate_ops must be denied reading effective_membership after 0094"],
+      ["SELECT count(*) FROM organization", "abate_ops must be denied reading organization after 0094"],
+      ["SELECT count(*) FROM feature_flag", "abate_ops must be denied reading feature_flag after 0094"],
+      ["SELECT tenant_id FROM connection LIMIT 1", "abate_ops must be denied reading non-granted column connection.tenant_id"],
+      ["SELECT contract_id FROM connection LIMIT 1", "abate_ops must be denied reading non-granted column connection.contract_id"],
+      ["SELECT count(*) FROM work_fact_revision", "abate_ops must be denied access to business table work_fact_revision"]
+    ] as const) {
+      await assert.rejects(() => withOps((tx) => tx.q(sql)), /permission denied/i, msg);
+    }
+
+    // Verify dedicated abate_platform_admin role: allowed metadata reads + zero tenant business/protected table access + append-only audit + four-eyes constraint
+    assert.ok(platformAdminPool, "platformAdminPool must be initialized");
+    await withPlatformAdmin(async (tx) => {
+      const meta = await tx.q(`SELECT id, name, region, jurisdiction_config_ref, state, version, created_at FROM tenant LIMIT 1`);
+      assert.ok(meta.rows.length >= 1, "abate_platform_admin must read column-limited tenant metadata");
+      const activeView = await tx.q(`SELECT id, region, state FROM ops_active_tenants`);
+      assert.ok(activeView.rows.some((r: any) => r.id === tenantA), "abate_platform_admin must read ops_active_tenants");
+      await tx.q(`SELECT id, source, state, last_success_at, expected_cadence_seconds FROM ops_connector_health`);
+    });
+
+    for (const tbl of [
+      "work_fact_revision",
+      "metric_snapshot",
+      "disclosure_ledger",
+      "identity_map",
+      "privacy_release",
+      "released_artifact",
+      "hazard",
+      "intervention",
+      "approval",
+      "evaluation",
+      "audit_event",
+      "ai_run",
+      "action_attempt",
+      "tenant_invitation"
+    ]) {
+      await assert.rejects(
+        () => withPlatformAdmin((tx) => tx.q(`SELECT count(*) FROM ${tbl}`)),
+        /permission denied/i,
+        `abate_platform_admin must be denied access to ${tbl}`
+      );
+    }
+
     await assert.rejects(
-      () => withOps((tx) => tx.q(`SELECT tenant_id FROM connection LIMIT 1`)),
+      () => withPlatformAdmin((tx) => tx.q(`SELECT tenant_id FROM connection LIMIT 1`)),
       /permission denied/i,
-      "abate_ops must be denied reading non-granted column connection.tenant_id"
+      "abate_platform_admin must be denied non-granted connection.tenant_id"
     );
     await assert.rejects(
-      () => withOps((tx) => tx.q(`SELECT contract_id FROM connection LIMIT 1`)),
-      /permission denied/i,
-      "abate_ops must be denied reading non-granted column connection.contract_id"
+      () => withPlatformAdmin((tx) => tx.q(`DELETE FROM platform_audit_event`)),
+      /permission denied|append-only/i,
+      "abate_platform_admin must be denied DELETE on platform_audit_event"
     );
     await assert.rejects(
-      () => withOps((tx) => tx.q(`SELECT count(*) FROM work_fact_revision`)),
+      () => withOps((tx) => tx.q(`SELECT count(*) FROM platform_audit_event`)),
       /permission denied/i,
-      "abate_ops must be denied access to business table work_fact_revision"
+      "abate_ops must be denied reading or inserting into platform_audit_event after 0094"
+    );
+
+    const selfApprovalId = crypto.randomUUID();
+    await withPlatformAdmin(async (tx) => {
+      await tx.q(
+        `INSERT INTO admin_approval_request (id, action_type, target_type, target_id, payload, reason, requested_by, status, expires_at)
+         VALUES ($1, 'tenant.suspend', 'tenant', $2, '{}'::jsonb, 'Four-eyes DB constraint verification', 'admin-1@zoikoabate.dev', 'PENDING', now() + interval '1 hour')`,
+        [selfApprovalId, tenantA]
+      );
+    });
+    await assert.rejects(
+      () =>
+        withPlatformAdmin((tx) =>
+          tx.q(
+            `UPDATE admin_approval_request SET status = 'APPROVED', approved_by = 'ADMIN-1@zoikoabate.dev' WHERE id = $1`,
+            [selfApprovalId]
+          )
+        ),
+      /chk_four_eyes_distinct_approver|check constraint/i,
+      "DB check constraint must refuse case-insensitive four-eyes self-approval"
     );
 
     // (a), (b), (d) Verify abate_worker can read ONLY (id, region, state) on tenant & ops_active_tenants, and fails on tenant.name, connection, and business tables
