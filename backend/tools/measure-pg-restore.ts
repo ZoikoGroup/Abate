@@ -106,8 +106,34 @@ async function main() {
     const lastRecoverableChangeMs = Date.now();
     const lastRecoverableChangeAt = new Date(lastRecoverableChangeMs).toISOString();
 
+    const baseUrl = new URL(migratorUrl);
+    const sourceDbName = baseUrl.pathname.replace(/^\//, "") || "abate";
+    const migratorUser = decodeURIComponent(baseUrl.username || "abate_migrator");
+    const adminUrl = process.env.POSTGRES_ADMIN_URL
+      ? (() => {
+          const u = new URL(process.env.POSTGRES_ADMIN_URL);
+          u.pathname = "/postgres";
+          return u;
+        })()
+      : (() => {
+          const u = new URL(migratorUrl);
+          u.pathname = "/postgres";
+          return u;
+        })();
+
+    // pg_dump sets row_security=off and therefore requires a backup/admin role with BYPASSRLS when tables enforce FORCE RLS.
+    const dumpUrlString = process.env.POSTGRES_BACKUP_URL
+      ? process.env.POSTGRES_BACKUP_URL
+      : process.env.POSTGRES_ADMIN_URL
+        ? (() => {
+            const u = new URL(process.env.POSTGRES_ADMIN_URL);
+            u.pathname = `/${sourceDbName}`;
+            return u.toString();
+          })()
+        : migratorUrl;
+
     const dumpStart = Date.now();
-    execFileSync("pg_dump", ["-Fc", "-f", tempDump, migratorUrl], { stdio: "pipe" });
+    execFileSync("pg_dump", ["-Fc", "-f", tempDump, dumpUrlString], { stdio: "pipe" });
     const dumpMs = Date.now() - dumpStart;
 
     // 2. Execute GDPR erasure (writes durable deletion_tombstone and purges work_fact_revision)
@@ -135,20 +161,10 @@ async function main() {
     );
 
     // 3. Restore stale pre-erasure backup into isolated scratch database and re-apply tombstone reconciliation
-    const baseUrl = new URL(migratorUrl);
-    const migratorUser = decodeURIComponent(baseUrl.username || "abate_migrator");
     const precreatedScratchUrl = process.env.RESTORE_SCRATCH_DB_URL;
     const scratchDb = precreatedScratchUrl
       ? new URL(precreatedScratchUrl).pathname.replace(/^\//, "")
       : `abate_restore_drill_${Date.now()}`;
-
-    const adminUrl = process.env.POSTGRES_ADMIN_URL
-      ? new URL(process.env.POSTGRES_ADMIN_URL)
-      : (() => {
-          const u = new URL(migratorUrl);
-          u.pathname = "/postgres";
-          return u;
-        })();
 
     const restoreStartedMs = Date.now();
     const restoreStartedAt = new Date(restoreStartedMs).toISOString();
@@ -168,10 +184,18 @@ async function main() {
               "Set POSTGRES_ADMIN_URL (with CREATEDB) or pre-create an empty scratch database via RESTORE_SCRATCH_DB_URL."
           );
         }
+        await adminPool!.query(`GRANT CONNECT ON DATABASE ${scratchDb} TO abate_app`).catch(() => {});
         const scratchUrl = new URL(migratorUrl);
         scratchUrl.pathname = `/${scratchDb}`;
         scratchUrlString = scratchUrl.toString();
-        execFileSync("pg_restore", ["-d", scratchUrlString, tempDump], { stdio: "pipe" });
+        const restoreUrl = process.env.POSTGRES_ADMIN_URL
+          ? (() => {
+              const u = new URL(process.env.POSTGRES_ADMIN_URL);
+              u.pathname = `/${scratchDb}`;
+              return u.toString();
+            })()
+          : scratchUrlString;
+        execFileSync("pg_restore", ["-d", restoreUrl, tempDump], { stdio: "pipe" });
       }
 
       // Reconcile restored state against external tombstone ledger, then verify boundaries on restored DB

@@ -602,9 +602,17 @@ async function main() {
       // Clean up remaining test rows (abate_worker RLS blocks deleting PENDING/DEAD_LETTER)
       const pgLive = await checkPgHealth();
       if (pgLive && migratorPool) {
-        await migratorPool.query("DELETE FROM outbox_event WHERE id = ANY($1::uuid[])", [
-          [recentPublishedId, pendingId, deadLetterId]
-        ]);
+        const cleanupClient = await migratorPool.connect();
+        try {
+          await cleanupClient.query("BEGIN");
+          await cleanupClient.query("SELECT set_config('app.tenant_id', $1, true)", [tenantA]);
+          await cleanupClient.query("DELETE FROM outbox_event WHERE id = ANY($1::uuid[])", [
+            [recentPublishedId, pendingId, deadLetterId]
+          ]);
+          await cleanupClient.query("COMMIT");
+        } finally {
+          cleanupClient.release();
+        }
       } else {
         await withTenant(tenantA, async (tx) => {
           await tx.q("DELETE FROM outbox_event WHERE id IN ($1, $2, $3)", [recentPublishedId, pendingId, deadLetterId]);

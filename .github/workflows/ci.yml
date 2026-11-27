@@ -178,6 +178,7 @@ jobs:
         env:
           CI: "true"
           ABATE_REQUIRE_PG: "1"
+          POSTGRES_ADMIN_URL: postgres://abate_admin:admin_pw@localhost:${{ env.POSTGRES_PORT }}/postgres
           DATABASE_URL_MIGRATOR: postgres://abate_migrator:migrator_pw@localhost:${{ env.POSTGRES_PORT }}/abate
           DATABASE_URL_APP: postgres://abate_app:app_pw@localhost:${{ env.POSTGRES_PORT }}/abate
           DATABASE_URL_WORKER: postgres://abate_worker:worker_pw@localhost:${{ env.POSTGRES_PORT }}/abate
@@ -210,6 +211,7 @@ jobs:
             PGPASSWORD=admin_pw psql -h localhost -p "${POSTGRES_PORT}" -U abate_admin -d postgres -c "SELECT pg_terminate_backend(pid) FROM pg_stat_activity WHERE datname = 'abate' AND pid <> pg_backend_pid();" >/dev/null
             PGPASSWORD=admin_pw psql -h localhost -p "${POSTGRES_PORT}" -U abate_admin -d postgres -c "DROP DATABASE IF EXISTS abate;" >/dev/null
             PGPASSWORD=admin_pw psql -h localhost -p "${POSTGRES_PORT}" -U abate_admin -d postgres -c "CREATE DATABASE abate OWNER abate_migrator;" >/dev/null
+            PGPASSWORD=admin_pw psql -h localhost -p "${POSTGRES_PORT}" -U abate_admin -d abate -v ON_ERROR_STOP=1 -f backend/db/init/01-roles.sql >/dev/null
             npm --prefix backend run migrate >/dev/null
           }
           reset_pg_db
