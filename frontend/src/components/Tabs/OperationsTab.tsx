@@ -587,7 +587,7 @@ export function OperationsTab({ currentTenant, token, devTokenEnabled = true }: 
                   </thead>
                   <tbody>
                     {opsAiQuotas.flatMap(tq =>
-                      tq.useCases.map(uc => (
+                      (tq.useCases ?? []).map(uc => (
                         <tr key={`${tq.tenantId}:${uc.useCaseKey}`}>
                           <td className="monospace text-sm">{tq.tenantId.slice(0, 14)}...</td>
                           <td className="monospace">{uc.useCaseKey}</td>

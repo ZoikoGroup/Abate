@@ -40,6 +40,7 @@ export interface ApiRequestOptions extends RequestInit {
   token?: string | null;
   idempotencyKey?: string;
   ifMatch?: string;
+  adminCsrfToken?: string;
 }
 
 /**
@@ -64,6 +65,10 @@ export async function api<T>(endpoint: string, options: ApiRequestOptions = {}):
 
   if (options.ifMatch) {
     headers.set("If-Match", options.ifMatch);
+  }
+
+  if (options.adminCsrfToken) {
+    headers.set("X-Admin-Csrf", options.adminCsrfToken);
   }
 
   let res: Response;
@@ -234,6 +239,7 @@ export async function fetchCurrentPrincipal(token?: string | null): Promise<{
   subject: string;
   role: string;
   allowedNav?: string[];
+  allowedActions?: string[];
 }> {
   return apiV2("/me", { token });
 }
@@ -1840,12 +1846,33 @@ export interface SuperAdminTokenResponse {
   operator: string;
   role: "SUPER_ADMIN";
   scope: "platform-super-admin";
+  expiresInSeconds?: number;
+  stepUpWindowSeconds?: number;
+  stepUpVerified?: boolean;
+  csrfToken?: string;
+}
+
+export interface AdminMeProfile {
+  operator: string;
+  role: string;
+  scope: string;
+  authMethod: string;
+  mfaVerified: boolean;
+  stepUpVerified: boolean;
+  stepUpWindowSeconds: number;
+  stepUpExpiresAt: string | null;
+  sessionExpiresAt: string | null;
+  banner: string;
+  perimeter: string;
+  allowedNav: string[];
+  allowedActions: string[];
 }
 
 export interface AdminOverview {
   operator: string;
   role: string;
   perimeter: string;
+  sloEvidenceState?: "ASSUMPTION" | "MEASURED";
   system: {
     appEnv: string;
     databaseOk: boolean;
@@ -1860,6 +1887,7 @@ export interface AdminOverview {
     activeTenants: number;
     suspendedTenants: number;
     platformAuditCount: number;
+    pendingApprovals?: number;
     pendingOutbox: number;
     deadLetterCount: number;
   };
@@ -1873,33 +1901,74 @@ export interface AdminTenantRecord {
   name: string;
   region: string;
   state: "ACTIVE" | "SUSPENDED";
+  version: number;
   jurisdictionConfigRef: string | null;
   sectorKey: string;
   packKey: string;
+  offboardRequestedAt?: string | null;
+  offboardReason?: string | null;
   createdAt?: string;
 }
 
 export interface AdminPrincipalMembership {
   membershipId: string;
   principalId: string;
-  externalSubject: string;
+  pseudonymousId: string;
+  maskedSubject: string;
   kind: "USER" | "WORKLOAD";
-  domainRole: "RISK_OWNER" | "CONTROL_OWNER" | "REVIEWER" | "EMPLOYER_ADMIN";
+  domainRole: string;
   organizationId: string;
   validFrom: string;
   validTo: string | null;
+  version: number;
+  principalActive?: boolean;
   active: boolean;
+}
+
+export interface AdminPlatformUser {
+  id: string;
+  subject: string;
+  displayName: string;
+  platformRole: "SUPER_ADMIN" | "OPS_SUPPORT";
+  status: "ACTIVE" | "DISABLED";
+  breakGlass: boolean;
+  mfaEnforced: boolean;
+  createdAt: string;
+  updatedAt: string;
+  version: number;
+}
+
+export interface AdminApprovalRequestRecord {
+  id: string;
+  actionType: string;
+  targetType: string;
+  targetId: string;
+  payload: Record<string, unknown>;
+  reason: string;
+  requestedBy: string;
+  requestedAt: string;
+  status: "PENDING" | "APPROVED" | "REJECTED" | "EXECUTED" | "EXPIRED";
+  approvedBy: string | null;
+  approvedAt: string | null;
+  decisionReason: string | null;
+  executedAt: string | null;
+  expiresAt: string;
+  requestId: string | null;
+  version: number;
 }
 
 export interface AdminPlatformAuditEvent {
   id: string;
   occurred_at: string;
   operator: string;
+  approver?: string | null;
   role: string;
   action: string;
   target_type: string;
   target_id: string;
   reason: string | null;
+  request_id?: string | null;
+  step_up_verified?: boolean;
   details: Record<string, unknown>;
 }
 
@@ -1908,9 +1977,11 @@ export interface AdminGovernancePack {
   packKey: string;
   displayName: string;
   status: string;
+  enableable?: boolean;
+  statusLabel?: string;
   version: string;
   reviewStatus: string;
-  permittedClaims: string[];
+  permittedClaims: string[] | string;
   restrictions: string[];
 }
 
@@ -1922,11 +1993,61 @@ export interface AdminFeatureFlagRecord {
   changed_at: string;
 }
 
-export async function requestSuperAdminToken(operator: string): Promise<SuperAdminTokenResponse> {
+export interface AdminEntitlementRecord {
+  tenantId: string;
+  featureKey: string;
+  enabled: boolean;
+  notes: string | null;
+  updatedBy: string | null;
+  updatedAt: string;
+  version: number;
+}
+
+export interface AdminAiQuotaRecord {
+  tenantId: string;
+  tenantName: string;
+  tenantState: string;
+  monthlyBudgetMinor: number;
+  updatedBy: string | null;
+  updatedAt: string | null;
+  version: number;
+}
+
+export interface AdminOperationsOverview {
+  worker: {
+    workerId: string;
+    state: string;
+    heartbeatAt: string | null;
+    queueLagMs: number;
+    totalProcessed: number;
+    totalFailures: number;
+  };
+  queueDepth: number;
+  deadLetterCount: number;
+  connectors: Array<{ id: string; source: string; state: string; health: string; lastSuccessAt: string | null }>;
+}
+
+export async function requestSuperAdminToken(operator: string, stepUp = false): Promise<SuperAdminTokenResponse> {
   return api<SuperAdminTokenResponse>("/api/v2/auth/super-admin-token", {
     method: "POST",
-    body: JSON.stringify({ operator })
+    body: JSON.stringify({ operator, stepUp })
   });
+}
+
+export async function verifyAdminStepUp(
+  confirmation: string,
+  adminToken: string,
+  mfaCode?: string
+): Promise<{ token: string; csrfToken: string; operator: string; stepUpAt: number; stepUpExpiresAt: string; stepUpWindowSeconds: number }> {
+  return api("/api/v2/admin/session/step-up", {
+    method: "POST",
+    body: JSON.stringify(mfaCode ? { confirmation, mfaCode } : { confirmation }),
+    token: adminToken
+  });
+}
+
+export async function fetchAdminMe(adminToken: string): Promise<AdminMeProfile> {
+  return api<AdminMeProfile>("/api/v2/admin/me", { token: adminToken });
 }
 
 export async function fetchAdminOverview(adminToken: string): Promise<AdminOverview> {
@@ -1938,7 +2059,7 @@ export async function fetchAdminTenants(adminToken: string): Promise<{ items: Ad
 }
 
 export async function createAdminTenant(
-  body: { name: string; region: string; sectorKey: string; jurisdictionConfigRef?: string },
+  body: { name: string; region: string; sectorKey: string; jurisdictionConfigRef?: string; reason: string },
   adminToken: string
 ): Promise<AdminTenantRecord> {
   return api<AdminTenantRecord>("/api/v2/admin/tenants", {
@@ -1950,13 +2071,15 @@ export async function createAdminTenant(
 
 export async function updateAdminTenant(
   tenantId: string,
-  body: { name: string; region: string; jurisdictionConfigRef?: string | null },
-  adminToken: string
+  body: { name: string; region: string; jurisdictionConfigRef?: string | null; reason: string },
+  adminToken: string,
+  version?: number
 ): Promise<AdminTenantRecord> {
   return api<AdminTenantRecord>(`/api/v2/admin/tenants/${encodeURIComponent(tenantId)}`, {
     method: "PATCH",
     body: JSON.stringify(body),
-    token: adminToken
+    token: adminToken,
+    ifMatch: version ? String(version) : undefined
   });
 }
 
@@ -1964,14 +2087,33 @@ export async function setAdminTenantState(
   tenantId: string,
   state: "ACTIVE" | "SUSPENDED",
   reason: string,
-  adminToken: string
-): Promise<{ id: string; state: "ACTIVE" | "SUSPENDED" }> {
-  return api<{ id: string; state: "ACTIVE" | "SUSPENDED" }>(
+  adminToken: string,
+  version?: number
+): Promise<{ id?: string; state?: "ACTIVE" | "SUSPENDED"; status?: string; approvalRequest?: AdminApprovalRequestRecord }> {
+  return api(
     `/api/v2/admin/tenants/${encodeURIComponent(tenantId)}/state`,
     {
       method: "POST",
       body: JSON.stringify({ state, reason }),
-      token: adminToken
+      token: adminToken,
+      ifMatch: version ? String(version) : undefined
+    }
+  );
+}
+
+export async function requestAdminTenantOffboard(
+  tenantId: string,
+  reason: string,
+  adminToken: string,
+  version?: number
+): Promise<{ status: string; note: string; approvalRequest: AdminApprovalRequestRecord }> {
+  return api(
+    `/api/v2/admin/tenants/${encodeURIComponent(tenantId)}/offboard-request`,
+    {
+      method: "POST",
+      body: JSON.stringify({ reason }),
+      token: adminToken,
+      ifMatch: version ? String(version) : undefined
     }
   );
 }
@@ -1979,14 +2121,17 @@ export async function setAdminTenantState(
 export async function setAdminTenantSectorPack(
   tenantId: string,
   sectorKey: string,
-  adminToken: string
-): Promise<{ tenantId: string; sectorKey: string; packKey: string }> {
-  return api<{ tenantId: string; sectorKey: string; packKey: string }>(
+  reason: string,
+  adminToken: string,
+  version?: number
+): Promise<{ tenantId?: string; sectorKey?: string; packKey?: string; status?: string; approvalRequest?: AdminApprovalRequestRecord }> {
+  return api(
     `/api/v2/admin/tenants/${encodeURIComponent(tenantId)}/sector-pack`,
     {
       method: "PUT",
-      body: JSON.stringify({ sectorKey }),
-      token: adminToken
+      body: JSON.stringify({ sectorKey, reason }),
+      token: adminToken,
+      ifMatch: version ? String(version) : undefined
     }
   );
 }
@@ -1994,8 +2139,8 @@ export async function setAdminTenantSectorPack(
 export async function fetchAdminTenantPrincipals(
   tenantId: string,
   adminToken: string
-): Promise<{ tenantId: string; items: AdminPrincipalMembership[] }> {
-  return api<{ tenantId: string; items: AdminPrincipalMembership[] }>(
+): Promise<{ tenantId: string; privacyMode: string; items: AdminPrincipalMembership[] }> {
+  return api<{ tenantId: string; privacyMode: string; items: AdminPrincipalMembership[] }>(
     `/api/v2/admin/tenants/${encodeURIComponent(tenantId)}/principals`,
     { token: adminToken }
   );
@@ -2006,8 +2151,8 @@ export async function assignAdminMembership(
   body: {
     externalSubject: string;
     kind: "USER" | "WORKLOAD";
-    domainRole: "RISK_OWNER" | "CONTROL_OWNER" | "REVIEWER" | "EMPLOYER_ADMIN";
-    reason?: string;
+    domainRole: string;
+    reason: string;
   },
   adminToken: string
 ): Promise<AdminPrincipalMembership> {
@@ -2025,16 +2170,85 @@ export async function revokeAdminMembership(
   tenantId: string,
   membershipId: string,
   reason: string,
-  adminToken: string
+  adminToken: string,
+  version?: number
 ): Promise<{ membershipId: string; revoked: boolean }> {
   return api<{ membershipId: string; revoked: boolean }>(
     `/api/v2/admin/tenants/${encodeURIComponent(tenantId)}/memberships/${encodeURIComponent(membershipId)}/revoke`,
     {
       method: "POST",
       body: JSON.stringify({ reason }),
-      token: adminToken
+      token: adminToken,
+      ifMatch: version ? String(version) : undefined
     }
   );
+}
+
+export async function fetchAdminPlatformUsers(adminToken: string): Promise<{ items: AdminPlatformUser[] }> {
+  return api<{ items: AdminPlatformUser[] }>("/api/v2/admin/platform-users", { token: adminToken });
+}
+
+export async function createAdminPlatformUser(
+  body: { subject: string; displayName: string; platformRole: "SUPER_ADMIN" | "OPS_SUPPORT"; breakGlass?: boolean; reason: string },
+  adminToken: string
+): Promise<any> {
+  return api("/api/v2/admin/platform-users", {
+    method: "POST",
+    body: JSON.stringify(body),
+    token: adminToken
+  });
+}
+
+export async function updateAdminPlatformUserRole(
+  userId: string,
+  platformRole: "SUPER_ADMIN" | "OPS_SUPPORT",
+  reason: string,
+  adminToken: string,
+  version?: number
+): Promise<any> {
+  return api(`/api/v2/admin/platform-users/${encodeURIComponent(userId)}/role`, {
+    method: "PATCH",
+    body: JSON.stringify({ platformRole, reason }),
+    token: adminToken,
+    ifMatch: version ? String(version) : undefined
+  });
+}
+
+export async function disableAdminPlatformUser(
+  userId: string,
+  reason: string,
+  adminToken: string,
+  version?: number
+): Promise<any> {
+  return api(`/api/v2/admin/platform-users/${encodeURIComponent(userId)}/disable`, {
+    method: "POST",
+    body: JSON.stringify({ reason }),
+    token: adminToken,
+    ifMatch: version ? String(version) : undefined
+  });
+}
+
+export async function fetchAdminApprovals(adminToken: string): Promise<{ items: AdminApprovalRequestRecord[] }> {
+  return api<{ items: AdminApprovalRequestRecord[] }>("/api/v2/admin/approvals", { token: adminToken });
+}
+
+export async function decideAdminApproval(
+  approvalId: string,
+  mode: "APPROVE" | "REJECT",
+  reason: string,
+  adminToken: string,
+  version?: number
+): Promise<any> {
+  const url =
+    mode === "APPROVE"
+      ? `/api/v2/admin/approvals/${encodeURIComponent(approvalId)}/approve`
+      : `/api/v2/admin/approvals/${encodeURIComponent(approvalId)}/reject`;
+  return api(url, {
+    method: "POST",
+    body: JSON.stringify({ reason }),
+    token: adminToken,
+    ifMatch: version ? String(version) : undefined
+  });
 }
 
 export async function fetchAdminGovernance(adminToken: string): Promise<{ sectorPacks: AdminGovernancePack[] }> {
@@ -2048,15 +2262,298 @@ export async function fetchAdminFeatureFlags(adminToken: string): Promise<{ item
 export async function setAdminFeatureFlag(
   body: { tenantId: string | null; flag: "planeBOutcomes" | "aiWorkDesign" | "aiProposals"; enabled: boolean; reason: string },
   adminToken: string
-): Promise<{ tenantId: string | null; flag: string; enabled: boolean }> {
-  return api<{ tenantId: string | null; flag: string; enabled: boolean }>("/api/v2/admin/feature-flags", {
+): Promise<any> {
+  return api("/api/v2/admin/feature-flags", {
     method: "POST",
     body: JSON.stringify(body),
     token: adminToken
   });
 }
 
-export async function fetchAdminAudit(adminToken: string): Promise<{ items: AdminPlatformAuditEvent[] }> {
-  return api<{ items: AdminPlatformAuditEvent[] }>("/api/v2/admin/audit", { token: adminToken });
+export async function fetchAdminEntitlements(adminToken: string): Promise<{ items: AdminEntitlementRecord[] }> {
+  return api<{ items: AdminEntitlementRecord[] }>("/api/v2/admin/entitlements", { token: adminToken });
 }
 
+export async function setAdminEntitlement(
+  body: { tenantId: string; featureKey: string; enabled: boolean; notes?: string; reason: string },
+  adminToken: string,
+  version?: number
+): Promise<AdminEntitlementRecord> {
+  return api<AdminEntitlementRecord>("/api/v2/admin/entitlements", {
+    method: "POST",
+    body: JSON.stringify(body),
+    token: adminToken,
+    ifMatch: version ? String(version) : undefined
+  });
+}
+
+export async function fetchAdminAiQuota(adminToken: string): Promise<{ items: AdminAiQuotaRecord[] }> {
+  return api<{ items: AdminAiQuotaRecord[] }>("/api/v2/admin/ai-quota", { token: adminToken });
+}
+
+export async function setAdminTenantAiQuota(
+  tenantId: string,
+  monthlyBudgetMinor: number,
+  reason: string,
+  adminToken: string,
+  version?: number
+): Promise<{ tenantId: string; monthlyBudgetMinor: number; version: number }> {
+  return api(`/api/v2/admin/tenants/${encodeURIComponent(tenantId)}/ai-quota`, {
+    method: "PUT",
+    body: JSON.stringify({ monthlyBudgetMinor, reason }),
+    token: adminToken,
+    ifMatch: version ? String(version) : undefined
+  });
+}
+
+export async function requestAdminKillSwitch(
+  body: { scope: string; active: boolean; reason: string; expiresAt?: string | null },
+  adminToken: string
+): Promise<{ status: string; approvalRequest: AdminApprovalRequestRecord }> {
+  return api("/api/v2/admin/kill-switches", {
+    method: "POST",
+    body: JSON.stringify(body),
+    token: adminToken
+  });
+}
+
+export async function fetchAdminOperations(adminToken: string): Promise<AdminOperationsOverview> {
+  return api<AdminOperationsOverview>("/api/v2/admin/operations", { token: adminToken });
+}
+
+export async function fetchAdminAudit(
+  adminToken: string,
+  filters?: { q?: string; operator?: string; action?: string; targetType?: string; limit?: number }
+): Promise<{ items: AdminPlatformAuditEvent[] }> {
+  const qs = new URLSearchParams();
+  if (filters?.q) qs.set("q", filters.q);
+  if (filters?.operator) qs.set("operator", filters.operator);
+  if (filters?.action) qs.set("action", filters.action);
+  if (filters?.targetType) qs.set("targetType", filters.targetType);
+  if (filters?.limit) qs.set("limit", String(filters.limit));
+  const query = qs.toString();
+  return api<{ items: AdminPlatformAuditEvent[] }>(query ? `/api/v2/admin/audit?${query}` : "/api/v2/admin/audit", { token: adminToken });
+}
+
+export async function exportAdminAudit(
+  body: { format: "json" | "csv"; reason: string; operator?: string; action?: string; targetType?: string },
+  adminToken: string
+): Promise<any> {
+  return api("/api/v2/admin/audit/export", {
+    method: "POST",
+    body: JSON.stringify(body),
+    token: adminToken
+  });
+}
+
+// ==========================================
+// Tenant Admin API (/api/v2/tenant-admin/*)
+// ==========================================
+
+export interface TenantAdminMembershipItem {
+  membershipId: string;
+  organizationId: string;
+  domainRole: string;
+  validFrom: string;
+  validTo: string | null;
+  version: number;
+  activeNow: boolean;
+}
+
+export interface TenantAdminUserRecord {
+  principalId: string;
+  externalSubject: string;
+  kind: "USER" | "WORKLOAD";
+  active: boolean;
+  deactivatedAt: string | null;
+  version: number;
+  hasApprovalAuthorityNow: boolean;
+  activeApproverRoles: string[];
+  memberships: TenantAdminMembershipItem[];
+}
+
+export interface TenantInvitationRecord {
+  id: string;
+  organizationId: string;
+  maskedEmail: string;
+  externalSubject: string | null;
+  domainRole: string;
+  validFrom: string;
+  validTo: string | null;
+  status: "PENDING" | "ACCEPTED" | "REVOKED" | "EXPIRED";
+  invitedBy: string;
+  reason: string | null;
+  createdAt: string;
+  expiresAt: string;
+  acceptedAt: string | null;
+  revokedAt: string | null;
+  version: number;
+}
+
+export interface TenantUsageOverview {
+  tenantId: string;
+  aiQuota: {
+    window: string;
+    windowStart: string;
+    resetAt: string;
+    allAiDisabled: boolean;
+    configuredBudgetCapMinor: number | null;
+    totalBudgetMinor: number;
+    totalSpentMinor: number;
+    totalRemainingMinor: number;
+    useCases: Array<{
+      useCaseKey: string;
+      modelRef: string;
+      monthlyBudgetMinor: number;
+      spentMinor: number;
+      remainingMinor: number;
+      killSwitchActive: boolean;
+    }>;
+  };
+  entitlements: unknown;
+  platformEntitlements: Array<{ featureKey: string; enabled: boolean; notes: string | null; updatedAt: string; version: number }>;
+  connections: Array<{ id: string; source: string; state: string; health: string; lastSuccessAt: string | null; expectedCadenceSeconds: number; version: number }>;
+}
+
+export async function fetchTenantAdminUsers(token: string): Promise<{ tenantId: string; items: TenantAdminUserRecord[] }> {
+  return api("/api/v2/tenant-admin/users", { token });
+}
+
+export async function assignTenantAdminMembership(
+  body: {
+    principalId?: string;
+    externalSubject?: string;
+    kind?: "USER" | "WORKLOAD";
+    organizationId: string;
+    domainRole: string;
+    validFrom?: string;
+    validTo?: string | null;
+    reason: string;
+  },
+  idempotencyKey: string,
+  token: string
+): Promise<any> {
+  return api("/api/v2/tenant-admin/memberships", {
+    method: "POST",
+    body: JSON.stringify(body),
+    idempotencyKey,
+    token
+  });
+}
+
+export async function endTenantAdminMembership(
+  membershipId: string,
+  body: { validTo?: string; reason: string },
+  idempotencyKey: string,
+  token: string,
+  version?: number
+): Promise<any> {
+  return api(`/api/v2/tenant-admin/memberships/${encodeURIComponent(membershipId)}/end`, {
+    method: "POST",
+    body: JSON.stringify(body),
+    idempotencyKey,
+    ifMatch: version ? String(version) : undefined,
+    token
+  });
+}
+
+export async function setTenantAdminUserStatus(
+  principalId: string,
+  action: "deactivate" | "reactivate",
+  reason: string,
+  idempotencyKey: string,
+  token: string,
+  version?: number
+): Promise<{ principalId: string; active: boolean; version: number }> {
+  const url =
+    action === "deactivate"
+      ? `/api/v2/tenant-admin/users/${encodeURIComponent(principalId)}/deactivate`
+      : `/api/v2/tenant-admin/users/${encodeURIComponent(principalId)}/reactivate`;
+  return api(url, {
+    method: "POST",
+    body: JSON.stringify({ reason }),
+    idempotencyKey,
+    ifMatch: version ? String(version) : undefined,
+    token
+  });
+}
+
+export async function fetchTenantInvitations(token: string): Promise<{ tenantId: string; items: TenantInvitationRecord[] }> {
+  return api("/api/v2/tenant-admin/invitations", { token });
+}
+
+export async function createTenantInvitation(
+  body: {
+    email: string;
+    externalSubject?: string;
+    organizationId: string;
+    domainRole: string;
+    validFrom?: string;
+    validTo?: string | null;
+    expiresInDays?: number;
+    reason: string;
+  },
+  idempotencyKey: string,
+  token: string
+): Promise<TenantInvitationRecord> {
+  return api("/api/v2/tenant-admin/invitations", {
+    method: "POST",
+    body: JSON.stringify(body),
+    idempotencyKey,
+    token
+  });
+}
+
+export async function revokeTenantInvitation(
+  invitationId: string,
+  reason: string,
+  idempotencyKey: string,
+  token: string,
+  version?: number
+): Promise<{ id: string; status: string; version: number }> {
+  return api(`/api/v2/tenant-admin/invitations/${encodeURIComponent(invitationId)}/revoke`, {
+    method: "POST",
+    body: JSON.stringify({ reason }),
+    idempotencyKey,
+    ifMatch: version ? String(version) : undefined,
+    token
+  });
+}
+
+export async function updateTenantOrganization(
+  orgId: string,
+  body: { name: string; parentId?: string | null; reason: string },
+  idempotencyKey: string,
+  token: string,
+  version?: number
+): Promise<{ id: string; name: string; parentId: string | null; version: number }> {
+  return api(`/api/v2/tenant-admin/organizations/${encodeURIComponent(orgId)}`, {
+    method: "PATCH",
+    body: JSON.stringify(body),
+    idempotencyKey,
+    ifMatch: version ? String(version) : undefined,
+    token
+  });
+}
+
+export async function fetchTenantAdminAudit(
+  token: string,
+  filters?: { q?: string; command?: string; resourceType?: string; result?: string; limit?: number }
+): Promise<{ tenantId: string; items: AuditEvent[] }> {
+  const qs = new URLSearchParams();
+  if (filters?.q) qs.set("q", filters.q);
+  if (filters?.command) qs.set("command", filters.command);
+  if (filters?.resourceType) qs.set("resourceType", filters.resourceType);
+  if (filters?.result) qs.set("result", filters.result);
+  if (filters?.limit) qs.set("limit", String(filters.limit));
+  const query = qs.toString();
+  return api(query ? `/api/v2/tenant-admin/audit?${query}` : "/api/v2/tenant-admin/audit", { token });
+}
+
+export async function fetchTenantAdminRightsRequests(token: string): Promise<{ tenantId: string; items: any[] }> {
+  return api("/api/v2/tenant-admin/rights-requests", { token });
+}
+
+export async function fetchTenantAdminUsage(token: string): Promise<TenantUsageOverview> {
+  return api("/api/v2/tenant-admin/usage", { token });
+}

@@ -4,6 +4,7 @@
 //  - legal-named /api/v2/sector/legal/* aliases keep their shapes and stay legal-only
 //  - a newly registered sector works through the same routes with no route changes
 import assert from "node:assert";
+process.env.ABATE_ALLOW_PREVIEW_PACK_TESTS = "1";
 import { GOLDEN_01 } from "../src/fixtures/golden01";
 import { seedTwoTenants } from "../src/fixtures/seed";
 import { SEEDED_WORK_ITEMS } from "../src/fixtures/sector-work-items";

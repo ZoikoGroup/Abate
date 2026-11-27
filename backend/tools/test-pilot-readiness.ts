@@ -149,6 +149,7 @@ async function run() {
         DATABASE_URL_MIGRATOR: "postgres://m:x@pg.internal:5432/abate",
         DATABASE_URL_APP: "postgres://a:x@pg.internal:5432/abate",
         DATABASE_URL_WORKER: "postgres://w:x@pg.internal:5432/abate",
+        DATABASE_URL_PLATFORM_ADMIN: "postgres://pa:x@pg.internal:5432/abate",
         ABATE_REQUIRE_PG: "1",
         OIDC_JWKS_URI: "https://idp.pilot.example/.well-known/jwks.json"
       };

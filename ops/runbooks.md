@@ -52,5 +52,11 @@ Use `POST /api/v2/ops/kill-switches` (support token + non-empty `reason` require
 
 ## 8. Support Access (Zero-Impersonation)
 - Support operators authenticate with `SUPPORT_AUTH_SECRET` / support OIDC credentials (`aud: abate-support`, no `tenant_id`).
-- **Permitted**: `GET /api/v2/ops/slo`, `GET /api/v2/ops/errors`, `GET /api/v2/ops/alerts`, `GET /api/v2/ops/jobs`, `POST /api/v2/ops/diagnostic-receipts/verify`, `POST /api/v2/ops/kill-switches`.
-- **Prohibited**: Support credentials are rejected (`401`/`403`) on all tenant endpoints and `abate_ops` has zero grants on tenant business tables.
+- **Permitted**: `GET /api/v2/ops/slo`, `GET /api/v2/ops/errors`, `GET /api/v2/ops/alerts`, `GET /api/v2/ops/jobs`, `GET /api/v2/ops/ai-quota`, `POST /api/v2/ops/diagnostic-receipts/verify`, `POST /api/v2/ops/kill-switches`.
+- **Prohibited**: Support credentials are rejected (`401`/`403`) on all tenant endpoints and `/api/v2/admin/*` endpoints, and `abate_ops` has zero grants on tenant business tables or admin writes (`0094`).
+
+## 9. Platform Admin Lifecycle & Break-Glass
+- See [`docs/runbooks/platform-admin-lifecycle.md`](../docs/runbooks/platform-admin-lifecycle.md) and [`docs/architecture/ADR-007-admin-model-stepup-foureyes.md`](../docs/architecture/ADR-007-admin-model-stepup-foureyes.md) (`DRAFT — PENDING SECURITY OWNER APPROVAL`).
+
+## 10. Tenant Suspension, Reactivation & Governed Offboarding
+- See [`docs/runbooks/tenant-suspension-and-offboarding.md`](../docs/runbooks/tenant-suspension-and-offboarding.md) (Step-Up + Four-Eyes mandatory; no instant hard delete).

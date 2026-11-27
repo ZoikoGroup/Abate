@@ -118,8 +118,10 @@ function run() {
   assert.ok(selector.includes("UK Legal Sector Pack (SRA 2023)"));
   assert.ok(selector.includes("Neutral Work-Design Core"));
   assert.ok(selector.includes("Synthetic Test Sector (test fixture, not a launched pack)"));
-  assert.ok(selector.includes("Healthcare Sector Pack (Preview) (preview, pending policy review)"));
-  assert.ok(selector.includes("Software &amp; IT Sector Pack (Preview) (preview, pending policy review)"));
+  assert.ok(selector.includes("Healthcare Sector Pack (Preview) (preview, pending policy review) — not enabled"));
+  assert.ok(selector.includes("Software &amp; IT Sector Pack (Preview) (preview, pending policy review) — not enabled"));
+  assert.ok(selector.includes('value="HEALTHCARE" disabled=""'), "preview pack option must be disabled in selector");
+  assert.ok(selector.includes('value="SOFTWARE_IT" disabled=""'), "preview pack option must be disabled in selector");
   assert.ok(!selector.includes("UK Legal Sector Pack (SRA 2023) (preview"), "the launched pack is not flagged as preview");
   assert.ok(selector.includes("Apply Sector Pack"));
   const hidden = renderToStaticMarkup(

@@ -125,8 +125,9 @@ export async function resolveActor(
 ): Promise<Actor> {
   return withTenant(tenantId, async (tx) => {
     const r = await tx.q(
-      `SELECT p.id, m.organization_id, m.domain_role
+      `SELECT p.id, p.active, t.state AS tenant_state, m.organization_id, m.domain_role
        FROM principal p
+       JOIN tenant t ON t.id = p.tenant_id
        JOIN effective_membership m ON m.principal_id = p.id AND m.tenant_id = p.tenant_id
        WHERE p.external_subject = $1
          AND m.valid_from <= $2
@@ -136,6 +137,14 @@ export async function resolveActor(
 
     if (r.rowCount === 0) {
       throw new AppError("FORBIDDEN", "Subject has no active effective membership for this tenant.");
+    }
+
+    if (r.rows[0].tenant_state === "SUSPENDED") {
+      throw new AppError("FORBIDDEN", "Tenant is suspended; logins and ingestion are paused while records are preserved.");
+    }
+
+    if (r.rows[0].active === false) {
+      throw new AppError("FORBIDDEN", "Principal account has been deactivated.");
     }
 
     const principalId = r.rows[0].id;
@@ -191,7 +200,11 @@ const ADMIN_ROLES = ["RISK_OWNER", "EMPLOYER_ADMIN"] as const;
 const RETENTION_ROLES = ["RISK_OWNER", "EMPLOYER_ADMIN", "DPO", "PRIVACY_OFFICER"] as const;
 const INGEST_ROLES = ["RISK_OWNER", "CONTROL_OWNER", "REVIEWER", "EMPLOYER_ADMIN", "INGESTION_OPERATOR"] as const;
 const ACTION_ROLES = ["RISK_OWNER", "CONTROL_OWNER"] as const;
-const APPROVAL_ROLES = ["RISK_OWNER", "APPROVER", "EMPLOYER_ADMIN"] as const;
+// Separation rule (ADR-007): Tenant Admin (EMPLOYER_ADMIN) NEVER receives control/hazard approval authority from the admin role alone.
+export const APPROVAL_ROLES = ["RISK_OWNER", "APPROVER"] as const;
+const TENANT_ADMIN_ONLY_ROLES = ["EMPLOYER_ADMIN"] as const;
+const TENANT_ADMIN_READ_ROLES = ["EMPLOYER_ADMIN", "RISK_OWNER", "DPO", "PRIVACY_OFFICER"] as const;
+const AUDIT_READ_ROLES = ["EMPLOYER_ADMIN", "RISK_OWNER", "REVIEWER", "DPO", "PRIVACY_OFFICER"] as const;
 
 /**
  * Single RBAC permission registry (BE-004 / CR-01 / Completion Plan §6).
@@ -201,7 +214,14 @@ const APPROVAL_ROLES = ["RISK_OWNER", "APPROVER", "EMPLOYER_ADMIN"] as const;
 export const PERMISSION_REGISTRY: Record<string, PermissionRule> = {
   "organization.create": { allowedRoles: CORE_GOVERNANCE_ROLES },
   "org.create": { allowedRoles: CORE_GOVERNANCE_ROLES },
+  "tenant.organization.manage": { allowedRoles: ADMIN_ROLES },
   "tenant.sector_profile.set": { allowedRoles: ADMIN_ROLES },
+  "tenant.users.read": { allowedRoles: TENANT_ADMIN_READ_ROLES },
+  "tenant.users.manage": { allowedRoles: TENANT_ADMIN_ONLY_ROLES },
+  "tenant.invitations.manage": { allowedRoles: TENANT_ADMIN_ONLY_ROLES },
+  "tenant.memberships.manage": { allowedRoles: TENANT_ADMIN_ONLY_ROLES },
+  "tenant.audit.read": { allowedRoles: AUDIT_READ_ROLES },
+  "tenant.usage.read": { allowedRoles: TENANT_ADMIN_READ_ROLES },
   "connection.read": { allowedRoles: READ_ROLES },
   "connection.admin": { allowedRoles: INGEST_ROLES },
   "receipt.read": { allowedRoles: READ_ROLES },
@@ -255,6 +275,33 @@ export function canActorPerform(
   return actor.memberships.some((m) => rule.allowedRoles.includes(m.domain_role));
 }
 
+export function computeAllowedActions(
+  actor: Actor,
+  claimedRole?: string,
+  purpose?: string
+): string[] {
+  const effectiveRoles = new Set<string>(actor.memberships.map((m) => String(m.domain_role)));
+  const cfg = loadConfig();
+  // In local/test dev switcher, honor selected claimedRole as active view while never widening beyond claimedRole when pure EMPLOYER_ADMIN
+  if (claimedRole && (cfg.appEnv === "local" || cfg.appEnv === "test")) {
+    effectiveRoles.clear();
+    effectiveRoles.add(claimedRole);
+  }
+  const actions: string[] = [];
+  for (const [cmd, rule] of Object.entries(PERMISSION_REGISTRY)) {
+    if (purpose) {
+      const upper = purpose.toUpperCase();
+      if (PROHIBITED_PURPOSES.includes(upper) || rule.deniedPurposes?.includes(upper)) {
+        continue;
+      }
+    }
+    if (rule.allowedRoles.some((r) => effectiveRoles.has(r))) {
+      actions.push(cmd);
+    }
+  }
+  return actions.sort();
+}
+
 /**
  * authorize: Pure authorization function checking tenant scope, single permission registry,
  * command-to-role mapping, and prohibited purpose guards. Fails closed on unknown commands.
@@ -293,9 +340,12 @@ export function authorize(
  * Separation of duties: the person who owns a control must not also approve it.
  * Enforced outside local/test; the seeded demo has a single risk owner who walks the whole workflow.
  */
-export function requireSeparationOfDuties(ownerPrincipalId: string | null | undefined, actorPrincipalId: string): void {
-  const cfg = loadConfig();
-  if (cfg.appEnv === "local" || cfg.appEnv === "test") return;
+export function requireSeparationOfDuties(
+  ownerPrincipalId: string | null | undefined,
+  actorPrincipalId: string,
+  appEnv: string = loadConfig().appEnv
+): void {
+  if (appEnv === "local" || appEnv === "test") return;
   if (ownerPrincipalId && ownerPrincipalId === actorPrincipalId) {
     throw new AppError("FORBIDDEN", "Separation of duties: the control owner cannot approve their own control.");
   }

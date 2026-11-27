@@ -800,6 +800,19 @@ export async function seedTwoTenants(opts: SeedTwoTenantsOptions = {}) {
               ]
             );
           }
+          // Seed named platform staff accounts (two distinct SUPER_ADMIN accounts for four-eyes + OPS_SUPPORT)
+          for (const pu of [
+            ["00000000-0000-4000-f001-000000000001", "superadmin@zoikoabate.dev", "Primary Platform Admin", "SUPER_ADMIN"],
+            ["00000000-0000-4000-f001-000000000002", "superadmin-2@zoikoabate.dev", "Secondary Platform Admin (Four-Eyes)", "SUPER_ADMIN"],
+            ["00000000-0000-4000-f001-000000000003", "ops-support@zoikoabate.dev", "Platform Operations Support", "OPS_SUPPORT"]
+          ] as const) {
+            await client.query(
+              `INSERT INTO platform_user (id, subject, display_name, platform_role, status, break_glass, mfa_enforced, version)
+               VALUES ($1, $2, $3, $4, 'ACTIVE', false, true, 1)
+               ON CONFLICT (id) DO NOTHING`,
+              [pu[0], pu[1], pu[2], pu[3]]
+            );
+          }
           await client.query("COMMIT");
         } catch (defErr) {
           await client.query("ROLLBACK");

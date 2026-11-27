@@ -21,6 +21,7 @@ export interface AppConfig {
   databaseUrlReleaseCompiler: string;
   databaseUrlPerformance: string;
   databaseUrlOps: string;
+  databaseUrlPlatformAdmin: string;
   connectorWebhookSecret: string;
   objectStoreEndpoint: string;
   objectStoreBucket: string;
@@ -48,6 +49,9 @@ export interface AppConfig {
   metricsAuthToken: string;
   alertWebhookUrl: string;
   cookieSecure: boolean;
+  adminSessionTtlSeconds: number;
+  adminStepUpWindowSeconds: number;
+  adminIpAllowlist: string[];
 }
 
 // Development-only fallbacks. These exact values are refused outside local and test.
@@ -60,6 +64,7 @@ export const DEV_DEFAULTS = {
   databaseUrlReleaseCompiler: "postgres://abate_release_compiler:release_compiler_pw@localhost:5432/abate",
   databaseUrlPerformance: "postgres://abate_performance:performance_pw@localhost:5432/abate",
   databaseUrlOps: "postgres://abate_ops:ops_pw@localhost:5432/abate",
+  databaseUrlPlatformAdmin: "postgres://abate_platform_admin:platform_admin_pw@localhost:5432/abate",
   objectStoreEndpoint: "http://localhost:9000",
   objectStoreBucket: "abate-artifacts",
   objectStoreAccessKey: "minioadmin",
@@ -163,6 +168,7 @@ export function buildConfig(inputEnv: NodeJS.ProcessEnv): AppConfig {
     databaseUrlReleaseCompiler: env.DATABASE_URL_RELEASE_COMPILER || DEV_DEFAULTS.databaseUrlReleaseCompiler,
     databaseUrlPerformance: env.DATABASE_URL_PERFORMANCE || DEV_DEFAULTS.databaseUrlPerformance,
     databaseUrlOps: env.DATABASE_URL_OPS || DEV_DEFAULTS.databaseUrlOps,
+    databaseUrlPlatformAdmin: env.DATABASE_URL_PLATFORM_ADMIN || DEV_DEFAULTS.databaseUrlPlatformAdmin,
     connectorWebhookSecret: env.CONNECTOR_WEBHOOK_SECRET || "",
     objectStoreEndpoint: env.OBJECT_STORE_ENDPOINT || DEV_DEFAULTS.objectStoreEndpoint,
     objectStoreBucket: env.OBJECT_STORE_BUCKET || DEV_DEFAULTS.objectStoreBucket,
@@ -198,7 +204,13 @@ export function buildConfig(inputEnv: NodeJS.ProcessEnv): AppConfig {
       hardened,
     metricsAuthToken: env.METRICS_AUTH_TOKEN || "",
     alertWebhookUrl: env.ALERT_WEBHOOK_URL || "",
-    cookieSecure: clientUrl.startsWith("https://") || appEnv === "production"
+    cookieSecure: clientUrl.startsWith("https://") || appEnv === "production",
+    adminSessionTtlSeconds: Math.max(300, Math.min(3600, parseInt(env.ADMIN_SESSION_TTL_SECONDS || "900", 10) || 900)),
+    adminStepUpWindowSeconds: Math.max(60, Math.min(900, parseInt(env.ADMIN_STEP_UP_WINDOW_SECONDS || "300", 10) || 300)),
+    adminIpAllowlist: (env.ADMIN_IP_ALLOWLIST || "")
+      .split(",")
+      .map((s) => s.trim())
+      .filter(Boolean)
   };
 }
 
@@ -247,6 +259,7 @@ export function validateRuntimeConfig(cfg: AppConfig, inputEnv: NodeJS.ProcessEn
     ["DATABASE_URL_MIGRATOR", cfg.databaseUrlMigrator, DEV_DEFAULTS.databaseUrlMigrator],
     ["DATABASE_URL_APP", cfg.databaseUrlApp, DEV_DEFAULTS.databaseUrlApp],
     ["DATABASE_URL_WORKER", cfg.databaseUrlWorker, DEV_DEFAULTS.databaseUrlWorker],
+    ["DATABASE_URL_PLATFORM_ADMIN", cfg.databaseUrlPlatformAdmin, DEV_DEFAULTS.databaseUrlPlatformAdmin],
     ["OBJECT_STORE_ENDPOINT", cfg.objectStoreEndpoint, DEV_DEFAULTS.objectStoreEndpoint]
   ];
   for (const [name, value, devDefault] of urls) {
@@ -263,6 +276,13 @@ export function validateRuntimeConfig(cfg: AppConfig, inputEnv: NodeJS.ProcessEn
   }
   if (cfg.databaseUrlWorker === cfg.databaseUrlMigrator || cfg.databaseUrlWorker === cfg.databaseUrlApp) {
     problems.push("DATABASE_URL_WORKER must be its own role");
+  }
+  if (
+    cfg.databaseUrlPlatformAdmin === cfg.databaseUrlMigrator ||
+    cfg.databaseUrlPlatformAdmin === cfg.databaseUrlApp ||
+    cfg.databaseUrlPlatformAdmin === cfg.databaseUrlOps
+  ) {
+    problems.push("DATABASE_URL_PLATFORM_ADMIN must be its own dedicated role");
   }
 
   if (env.ABATE_REQUIRE_PG !== "1") {
@@ -329,7 +349,10 @@ export function loadConfig(): AppConfig {
     process.env.AUTH_AUDIENCE || "",
     process.env.CLIENT_URL || "",
     process.env.ABATE_STRUCTURED_LOGS || "",
-    process.env.METRICS_AUTH_TOKEN || ""
+    process.env.METRICS_AUTH_TOKEN || "",
+    process.env.ADMIN_SESSION_TTL_SECONDS || "",
+    process.env.ADMIN_STEP_UP_WINDOW_SECONDS || "",
+    process.env.ADMIN_IP_ALLOWLIST || ""
   ].join("|");
 
   if (cachedConfig && cachedConfig.key === key) {

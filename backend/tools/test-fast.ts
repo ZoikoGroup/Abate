@@ -189,6 +189,7 @@ async function runTests() {
       DATABASE_URL_MIGRATOR: "postgres://m:x@db.internal:5432/abate",
       DATABASE_URL_APP: "postgres://a:x@db.internal:5432/abate",
       DATABASE_URL_WORKER: "postgres://w:x@db.internal:5432/abate",
+      DATABASE_URL_PLATFORM_ADMIN: "postgres://pa:x@db.internal:5432/abate",
       ABATE_REQUIRE_PG: "1",
       CLIENT_URL: "https://abate.internal.example",
       AUTH_ISSUER: "https://idp.internal.example/",

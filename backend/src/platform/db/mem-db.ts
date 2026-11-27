@@ -97,11 +97,62 @@ class MemoryDatabase {
   // Durable async jobs table (0087_async_jobs_and_role_policies.sql)
   public asyncJobs: Map<string, any> = new Map();
 
+  // Admin Security Foundation & Tenant Admin tables (0094_platform_admin_role_and_governance.sql)
+  public platformUsers: Map<string, any> = new Map();
+  public adminApprovalRequests: Map<string, any> = new Map();
+  public tenantAiQuotaConfigs: Map<string, any> = new Map();
+  public tenantEntitlements: Map<string, any> = new Map();
+  public tenantInvitations: Map<string, any> = new Map();
+
   constructor() {
     this.seedDefaults();
   }
 
   public seedDefaults() {
+    // Seed named platform staff accounts (two distinct SUPER_ADMIN accounts for four-eyes approval + OPS_SUPPORT)
+    const defaultPlatformUsers = [
+      {
+        id: "00000000-0000-4000-f001-000000000001",
+        subject: "superadmin@zoikoabate.dev",
+        display_name: "Primary Platform Admin",
+        platform_role: "SUPER_ADMIN",
+        status: "ACTIVE",
+        break_glass: false,
+        mfa_enforced: true,
+        created_at: "2026-03-01T00:00:00.000Z",
+        updated_at: "2026-03-01T00:00:00.000Z",
+        version: 1
+      },
+      {
+        id: "00000000-0000-4000-f001-000000000002",
+        subject: "superadmin-2@zoikoabate.dev",
+        display_name: "Secondary Platform Admin (Four-Eyes)",
+        platform_role: "SUPER_ADMIN",
+        status: "ACTIVE",
+        break_glass: false,
+        mfa_enforced: true,
+        created_at: "2026-03-01T00:00:00.000Z",
+        updated_at: "2026-03-01T00:00:00.000Z",
+        version: 1
+      },
+      {
+        id: "00000000-0000-4000-f001-000000000003",
+        subject: "ops-support@zoikoabate.dev",
+        display_name: "Platform Operations Support",
+        platform_role: "OPS_SUPPORT",
+        status: "ACTIVE",
+        break_glass: false,
+        mfa_enforced: true,
+        created_at: "2026-03-01T00:00:00.000Z",
+        updated_at: "2026-03-01T00:00:00.000Z",
+        version: 1
+      }
+    ];
+    for (const pu of defaultPlatformUsers) {
+      if (!this.platformUsers.has(pu.id)) {
+        this.platformUsers.set(pu.id, { ...pu });
+      }
+    }
     if (!this.metricDefinitions.has("BOUNDARY_INTRUSION_SHARE:1")) {
       const metricDef = {
         id: "BOUNDARY_INTRUSION_SHARE",
@@ -255,6 +306,12 @@ class MemoryDatabase {
     this.aiChangeProfiles.clear();
     this.aiWorkDesignAssessments.clear();
     this.asyncJobs.clear();
+    this.platformUsers.clear();
+    this.adminApprovalRequests.clear();
+    this.tenantAiQuotaConfigs.clear();
+    this.tenantEntitlements.clear();
+    this.tenantInvitations.clear();
+    this.platformAuditEvents = [];
     this.seedDefaults();
   }
 }
@@ -330,7 +387,13 @@ export class MemoryClient {
       aiChangeProfiles: Array.from(memDb.aiChangeProfiles.entries()),
       aiWorkDesignAssessments: Array.from(memDb.aiWorkDesignAssessments.entries()),
       tenantPolicyBindings: memDb.tenantPolicyBindings,
-      evidenceItems: memDb.evidenceItems
+      evidenceItems: memDb.evidenceItems,
+      platformAuditCount: memDb.platformAuditEvents.length,
+      platformUsers: Array.from(memDb.platformUsers.entries()),
+      adminApprovalRequests: Array.from(memDb.adminApprovalRequests.entries()),
+      tenantAiQuotaConfigs: Array.from(memDb.tenantAiQuotaConfigs.entries()),
+      tenantEntitlements: Array.from(memDb.tenantEntitlements.entries()),
+      tenantInvitations: Array.from(memDb.tenantInvitations.entries())
       });
   }
 
@@ -404,6 +467,12 @@ export class MemoryClient {
         if (snap.aiWorkDesignAssessments) memDb.aiWorkDesignAssessments = new Map(snap.aiWorkDesignAssessments);
         if (snap.tenantPolicyBindings) memDb.tenantPolicyBindings = snap.tenantPolicyBindings;
         if (snap.evidenceItems) memDb.evidenceItems = snap.evidenceItems;
+        if (snap.platformAuditCount !== undefined) memDb.platformAuditEvents = memDb.platformAuditEvents.slice(0, snap.platformAuditCount);
+        if (snap.platformUsers) memDb.platformUsers = new Map(snap.platformUsers);
+        if (snap.adminApprovalRequests) memDb.adminApprovalRequests = new Map(snap.adminApprovalRequests);
+        if (snap.tenantAiQuotaConfigs) memDb.tenantAiQuotaConfigs = new Map(snap.tenantAiQuotaConfigs);
+        if (snap.tenantEntitlements) memDb.tenantEntitlements = new Map(snap.tenantEntitlements);
+        if (snap.tenantInvitations) memDb.tenantInvitations = new Map(snap.tenantInvitations);
       }
       this.tenantContext = null;
       this.snapshotState = null;
@@ -556,14 +625,31 @@ export class MemoryClient {
       if (this.tenantContext && tId !== this.tenantContext) {
         throw new Error("RLS WITH CHECK violation: cross-tenant organization write rejected");
       }
-      const org = { id, tenant_id: tId, parent_id: parentId || null, name };
+      const org = { id, tenant_id: tId, parent_id: parentId || null, name, version: 1 };
       memDb.organizations.set(id, org);
       return { rows: [org], rowCount: 1, command: "INSERT", oid: 0, fields: [] };
     }
 
+    // Organization Update (Tenant Admin rename/reparent with optimistic version)
+    if (upper.includes("UPDATE ORGANIZATION SET")) {
+      const orgId = params[params.length - 1];
+      const existing = memDb.organizations.get(orgId);
+      if (!existing || (this.tenantContext && existing.tenant_id !== this.tenantContext)) {
+        return { rows: [], rowCount: 0, command: "UPDATE", oid: 0, fields: [] };
+      }
+      if (params.length >= 3) {
+        existing.name = params[0];
+        existing.parent_id = params[1] ?? null;
+      } else if (params.length >= 2) {
+        existing.name = params[0];
+      }
+      existing.version = Number(existing.version || 1) + 1;
+      return { rows: [existing], rowCount: 1, command: "UPDATE", oid: 0, fields: [] };
+    }
+
     // Organization Select
     if (upper.includes("FROM ORGANIZATION")) {
-      let rows = Array.from(memDb.organizations.values());
+      let rows = Array.from(memDb.organizations.values()).map((o) => ({ ...o, version: Number(o.version || 1) }));
       if (this.opsMode && !this.tenantContext) {
         if (upper.includes("TENANT_ID = $1") && params.length > 0) {
           rows = rows.filter(o => o.tenant_id === params[0]);
@@ -571,7 +657,9 @@ export class MemoryClient {
       } else {
         // RLS filter
         rows = rows.filter(o => o.tenant_id === this.tenantContext);
-        if (params.length > 0) {
+        if (params.length > 0 && upper.includes("WHERE TENANT_ID = $1")) {
+          rows = rows.filter(o => o.tenant_id === params[0]);
+        } else if (params.length > 0 && upper.includes("WHERE ID = $1")) {
           rows = rows.filter(o => o.id === params[0]);
         }
       }
@@ -583,6 +671,8 @@ export class MemoryClient {
       const [subject, atStr] = params;
       const at = new Date(atStr).getTime();
       const results: any[] = [];
+      const tenantRec = this.tenantContext ? memDb.tenants.get(this.tenantContext) : null;
+      const tenantState = tenantRec?.state || "ACTIVE";
 
       for (const p of memDb.principals.values()) {
         if (p.tenant_id !== this.tenantContext || p.external_subject !== subject) continue;
@@ -593,6 +683,8 @@ export class MemoryClient {
             if (vFrom <= at && at < vTo) {
               results.push({
                 id: p.id,
+                active: p.active !== false,
+                tenant_state: tenantState,
                 organization_id: m.organization_id,
                 domain_role: m.domain_role
               });
@@ -639,18 +731,43 @@ export class MemoryClient {
 
     // Principal select
     if (upper.includes("FROM PRINCIPAL")) {
-      const targetTenant = this.tenantContext || (params.length > 0 ? params[0] : null);
-      let rows = Array.from(memDb.principals.values());
-      if (targetTenant) rows = rows.filter(p => p.tenant_id === targetTenant);
+      let rows = Array.from(memDb.principals.values()).map((p) => ({
+        ...p,
+        active: p.active !== false,
+        deactivated_at: p.deactivated_at ?? null,
+        version: Number(p.version || 1)
+      }));
+      if (this.tenantContext) {
+        rows = rows.filter((p) => p.tenant_id === this.tenantContext);
+        if (upper.includes("WHERE ID = $1") && params.length > 0) {
+          rows = rows.filter((p) => p.id === params[0]);
+        } else if (upper.includes("EXTERNAL_SUBJECT = $1") && params.length > 0) {
+          rows = rows.filter((p) => p.external_subject === params[0]);
+        }
+      } else if (params.length > 0) {
+        if (upper.includes("TENANT_ID = $1")) {
+          rows = rows.filter((p) => p.tenant_id === params[0]);
+        } else if (upper.includes("ID = $1")) {
+          rows = rows.filter((p) => p.id === params[0]);
+        }
+      }
       return { rows, rowCount: rows.length, command: "SELECT", oid: 0, fields: [] };
     }
 
     // Tenant select
     // Word boundary: "FROM tenant_policy_binding" must not be answered with tenant rows
     if (/\bFROM\s+TENANT\b/.test(upper)) {
-      let rows = Array.from(memDb.tenants.values());
+      let rows = Array.from(memDb.tenants.values()).map((t) => ({
+        ...t,
+        state: t.state || "ACTIVE",
+        version: Number(t.version || 1),
+        offboard_requested_at: t.offboard_requested_at ?? null,
+        offboard_reason: t.offboard_reason ?? null
+      }));
       if (this.tenantContext) {
         rows = rows.filter(t => t.id === this.tenantContext);
+      } else if (upper.includes("WHERE ID = $1") && params.length > 0) {
+        rows = rows.filter(t => t.id === params[0]);
       }
       return { rows, rowCount: rows.length, command: "SELECT", oid: 0, fields: [] };
     }
@@ -2283,13 +2400,14 @@ export class MemoryClient {
 
     // AI Kill Switch Upsert
     if (upper.includes("INSERT INTO AI_KILL_SWITCH")) {
-      const [scope, active, changedBy, changedAt, reason] = params;
+      const [scope, active, changedBy, changedAt, reason, expiresAt] = params;
       const rec = {
         scope,
         active: Boolean(active),
         changed_by: changedBy || null,
         changed_at: changedAt || new Date().toISOString(),
-        reason: reason ?? null
+        reason: reason ?? null,
+        expires_at: expiresAt ?? null
       };
       memDb.aiKillSwitches.set(scope, rec);
       return { rows: [rec], rowCount: 1, command: "UPSERT", oid: 0, fields: [] };
@@ -2739,9 +2857,9 @@ export class MemoryClient {
       return { rows, rowCount: rows.length, command: "SELECT", oid: 0, fields: [] };
     }
 
-    // Super Admin Platform Operations (0092_super_admin_platform_ops.sql)
+    // Super Admin Platform Operations (0092 / 0094)
     if (upper.includes("INSERT INTO PLATFORM_AUDIT_EVENT")) {
-      const [id, operator, role, action, targetType, targetId, reason, details] = params;
+      const [id, operator, role, action, targetType, targetId, reason, details, requestId, approver, stepUpVerified] = params;
       const rec = {
         id,
         occurred_at: new Date().toISOString(),
@@ -2751,7 +2869,10 @@ export class MemoryClient {
         target_type: targetType,
         target_id: targetId,
         reason: reason ?? null,
-        details: typeof details === "string" ? JSON.parse(details) : (details ?? {})
+        details: typeof details === "string" ? JSON.parse(details) : (details ?? {}),
+        request_id: requestId ?? null,
+        approver: approver ?? null,
+        step_up_verified: Boolean(stepUpVerified)
       };
       memDb.platformAuditEvents.push(rec);
       return { rows: [rec], rowCount: 1, command: "INSERT", oid: 0, fields: [] };
@@ -2772,6 +2893,9 @@ export class MemoryClient {
         region,
         jurisdiction_config_ref: jurisdictionConfigRef ?? null,
         state: state || "ACTIVE",
+        version: 1,
+        offboard_requested_at: null,
+        offboard_reason: null,
         created_at: new Date().toISOString()
       };
       memDb.tenants.set(id, rec);
@@ -2782,25 +2906,50 @@ export class MemoryClient {
       const id = params[params.length - 1];
       const existing = memDb.tenants.get(id);
       if (!existing) return { rows: [], rowCount: 0, command: "UPDATE", oid: 0, fields: [] };
-      if (upper.includes("STATE = $1") && params.length === 2) {
+      if (upper.includes("OFFBOARD_REQUESTED_AT")) {
+        existing.offboard_requested_at = new Date().toISOString();
+        existing.offboard_reason = params[0];
+        existing.version = Number(existing.version || 1) + 1;
+      } else if (upper.includes("STATE = $1") && params.length === 2) {
         existing.state = params[0];
+        existing.version = Number(existing.version || 1) + 1;
       } else if (params.length >= 4) {
         existing.name = params[0];
         existing.region = params[1];
         existing.jurisdiction_config_ref = params[2];
+        existing.version = Number(existing.version || 1) + 1;
       }
       return { rows: [existing], rowCount: 1, command: "UPDATE", oid: 0, fields: [] };
     }
 
     if (upper.includes("INSERT INTO PRINCIPAL")) {
       const [id, tId, externalSubject, kind] = params;
-      const rec = { id, tenant_id: tId, external_subject: externalSubject, kind };
+      if (this.tenantContext && tId !== this.tenantContext) {
+        throw new Error("RLS WITH CHECK violation: cross-tenant principal write rejected");
+      }
+      const rec = { id, tenant_id: tId, external_subject: externalSubject, kind, active: true, deactivated_at: null, version: 1 };
       memDb.principals.set(id, rec);
       return { rows: [rec], rowCount: 1, command: "INSERT", oid: 0, fields: [] };
     }
 
+    if (upper.includes("UPDATE PRINCIPAL SET")) {
+      const id = params[params.length - 1];
+      const existing = memDb.principals.get(id);
+      if (!existing || (this.tenantContext && existing.tenant_id !== this.tenantContext)) {
+        return { rows: [], rowCount: 0, command: "UPDATE", oid: 0, fields: [] };
+      }
+      const activeVal = Boolean(params[0]);
+      existing.active = activeVal;
+      existing.deactivated_at = activeVal ? null : new Date().toISOString();
+      existing.version = Number(existing.version || 1) + 1;
+      return { rows: [existing], rowCount: 1, command: "UPDATE", oid: 0, fields: [] };
+    }
+
     if (upper.includes("INSERT INTO EFFECTIVE_MEMBERSHIP")) {
-      const [id, tId, principalId, orgId, domainRole, validFrom] = params;
+      const [id, tId, principalId, orgId, domainRole, validFrom, validTo] = params;
+      if (this.tenantContext && tId !== this.tenantContext) {
+        throw new Error("RLS WITH CHECK violation: cross-tenant effective_membership write rejected");
+      }
       const rec = {
         id,
         tenant_id: tId,
@@ -2808,18 +2957,245 @@ export class MemoryClient {
         organization_id: orgId,
         domain_role: domainRole,
         valid_from: validFrom || new Date().toISOString(),
-        valid_to: null
+        valid_to: validTo ?? null,
+        version: 1
       };
       memDb.memberships.set(id, rec);
       return { rows: [rec], rowCount: 1, command: "INSERT", oid: 0, fields: [] };
     }
 
     if (upper.includes("UPDATE EFFECTIVE_MEMBERSHIP SET VALID_TO")) {
-      const id = params[0];
+      const hasExplicitDate = upper.includes("VALID_TO = $1");
+      const id = hasExplicitDate ? params[1] : params[0];
+      const targetTenant = hasExplicitDate ? (params[2] || this.tenantContext) : (params[1] || this.tenantContext);
       const existing = memDb.memberships.get(id);
-      if (!existing) return { rows: [], rowCount: 0, command: "UPDATE", oid: 0, fields: [] };
-      existing.valid_to = new Date().toISOString();
+      if (!existing || (targetTenant && existing.tenant_id !== targetTenant)) {
+        return { rows: [], rowCount: 0, command: "UPDATE", oid: 0, fields: [] };
+      }
+      existing.valid_to = hasExplicitDate ? params[0] : new Date().toISOString();
+      existing.version = Number(existing.version || 1) + 1;
       return { rows: [existing], rowCount: 1, command: "UPDATE", oid: 0, fields: [] };
+    }
+
+    // Platform Users (0094)
+    if (upper.includes("INSERT INTO PLATFORM_USER")) {
+      const [id, subject, displayName, platformRole, breakGlass] = params;
+      for (const existing of memDb.platformUsers.values()) {
+        if (existing.subject === subject) {
+          throw new Error(`duplicate key value violates unique constraint "platform_user_subject_key"`);
+        }
+      }
+      const now = new Date().toISOString();
+      const rec = {
+        id,
+        subject,
+        display_name: displayName,
+        platform_role: platformRole,
+        status: "ACTIVE",
+        break_glass: Boolean(breakGlass),
+        mfa_enforced: true,
+        created_at: now,
+        updated_at: now,
+        version: 1
+      };
+      memDb.platformUsers.set(id, rec);
+      return { rows: [rec], rowCount: 1, command: "INSERT", oid: 0, fields: [] };
+    }
+
+    if (upper.includes("UPDATE PLATFORM_USER SET")) {
+      const id = params[params.length - 1];
+      const existing = memDb.platformUsers.get(id);
+      if (!existing) return { rows: [], rowCount: 0, command: "UPDATE", oid: 0, fields: [] };
+      if (upper.includes("PLATFORM_ROLE = $1")) {
+        existing.platform_role = params[0];
+      } else if (upper.includes("STATUS = $1")) {
+        existing.status = params[0];
+      }
+      existing.updated_at = new Date().toISOString();
+      existing.version = Number(existing.version || 1) + 1;
+      return { rows: [existing], rowCount: 1, command: "UPDATE", oid: 0, fields: [] };
+    }
+
+    if (upper.includes("FROM PLATFORM_USER")) {
+      let rows = Array.from(memDb.platformUsers.values());
+      if (upper.includes("WHERE ID = $1") && params.length > 0) {
+        rows = rows.filter((u) => u.id === params[0]);
+      } else if (upper.includes("WHERE SUBJECT = $1") && params.length > 0) {
+        rows = rows.filter((u) => u.subject === params[0]);
+      }
+      return { rows, rowCount: rows.length, command: "SELECT", oid: 0, fields: [] };
+    }
+
+    // Four-Eyes Approval Queue (0094)
+    if (upper.includes("INSERT INTO ADMIN_APPROVAL_REQUEST")) {
+      const [id, actionType, targetType, targetId, payload, reason, requestedBy, expiresAt, requestId] = params;
+      const now = new Date().toISOString();
+      const rec = {
+        id,
+        action_type: actionType,
+        target_type: targetType,
+        target_id: targetId,
+        payload: typeof payload === "string" ? JSON.parse(payload) : (payload ?? {}),
+        reason,
+        requested_by: requestedBy,
+        requested_at: now,
+        status: "PENDING",
+        approved_by: null,
+        approved_at: null,
+        decision_reason: null,
+        executed_at: null,
+        expires_at: expiresAt,
+        request_id: requestId ?? null,
+        version: 1
+      };
+      memDb.adminApprovalRequests.set(id, rec);
+      return { rows: [rec], rowCount: 1, command: "INSERT", oid: 0, fields: [] };
+    }
+
+    if (upper.includes("UPDATE ADMIN_APPROVAL_REQUEST SET")) {
+      const id = params[params.length - 1];
+      const existing = memDb.adminApprovalRequests.get(id);
+      if (!existing) return { rows: [], rowCount: 0, command: "UPDATE", oid: 0, fields: [] };
+      const [status, approvedBy, decisionReason] = params;
+      if (approvedBy && approvedBy === existing.requested_by) {
+        throw new Error(`new row violates check constraint "chk_four_eyes_distinct_approver"`);
+      }
+      const now = new Date().toISOString();
+      existing.status = status;
+      existing.approved_by = approvedBy ?? existing.approved_by;
+      existing.approved_at = now;
+      existing.decision_reason = decisionReason ?? null;
+      if (status === "EXECUTED") existing.executed_at = now;
+      existing.version = Number(existing.version || 1) + 1;
+      return { rows: [existing], rowCount: 1, command: "UPDATE", oid: 0, fields: [] };
+    }
+
+    if (upper.includes("FROM ADMIN_APPROVAL_REQUEST")) {
+      let rows = Array.from(memDb.adminApprovalRequests.values());
+      if (upper.includes("WHERE ID = $1") && params.length > 0) {
+        rows = rows.filter((r) => r.id === params[0]);
+      }
+      rows.sort((a, b) => new Date(b.requested_at).getTime() - new Date(a.requested_at).getTime());
+      return { rows, rowCount: rows.length, command: "SELECT", oid: 0, fields: [] };
+    }
+
+    // Per-Tenant AI Quota Config (0094)
+    if (upper.includes("INSERT INTO TENANT_AI_QUOTA_CONFIG")) {
+      const [tId, budget, updatedBy] = params;
+      const existing = memDb.tenantAiQuotaConfigs.get(tId);
+      const rec = {
+        tenant_id: tId,
+        monthly_budget_minor: Number(budget),
+        updated_by: updatedBy ?? null,
+        updated_at: new Date().toISOString(),
+        version: existing ? Number(existing.version || 1) + 1 : 1
+      };
+      memDb.tenantAiQuotaConfigs.set(tId, rec);
+      return { rows: [rec], rowCount: 1, command: "INSERT", oid: 0, fields: [] };
+    }
+
+    if (upper.includes("FROM TENANT_AI_QUOTA_CONFIG")) {
+      let rows = Array.from(memDb.tenantAiQuotaConfigs.values());
+      if (this.tenantContext) {
+        rows = rows.filter((r) => r.tenant_id === this.tenantContext);
+      } else if (upper.includes("WHERE TENANT_ID = $1") && params.length > 0) {
+        rows = rows.filter((r) => r.tenant_id === params[0]);
+      }
+      return { rows, rowCount: rows.length, command: "SELECT", oid: 0, fields: [] };
+    }
+
+    // Per-Tenant Commercial Entitlements (0094)
+    if (upper.includes("INSERT INTO TENANT_ENTITLEMENT")) {
+      const [tId, featureKey, enabled, notes, updatedBy] = params;
+      const k = `${tId}:${featureKey}`;
+      const existing = memDb.tenantEntitlements.get(k);
+      const rec = {
+        tenant_id: tId,
+        feature_key: featureKey,
+        enabled: Boolean(enabled),
+        notes: notes ?? null,
+        updated_by: updatedBy ?? null,
+        updated_at: new Date().toISOString(),
+        version: existing ? Number(existing.version || 1) + 1 : 1
+      };
+      memDb.tenantEntitlements.set(k, rec);
+      return { rows: [rec], rowCount: 1, command: "INSERT", oid: 0, fields: [] };
+    }
+
+    if (upper.includes("FROM TENANT_ENTITLEMENT")) {
+      let rows = Array.from(memDb.tenantEntitlements.values());
+      if (this.tenantContext) {
+        rows = rows.filter((r) => r.tenant_id === this.tenantContext);
+      } else if (upper.includes("WHERE TENANT_ID = $1") && params.length > 0) {
+        rows = rows.filter((r) => r.tenant_id === params[0]);
+      }
+      return { rows, rowCount: rows.length, command: "SELECT", oid: 0, fields: [] };
+    }
+
+    // Tenant Admin OIDC Invitations (0094, strictly tenant RLS isolated)
+    if (upper.includes("INSERT INTO TENANT_INVITATION")) {
+      const [id, tId, orgId, maskedEmail, emailHash, externalSubject, domainRole, validFrom, validTo, invitedBy, reason, expiresAt] = params;
+      if (!this.tenantContext || tId !== this.tenantContext) {
+        throw new Error("RLS WITH CHECK violation: cross-tenant tenant_invitation write rejected");
+      }
+      const rec = {
+        id,
+        tenant_id: tId,
+        organization_id: orgId,
+        masked_email: maskedEmail,
+        email_hash: emailHash,
+        external_subject: externalSubject ?? null,
+        domain_role: domainRole,
+        valid_from: validFrom || new Date().toISOString(),
+        valid_to: validTo ?? null,
+        status: "PENDING",
+        invited_by: invitedBy,
+        reason: reason ?? null,
+        created_at: new Date().toISOString(),
+        expires_at: expiresAt,
+        accepted_at: null,
+        revoked_at: null,
+        version: 1
+      };
+      memDb.tenantInvitations.set(id, rec);
+      return { rows: [rec], rowCount: 1, command: "INSERT", oid: 0, fields: [] };
+    }
+
+    if (upper.includes("UPDATE TENANT_INVITATION SET")) {
+      const id = params[params.length - 1];
+      const existing = memDb.tenantInvitations.get(id);
+      if (!existing || !this.tenantContext || existing.tenant_id !== this.tenantContext) {
+        return { rows: [], rowCount: 0, command: "UPDATE", oid: 0, fields: [] };
+      }
+      const status = params[0];
+      existing.status = status;
+      if (status === "REVOKED") existing.revoked_at = new Date().toISOString();
+      if (status === "ACCEPTED") existing.accepted_at = new Date().toISOString();
+      existing.version = Number(existing.version || 1) + 1;
+      return { rows: [existing], rowCount: 1, command: "UPDATE", oid: 0, fields: [] };
+    }
+
+    if (upper.includes("FROM TENANT_INVITATION")) {
+      if (!this.tenantContext) {
+        return { rows: [], rowCount: 0, command: "SELECT", oid: 0, fields: [] };
+      }
+      let rows = Array.from(memDb.tenantInvitations.values()).filter((i) => i.tenant_id === this.tenantContext);
+      if (upper.includes("WHERE ID = $1") && params.length > 0) {
+        rows = rows.filter((i) => i.id === params[0]);
+      }
+      rows.sort((a, b) => new Date(b.created_at).getTime() - new Date(a.created_at).getTime());
+      return { rows, rowCount: rows.length, command: "SELECT", oid: 0, fields: [] };
+    }
+
+    // Tenant Rights Request listing
+    if (upper.includes("FROM RIGHTS_REQUEST")) {
+      if (!this.tenantContext) {
+        return { rows: [], rowCount: 0, command: "SELECT", oid: 0, fields: [] };
+      }
+      const rows = Array.from(memDb.rightsRequests.values())
+        .filter((r) => r.tenant_id === this.tenantContext)
+        .sort((a, b) => new Date(b.requested_at || b.created_at || 0).getTime() - new Date(a.requested_at || a.created_at || 0).getTime());
+      return { rows, rowCount: rows.length, command: "SELECT", oid: 0, fields: [] };
     }
 
     // Durable Async Jobs (0087_async_jobs_and_role_policies.sql)

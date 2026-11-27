@@ -12,7 +12,7 @@ import { GOLDEN_01 } from "../fixtures/golden01";
 import { describeSectorScope } from "../domains/lifecycle";
 import { KillSwitchInput } from "../contracts";
 import { authenticate, resolveActor } from "../domains/tenant/auth";
-import { getKillSwitches, setKillSwitch, getAiQuotaStatus } from "../domains/ai";
+import { getKillSwitches, setKillSwitch } from "../domains/ai";
 import { telemetry } from "../platform/telemetry";
 import { buildSloReport } from "../platform/slo";
 import { SupportTokenRequestBody } from "../contracts/support";
@@ -131,32 +131,62 @@ export function registerOpsRoutes(app: Express): void {
   // -------------------------------------------------------------
   // Domain S10 / S11 / S12: Phase 5 Governance, Evidence & Lifecycle Endpoints
 
-  // Support Ops: Per-tenant AI Quota Visibility across active tenants
+  // Support Ops: Per-tenant AI Quota Configuration Visibility (content-free metadata via abate_ops ONLY — never reads tenant ai_run business data)
   app.get("/api/v2/ops/ai-quota", async (req: Request, res: Response) => {
     try {
       await authenticateSupport(getHeader(req, "authorization"));
       const requestedTenantId = typeof req.query.tenantId === "string" && req.query.tenantId.trim() ? req.query.tenantId.trim() : null;
-      let tenantIds: string[];
-      if (requestedTenantId) {
-        tenantIds = [requestedTenantId];
-      } else {
-        try {
-          const discovered = await withOps(async (tx) => {
-            const r = await tx.q("SELECT id FROM ops_active_tenants");
-            return r.rows.map((row: any) => String(row.id));
-          });
-          tenantIds = discovered.length > 0 ? discovered : [GOLDEN_01.tenantA.id, GOLDEN_01.tenantB.id];
-        } catch {
+      const now = new Date();
+      const windowStart = new Date(Date.UTC(now.getUTCFullYear(), now.getUTCMonth(), 1)).toISOString();
+      const resetAt = new Date(Date.UTC(now.getUTCFullYear(), now.getUTCMonth() + 1, 1)).toISOString();
+
+      const data = await withOps(async (tx) => {
+        const switches = await getKillSwitches(tx);
+        const activeScopes = new Set(switches.filter((s) => s.active).map((s) => s.scope));
+        const allAiDisabled = activeScopes.has("all_ai");
+        const activeTenantsRes = await tx.q("SELECT id FROM ops_active_tenants");
+        let tenantIds: string[] = activeTenantsRes.rows.map((r: any) => String(r.id));
+        if (tenantIds.length === 0) {
           tenantIds = [GOLDEN_01.tenantA.id, GOLDEN_01.tenantB.id];
         }
-      }
+        if (requestedTenantId) {
+          tenantIds = tenantIds.filter((id) => id === requestedTenantId);
+        }
+        const cfgRes = await tx.q("SELECT tenant_id, monthly_budget_minor, updated_at, version FROM tenant_ai_quota_config");
+        const cfgMap = new Map(cfgRes.rows.map((r: any) => [String(r.tenant_id), r]));
+        return tenantIds.map((tId) => {
+          const cfgRow: any = cfgMap.get(tId);
+          const cap = Number(cfgRow?.monthly_budget_minor ?? 50000);
+          const estCost = 50;
+          const useCaseKeys = ["explain_release", "draft_cause", "draft_control"] as const;
+          return {
+            tenantId: tId,
+            window: "CALENDAR_MONTH_UTC",
+            windowStart,
+            resetAt,
+            allAiDisabled,
+            configuredMonthlyBudgetMinor: cap,
+            updatedAt: cfgRow?.updated_at ?? null,
+            version: Number(cfgRow?.version ?? 1),
+            useCases: useCaseKeys.map((ucKey) => ({
+              useCaseKey: ucKey,
+              version: 1,
+              modelRef: "configured-cap",
+              enabled: !allAiDisabled && !activeScopes.has(`use_case:${ucKey}`) && !activeScopes.has(`use_case:${ucKey.toUpperCase()}`),
+              monthlyBudgetMinor: cap,
+              spentMinor: 0,
+              remainingMinor: cap,
+              estimatedRunCostMinor: estCost,
+              remainingRunsEst: Math.floor(cap / estCost),
+              windowStart,
+              resetAt,
+              killSwitchActive: allAiDisabled || activeScopes.has(`use_case:${ucKey}`) || activeScopes.has(`use_case:${ucKey.toUpperCase()}`)
+            }))
+          };
+        });
+      });
 
-      const items = [];
-      for (const tId of tenantIds) {
-        const q = await withTenant(tId, async (tx) => getAiQuotaStatus(tx));
-        items.push(q);
-      }
-      res.status(200).json({ items });
+      res.status(200).json({ items: data });
     } catch (err) {
       toErrorResponse(err, res);
     }

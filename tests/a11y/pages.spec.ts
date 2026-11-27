@@ -17,6 +17,7 @@ const TAB_AUDIT_NAMES = [
   "Outcomes & AI Change (Phase 7)",
   "Legal Sector Pack (SRA 2023)",
   "Operations & Support (B8)",
+  "Tenant Admin",
   "Tenant Isolation & Attack Lab",
   "Transactional Outbox",
   "Append-Only Audit Trail",

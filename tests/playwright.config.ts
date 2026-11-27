@@ -43,6 +43,7 @@ export default defineConfig({
           DATABASE_URL_MIGRATOR: process.env.DATABASE_URL_MIGRATOR || "postgres://disabled:disabled@127.0.0.1:1/abate",
           DATABASE_URL_APP: process.env.DATABASE_URL_APP || "postgres://disabled:disabled@127.0.0.1:1/abate",
           DATABASE_URL_WORKER: process.env.DATABASE_URL_WORKER || "postgres://disabled:disabled@127.0.0.1:1/abate",
+          DATABASE_URL_PLATFORM_ADMIN: process.env.DATABASE_URL_PLATFORM_ADMIN || "postgres://disabled:disabled@127.0.0.1:1/abate",
           PORT: backendPort
         }
       },

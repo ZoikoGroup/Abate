@@ -19,6 +19,7 @@ export let protectedComputePool: Pool | null = null;
 export let releaseCompilerPool: Pool | null = null;
 export let performancePool: Pool | null = null;
 export let opsPool: Pool | null = null;
+export let platformAdminPool: Pool | null = null;
 
 function createRolePool(connectionString: string, max: number, connectionTimeoutMillis = 5000): Pool {
   const p = new Pool({
@@ -41,6 +42,7 @@ try {
   releaseCompilerPool = createRolePool(cfg.databaseUrlReleaseCompiler, 5, 3000);
   performancePool = createRolePool(cfg.databaseUrlPerformance, 5, 3000);
   opsPool = createRolePool(cfg.databaseUrlOps, 3, 2000);
+  platformAdminPool = createRolePool(cfg.databaseUrlPlatformAdmin, 3, 2000);
 } catch {
   // Graceful fallback to embedded store if Postgres is not available
 }
@@ -177,6 +179,38 @@ export async function withReleaseCompiler<T>(tenantId: string, fn: (tx: Tx) => P
 
 export async function withPerformance<T>(tenantId: string, fn: (tx: Tx) => Promise<T>): Promise<T> {
   return withTenantPool(performancePool, tenantId, fn, { writePlane: "B" });
+}
+
+export async function withPlatformAdmin<T>(fn: (tx: Tx) => Promise<T>): Promise<T> {
+  const usePg = await checkPgHealth();
+  if (usePg && platformAdminPool) {
+    const client: PoolClient = await platformAdminPool.connect();
+    try {
+      await client.query("BEGIN");
+      await client.query("SET LOCAL statement_timeout = '15000ms'");
+      await client.query("SET LOCAL lock_timeout = '5000ms'");
+      const out = await fn({ q: client.query.bind(client) as QueryFn, tenantId: "" });
+      await client.query("COMMIT");
+      return out;
+    } catch (e) {
+      await client.query("ROLLBACK").catch(() => { });
+      throw e;
+    } finally {
+      client.release();
+    }
+  }
+  const memClient = new MemoryClient(false, true);
+  try {
+    await memClient.query("BEGIN");
+    const out = await fn({ q: memClient.query.bind(memClient) as QueryFn, tenantId: "" });
+    await memClient.query("COMMIT");
+    return out;
+  } catch (e) {
+    await memClient.query("ROLLBACK");
+    throw e;
+  } finally {
+    memClient.release();
+  }
 }
 
 export async function withOps<T>(fn: (tx: Tx) => Promise<T>): Promise<T> {

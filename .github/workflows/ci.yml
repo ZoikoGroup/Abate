@@ -69,7 +69,8 @@ jobs:
                 'abate_protected_compute',
                 'abate_release_compiler',
                 'abate_performance',
-                'abate_ops'
+                'abate_ops',
+                'abate_platform_admin'
               ];
               r_name text;
               r record;
@@ -126,6 +127,7 @@ jobs:
           DATABASE_URL_RELEASE_COMPILER: postgres://abate_release_compiler:release_compiler_pw@localhost:${{ env.POSTGRES_PORT }}/abate
           DATABASE_URL_PERFORMANCE: postgres://abate_performance:performance_pw@localhost:${{ env.POSTGRES_PORT }}/abate
           DATABASE_URL_OPS: postgres://abate_ops:ops_pw@localhost:${{ env.POSTGRES_PORT }}/abate
+          DATABASE_URL_PLATFORM_ADMIN: postgres://abate_platform_admin:platform_admin_pw@localhost:${{ env.POSTGRES_PORT }}/abate
         run: |
           npm --prefix backend run verify-pg -- --require-live
           npm --prefix backend run db:audit -- --require-live
@@ -166,6 +168,7 @@ jobs:
           DATABASE_URL_RELEASE_COMPILER: postgres://abate_release_compiler:release_compiler_pw@localhost:${{ env.POSTGRES_PORT }}/abate_upgrade
           DATABASE_URL_PERFORMANCE: postgres://abate_performance:performance_pw@localhost:${{ env.POSTGRES_PORT }}/abate_upgrade
           DATABASE_URL_OPS: postgres://abate_ops:ops_pw@localhost:${{ env.POSTGRES_PORT }}/abate_upgrade
+          DATABASE_URL_PLATFORM_ADMIN: postgres://abate_platform_admin:platform_admin_pw@localhost:${{ env.POSTGRES_PORT }}/abate_upgrade
         run: |
           PGPASSWORD=admin_pw psql -h localhost -p "${POSTGRES_PORT}" -U abate_admin -d postgres -c "DROP DATABASE IF EXISTS abate_upgrade;"
           PGPASSWORD=admin_pw psql -h localhost -p "${POSTGRES_PORT}" -U abate_admin -d postgres -c "CREATE DATABASE abate_upgrade OWNER abate_migrator;"
@@ -187,6 +190,7 @@ jobs:
           DATABASE_URL_RELEASE_COMPILER: postgres://abate_release_compiler:release_compiler_pw@localhost:${{ env.POSTGRES_PORT }}/abate
           DATABASE_URL_PERFORMANCE: postgres://abate_performance:performance_pw@localhost:${{ env.POSTGRES_PORT }}/abate
           DATABASE_URL_OPS: postgres://abate_ops:ops_pw@localhost:${{ env.POSTGRES_PORT }}/abate
+          DATABASE_URL_PLATFORM_ADMIN: postgres://abate_platform_admin:platform_admin_pw@localhost:${{ env.POSTGRES_PORT }}/abate
         run: |
           npm --prefix backend run seed-demo -- --pg
           npm --prefix backend run verify-pg-smoke
@@ -206,6 +210,7 @@ jobs:
           DATABASE_URL_RELEASE_COMPILER: postgres://abate_release_compiler:release_compiler_pw@localhost:${{ env.POSTGRES_PORT }}/abate
           DATABASE_URL_PERFORMANCE: postgres://abate_performance:performance_pw@localhost:${{ env.POSTGRES_PORT }}/abate
           DATABASE_URL_OPS: postgres://abate_ops:ops_pw@localhost:${{ env.POSTGRES_PORT }}/abate
+          DATABASE_URL_PLATFORM_ADMIN: postgres://abate_platform_admin:platform_admin_pw@localhost:${{ env.POSTGRES_PORT }}/abate
         run: |
           reset_pg_db() {
             PGPASSWORD=admin_pw psql -h localhost -p "${POSTGRES_PORT}" -U abate_admin -d postgres -c "SELECT pg_terminate_backend(pid) FROM pg_stat_activity WHERE datname = 'abate' AND pid <> pg_backend_pid();" >/dev/null
@@ -222,6 +227,8 @@ jobs:
           npm --prefix backend run test-ai
           npm --prefix backend run test-planes
           npm --prefix backend run test-completion
+          npm --prefix backend run test-super-admin
+          npm --prefix backend run test-admin-matrix
           reset_pg_db
           npm --prefix backend run test-boundaries
           reset_pg_db
@@ -259,9 +266,12 @@ jobs:
           DATABASE_URL_RELEASE_COMPILER: postgres://disabled:disabled@127.0.0.1:1/abate
           DATABASE_URL_PERFORMANCE: postgres://disabled:disabled@127.0.0.1:1/abate
           DATABASE_URL_OPS: postgres://disabled:disabled@127.0.0.1:1/abate
+          DATABASE_URL_PLATFORM_ADMIN: postgres://disabled:disabled@127.0.0.1:1/abate
         run: |
           npm --prefix backend run test-fast
           npm --prefix backend run test-completion
+          npm --prefix backend run test-super-admin
+          npm --prefix backend run test-admin-matrix
           npm --prefix backend run test-additive
           npm --prefix backend run test-pilot
           npm --prefix backend run test-legal
@@ -290,6 +300,7 @@ jobs:
           DATABASE_URL_RELEASE_COMPILER: postgres://disabled:disabled@127.0.0.1:1/abate
           DATABASE_URL_PERFORMANCE: postgres://disabled:disabled@127.0.0.1:1/abate
           DATABASE_URL_OPS: postgres://disabled:disabled@127.0.0.1:1/abate
+          DATABASE_URL_PLATFORM_ADMIN: postgres://disabled:disabled@127.0.0.1:1/abate
         run: |
           npm --prefix backend run verify-evidence
           npm --prefix backend run drill-kill-switches
@@ -358,6 +369,7 @@ jobs:
           DATABASE_URL_RELEASE_COMPILER: postgres://disabled:disabled@127.0.0.1:1/abate
           DATABASE_URL_PERFORMANCE: postgres://disabled:disabled@127.0.0.1:1/abate
           DATABASE_URL_OPS: postgres://disabled:disabled@127.0.0.1:1/abate
+          DATABASE_URL_PLATFORM_ADMIN: postgres://disabled:disabled@127.0.0.1:1/abate
         run: |
           npm --prefix backend run build-dossier
           node -e "const d = require('./evidence/release-dossier.json'); if (d.status !== 'READY FOR REVIEW' && d.status !== 'RATIFIED') { console.error('Expected READY FOR REVIEW or RATIFIED, got', d.status); process.exit(1); } if (!d.system?.imageDigests?.backend || !d.system?.sbom?.sha256) { console.error('Dossier must bind imageDigests and SBOM sha256'); process.exit(1); }"
@@ -413,6 +425,7 @@ jobs:
       DATABASE_URL_RELEASE_COMPILER: postgres://abate_release_compiler:release_compiler_pw@localhost:${{ vars.POSTGRES_PORT || '5432' }}/abate
       DATABASE_URL_PERFORMANCE: postgres://abate_performance:performance_pw@localhost:${{ vars.POSTGRES_PORT || '5432' }}/abate
       DATABASE_URL_OPS: postgres://abate_ops:ops_pw@localhost:${{ vars.POSTGRES_PORT || '5432' }}/abate
+      DATABASE_URL_PLATFORM_ADMIN: postgres://abate_platform_admin:platform_admin_pw@localhost:${{ vars.POSTGRES_PORT || '5432' }}/abate
       AUTH_ISSUER: http://localhost:5000/auth
       AUTH_AUDIENCE: abate-api
       AUTH_SECRET: ci_test_auth_secret_key_abate_minimum_32_characters_long
@@ -451,7 +464,8 @@ jobs:
                 'abate_protected_compute',
                 'abate_release_compiler',
                 'abate_performance',
-                'abate_ops'
+                'abate_ops',
+                'abate_platform_admin'
               ];
               r_name text;
               r record;
